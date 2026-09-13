@@ -15,3 +15,7 @@ use (
 use (
 	./prompt-default
 )
+
+use (
+	./asset-local
+)
