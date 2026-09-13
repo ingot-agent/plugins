@@ -25,6 +25,19 @@ The repository intentionally has no Core checkout, Core build, WebUI-specific
 CI, or release workflow. Keep plugin validation independent from those
 systems.
 
+## Repository layout and workspace
+
+The allowed infrastructure directories are `.github/`, `scripts/`, `tools/`,
+and `docs/`. Every other first-level directory must be identifiable as a
+plugin by containing both `go.mod` and `ingot.plugin.toml`. Additions such as
+`examples/` or `testdata/` require an explicit repository-layout policy change
+instead of being silently ignored.
+
+The root `go.work` may contain `use` entries, but every entry must have the
+exact form `./<plugin-directory>` and reference a current first-level plugin
+module. External paths, parent paths, nested paths, Core paths, and duplicate
+entries are rejected. CI and release checks continue to use `GOWORK=off`.
+
 ## Local checks
 
 From the repository root, run:
@@ -45,6 +58,8 @@ GOWORK=off go test -race ./...
 CI detects changed first-level plugin directories from the pull request or
 push diff and runs these commands in a separate matrix job for each one.
 Repository-only changes produce a visible no-op Plugin Tests matrix entry.
+The changed-plugin selection and matrix construction helpers are covered by
+standard-library unit tests in `scripts/tests/`.
 
 At this stage, SDK and ABI compatibility means that the plugin compiles and
 passes tests against the exact SDK and ABI versions in its `go.mod`. Manifest

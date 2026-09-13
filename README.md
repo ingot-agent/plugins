@@ -23,15 +23,24 @@ validated and tested without checking out or building Ingot Core.
 │   ├── pull_request_template.md
 │   └── workflows/ci.yml
 ├── scripts/detect_changed_plugins.py
+├── scripts/tests/test_detect_changed_plugins.py
+├── scripts/tests/test_validate_repo.py
 ├── scripts/validate_repo.py
 ├── CONTRIBUTING.md
 ├── RELEASE.md
 └── go.work
 ```
 
-`go.work` currently declares only `go 1.24.2`; it does not use any local
-modules. Plugin checks run with `GOWORK=off` so every module is tested in
-isolation.
+`go.work` declares `go 1.24.2` and may contain `use` entries for current
+first-level plugin modules, such as `./tool-shell`. It must not reference
+external, nested, parent, Core, or other non-plugin paths. Plugin checks run
+with `GOWORK=off` so every module is still tested in isolation and the
+workspace never becomes a release dependency boundary.
+
+The explicitly allowed infrastructure directories are `.github/`, `scripts/`,
+`tools/`, and `docs/`. A different first-level directory is recognized as a
+plugin only when it contains both `go.mod` and `ingot.plugin.toml`; otherwise
+repository validation rejects it as an unknown top-level directory.
 
 ## Adding a plugin
 

@@ -17,7 +17,9 @@ except ModuleNotFoundError:  # pragma: no cover - CI uses Python 3.12+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PLUGIN_MODULE_PREFIX = "github.com/ingot-agent/plugins/"
 CORE_MODULE = "github.com/ingot-agent/ingot"
-RESERVED_TOP_LEVEL_DIRS = {".git", ".github", "scripts"}
+INFRASTRUCTURE_TOP_LEVEL_DIRS = {".github", "docs", "scripts", "tools"}
+LOCAL_METADATA_DIRS = {".git", ".idea", ".vscode"}
+PLUGIN_MARKER_FILES = ("go.mod", "ingot.plugin.toml")
 
 REQUIRED_ROOT_FILES = (
     ".github/workflows/ci.yml",
@@ -29,25 +31,40 @@ REQUIRED_ROOT_FILES = (
     "RELEASE.md",
     "go.work",
     "scripts/detect_changed_plugins.py",
+    "scripts/tests/test_detect_changed_plugins.py",
+    "scripts/tests/test_validate_repo.py",
     "scripts/validate_repo.py",
 )
 
 
 def plugin_dirs(repo_root: Path) -> list[Path]:
-    """Return first-level plugin directories in deterministic order.
+    """Return first-level directories carrying both plugin marker files."""
 
-    Everything at repository root other than hidden/control directories is a
-    plugin directory. This keeps a newly added plugin from bypassing checks by
-    omitting one of its required files.
-    """
-
+    non_plugin_names = INFRASTRUCTURE_TOP_LEVEL_DIRS | LOCAL_METADATA_DIRS
     return sorted(
         (
             path
             for path in repo_root.iterdir()
             if path.is_dir()
-            and not path.name.startswith(".")
-            and path.name not in RESERVED_TOP_LEVEL_DIRS
+            and path.name not in non_plugin_names
+            and all((path / marker).is_file() for marker in PLUGIN_MARKER_FILES)
+        ),
+        key=lambda path: path.name,
+    )
+
+
+def unexpected_top_level_dirs(repo_root: Path) -> list[Path]:
+    """Return directories that are neither infrastructure nor plugins."""
+
+    plugins = set(plugin_dirs(repo_root))
+    allowed_names = INFRASTRUCTURE_TOP_LEVEL_DIRS | LOCAL_METADATA_DIRS
+    return sorted(
+        (
+            path
+            for path in repo_root.iterdir()
+            if path.is_dir()
+            and path not in plugins
+            and path.name not in allowed_names
         ),
         key=lambda path: path.name,
     )
@@ -111,19 +128,75 @@ def is_sibling_plugin_dependency(path: str, own_module: str) -> bool:
     return path != own_module and not path.startswith(f"{own_module}/")
 
 
-def validate_workspace(repo_root: Path, errors: list[str]) -> None:
+def validate_workspace(
+    repo_root: Path, plugins: list[Path], errors: list[str]
+) -> None:
     go_work = repo_root / "go.work"
     if not go_work.is_file():
         errors.append("missing required file: go.work")
         return
 
-    declarations = [
-        line.strip()
-        for line in go_work.read_text(encoding="utf-8").splitlines()
-        if line.strip() and not line.lstrip().startswith("//")
-    ]
-    if declarations != ["go 1.24.2"]:
-        errors.append("go.work must initially contain only: go 1.24.2")
+    go_versions: list[tuple[int, str]] = []
+    use_paths: list[tuple[int, str]] = []
+    in_use_block = False
+
+    for line_number, raw_line in enumerate(
+        go_work.read_text(encoding="utf-8").splitlines(), start=1
+    ):
+        line = strip_go_comment(raw_line)
+        if not line:
+            continue
+
+        if in_use_block:
+            if line == ")":
+                in_use_block = False
+            else:
+                use_paths.append((line_number, line))
+            continue
+
+        go_match = re.fullmatch(r"go\s+(\S+)", line)
+        if go_match:
+            go_versions.append((line_number, go_match.group(1)))
+            continue
+
+        if line == "use (":
+            in_use_block = True
+            continue
+
+        use_match = re.fullmatch(r"use\s+(\S+)", line)
+        if use_match:
+            use_paths.append((line_number, use_match.group(1)))
+            continue
+
+        errors.append(f"go.work:{line_number}: unsupported directive or syntax: {line}")
+
+    if in_use_block:
+        errors.append("go.work: unterminated use block")
+
+    if len(go_versions) != 1 or go_versions[0][1] != "1.24.2":
+        errors.append("go.work must declare exactly one Go version: go 1.24.2")
+
+    plugin_names = {plugin.name for plugin in plugins}
+    seen_use_paths: set[str] = set()
+    for line_number, use_path in use_paths:
+        if not re.fullmatch(r"\./[^/\\]+", use_path):
+            errors.append(
+                f"go.work:{line_number}: use path must reference one first-level "
+                f"plugin as ./<plugin>, found {use_path}"
+            )
+            continue
+
+        plugin_name = use_path[2:]
+        if plugin_name in {"", ".", ".."} or plugin_name not in plugin_names:
+            errors.append(
+                f"go.work:{line_number}: use path does not reference a current "
+                f"first-level plugin module: {use_path}"
+            )
+            continue
+
+        if use_path in seen_use_paths:
+            errors.append(f"go.work:{line_number}: duplicate use path: {use_path}")
+        seen_use_paths.add(use_path)
 
 
 def validate_plugin(plugin_dir: Path, errors: list[str], manifest_names: dict[str, Path]) -> None:
@@ -209,11 +282,13 @@ def main() -> int:
         if not (REPO_ROOT / required_file).is_file():
             errors.append(f"missing required file: {required_file}")
 
-    validate_workspace(REPO_ROOT, errors)
+    for unexpected_dir in unexpected_top_level_dirs(REPO_ROOT):
+        errors.append(
+            f"unexpected top-level directory {unexpected_dir.name}: directories must "
+            "be declared infrastructure or contain go.mod and ingot.plugin.toml"
+        )
 
-    if not discovered_plugins:
-        print("No plugin directories found; bootstrap repository validation passed.")
-        return 1 if errors else 0
+    validate_workspace(REPO_ROOT, discovered_plugins, errors)
 
     manifest_names: dict[str, Path] = {}
     for plugin_dir in discovered_plugins:
@@ -224,6 +299,10 @@ def main() -> int:
         for error in errors:
             print(f"- {error}", file=sys.stderr)
         return 1
+
+    if not discovered_plugins:
+        print("No plugin directories found; bootstrap repository validation passed.")
+        return 0
 
     print(f"Repository validation passed for {len(discovered_plugins)} plugin(s).")
     return 0

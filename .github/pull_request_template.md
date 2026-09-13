@@ -21,4 +21,5 @@
 - [ ] Each module path is `github.com/ingot-agent/plugins/<directory>`.
 - [ ] No `go.mod` uses `replace`.
 - [ ] No plugin depends on Ingot Core or another plugin implementation.
+- [ ] Every `go.work` `use` entry references a current first-level plugin.
 - [ ] No unrelated plugin source or WebUI changes are included.
