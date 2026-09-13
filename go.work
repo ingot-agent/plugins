@@ -9,6 +9,10 @@ use (
 )
 
 use (
+	./interceptor-script
+)
+
+use (
 	./tool-ask
 )
 
