@@ -19,3 +19,7 @@ use (
 use (
 	./asset-local
 )
+
+use (
+	./session-sqlite
+)
