@@ -31,4 +31,5 @@ use (
 use (
 	./app-webui
 	./agent-default
+	./context-compact
 )
