@@ -36,4 +36,5 @@ use (
 	./tool-edit
 	./tool-runtime
 	./tool-shell
+	./usage-default
 )
