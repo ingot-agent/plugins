@@ -30,4 +30,5 @@ use (
 
 use (
 	./app-webui
+	./agent-default
 )
