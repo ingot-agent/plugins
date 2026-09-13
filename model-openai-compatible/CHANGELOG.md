@@ -4,6 +4,8 @@ All notable changes to this plugin are documented in this file.
 
 ## Unreleased
 
+## 0.1.0 - 2026-09-13
+
 ### Changed
 
 - Migrated `model-openai-compatible` from the Ingot Core repository into the
