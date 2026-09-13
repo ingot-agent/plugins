@@ -35,4 +35,5 @@ use (
 	./model-openai-compatible
 	./tool-edit
 	./tool-runtime
+	./tool-shell
 )
