@@ -1,0 +1,27 @@
+# Go build and test artifacts
+bin/
+*.test
+*.out
+coverage.out
+coverage.html
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Local Go workspace state
+go.work.sum
+
+# IDE and editor metadata
+.idea/
+.vscode/
+*.iml
+
+# Operating-system files
+.DS_Store
+Thumbs.db
+
+# Local environment files
+.env
+.env.*
+!.env.example
