@@ -33,4 +33,5 @@ use (
 	./agent-default
 	./context-compact
 	./model-openai-compatible
+	./tool-edit
 )
