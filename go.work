@@ -37,4 +37,5 @@ use (
 	./tool-runtime
 	./tool-shell
 	./usage-default
+	./model-runtime
 )
