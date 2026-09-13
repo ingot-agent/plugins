@@ -27,3 +27,7 @@ use (
 use (
 	./session-sqlite
 )
+
+use (
+	./app-webui
+)
