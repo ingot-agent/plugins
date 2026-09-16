@@ -64,7 +64,7 @@ M6 后端提供以下接口：
 | Session 生命周期 | `POST /api/sessions/{id}/archive`、`/restore`、`/fork` |
 | 历史消息 | `GET /api/sessions/{id}/history` |
 | Asset | `POST /api/assets`、`GET /api/assets/{id}` |
-| Operation | `GET /api/operations`、`POST /api/operations/{name}`、`DELETE /api/operation-invocations/{id}` |
+| Operation | `GET /api/operations`、`POST /api/operations/{internal-id}`、`DELETE /api/operation-invocations/{id}` |
 | Interaction 响应 | `POST /api/interactions/{id}/response` |
 
 ## Turn 与流式输出
@@ -110,6 +110,10 @@ Operation 调用请求格式如下：
 ```
 
 Operation Definition 按组件图提供的顺序生成快照，并在服务器开始监听前编译其 Draft 2020-12 Schema。Schema 必须自包含：支持本地 `$ref`，不会获取外部资源。输入和成功结果都必须是满足对应 Schema 的 JSON 对象。
+
+每个 Definition 必须声明稳定的插件 `Group` 和组内局部 `Name`。Web UI 将其投影为 `/<group> <name>` 两级 Slash Command；同名 Operation 可以跨 Group 共存，但重复的 `(Group, Name)` 会在服务器启动前被拒绝。用户选择命令后，浏览器仍使用 Definition 的 internal ID 调用 HTTP API，命令文本不会发送给 Agent 或写入消息历史。
+
+对话 Composer 输入 `/` 时先展示 Group，选中后再展示该 Group 的 Operation。完整命令会立即打开 Operation 弹窗，Interaction 表单、运行状态、结果和显式取消均在弹窗内完成；`//` 用于发送以 `/` 开头的普通消息。主导航不再暴露调试页，原 `/operations` 路由保留在“设置 → 开发者”中。
 
 Operation 不存在时返回 `404`；输入无效时会在调度前返回 `400`。调用被接受后返回 `202` 和 invocation ID。`operation.started`、`operation.completed`、`operation.failed` 与 `operation.canceled` 事件均携带 invocation 快照，该快照也会出现在 `/api/state` 中。
 

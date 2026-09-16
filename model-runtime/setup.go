@@ -11,8 +11,8 @@ import (
 )
 
 const (
-	setupOperationName  = "model.runtime.config"
-	setupOperationGroup = "configuration"
+	setupOperationName  = "config"
+	setupOperationGroup = "model-runtime"
 )
 
 // setupOperation asks the Host for this Plugin's configuration through a

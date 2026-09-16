@@ -12,8 +12,8 @@ import (
 )
 
 const (
-	setupOperationName  = "usage.default.config"
-	setupOperationGroup = "configuration"
+	setupOperationName  = "config"
+	setupOperationGroup = "usage-default"
 )
 
 // setupOperation asks the Host for this Plugin's configuration through a
@@ -58,11 +58,12 @@ func (o *setupOperation) Invoke(ctx context.Context, request operation.Request) 
 	for _, name := range profileNames {
 		options = append(options, interaction.Option{Value: name, Label: name})
 	}
+	routesDefault := usageRoutesValue(current.Routes)
 	response, err := request.Interaction.Request(ctx, interaction.Request{
 		Name:        setupOperationName,
 		Description: "Model-to-profile routes and the token estimate cache size.",
 		Fields: []interaction.Field{
-			{Name: "routes", Label: "Routes", Description: "One route per provider and model pattern.", Kind: interaction.FieldList, Element: &interaction.Field{Name: "route", Kind: interaction.FieldObject, Fields: []interaction.Field{
+			{Name: "routes", Label: "Routes", Description: "One route per provider and model pattern.", Kind: interaction.FieldList, Default: &routesDefault, Element: &interaction.Field{Name: "route", Kind: interaction.FieldObject, Fields: []interaction.Field{
 				{Name: "provider", Label: "Provider", Kind: interaction.FieldString, Required: true},
 				{Name: "model_pattern", Label: "Model pattern", Description: "Regular expression matched against the model name.", Kind: interaction.FieldString, Required: true},
 				{Name: "profile", Label: "Profile", Kind: interaction.FieldChoice, Required: true, Options: options},
@@ -111,6 +112,18 @@ func (o *setupOperation) Invoke(ctx context.Context, request operation.Request) 
 		return operation.Result{}, err
 	}
 	return operation.Result{Output: output}, nil
+}
+
+func usageRoutesValue(routes []Route) interaction.Value {
+	items := make([]interaction.Value, 0, len(routes))
+	for _, route := range routes {
+		items = append(items, interaction.ObjectValue([]interaction.Entry{
+			{Name: "provider", Value: interaction.StringValue(route.Provider)},
+			{Name: "model_pattern", Value: interaction.StringValue(route.ModelPattern)},
+			{Name: "profile", Value: interaction.StringValue(route.Profile)},
+		}))
+	}
+	return interaction.ListValue(items)
 }
 
 func answerInteger(response interaction.Response, name string) (int64, bool) {

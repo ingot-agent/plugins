@@ -11,8 +11,8 @@ import (
 )
 
 const (
-	setupOperationName  = "prompt.default.config"
-	setupOperationGroup = "configuration"
+	setupOperationName  = "config"
+	setupOperationGroup = "prompt-default"
 )
 
 // setupOperation asks the Host for this Plugin's configuration through a

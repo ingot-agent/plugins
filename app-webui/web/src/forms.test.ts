@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { canRoundtripForm, interactionValues, parseObject, supportsForm } from './forms'
+import { canRoundtripForm, initialInteractionValues, interactionValues, parseObject, supportsForm } from './forms'
 import type { InteractionField, Schema } from './protocol'
 const field = (values: Partial<InteractionField>): InteractionField => ({ name: 'answer', kind: 'string', required: true, sensitive: false, hasDefault: false, ...values })
 describe('interaction responses', () => {
@@ -14,6 +14,24 @@ describe('interaction responses', () => {
   })
   it('allows a string answer outside suggestion options', () => {
     expect(interactionValues([field({ options: [{ value: 'a' }] })], { answer: 'custom' })).toEqual({ answer: 'custom' })
+  })
+  it('initializes public defaults and recursively converts objects and lists', () => {
+    const fields: InteractionField[] = [{
+      ...field({ name: 'rules', kind: 'list', hasDefault: true, default: [{ tool: 'shell', limit: 2 }] }),
+      element: { ...field({ name: 'rule', kind: 'object' }), fields: [field({ name: 'tool' }), field({ name: 'limit', kind: 'integer' })] },
+    }]
+    const values = initialInteractionValues(fields)
+    expect(values).toEqual({ rules: [{ tool: 'shell', limit: 2 }] })
+    expect(interactionValues(fields, { rules: [{ tool: 'edit', limit: '3' }] })).toEqual({ rules: [{ tool: 'edit', limit: 3 }] })
+  })
+  it('does not initialize sensitive defaults in the browser', () => {
+    expect(initialInteractionValues([field({ sensitive: true, hasDefault: true, default: 'hidden' })])).toEqual({})
+  })
+  it('keeps untouched compound fields absent when the plugin supplied no default', () => {
+    const list = field({ name: 'rules', kind: 'list', required: false })
+    list.element = field({ name: 'rule', kind: 'object' })
+    expect(initialInteractionValues([list])).toEqual({})
+    expect(interactionValues([list], {})).toEqual({})
   })
 })
 describe('operation forms', () => {

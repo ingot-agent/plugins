@@ -11,8 +11,8 @@ import (
 )
 
 const (
-	setupOperationName  = "interceptor.approval.config"
-	setupOperationGroup = "configuration"
+	setupOperationName  = "config"
+	setupOperationGroup = "interceptor-approval"
 )
 
 // setupOperation asks the Host for this Plugin's configuration through a
@@ -65,6 +65,7 @@ func (o *setupOperation) Invoke(ctx context.Context, request operation.Request) 
 		{Value: displayFull, Label: "Full", Description: "Show the full arguments."},
 		{Value: displayNamesOnly, Label: "Names only", Description: "Show argument names only."},
 	}
+	rulesDefault := approvalRulesValue(current.Rules)
 	response, err := request.Interaction.Request(ctx, interaction.Request{
 		Name:        setupOperationName,
 		Description: "Default approval action, argument display and per-tool rules.",
@@ -72,7 +73,7 @@ func (o *setupOperation) Invoke(ctx context.Context, request operation.Request) 
 			{Name: "default_action", Label: "Default action", Kind: interaction.FieldChoice, Required: true, Options: actionOptions, Default: stringValue(actionDefault)},
 			{Name: "argument_display", Label: "Argument display", Kind: interaction.FieldChoice, Required: true, Options: displayOptions, Default: stringValue(displayDefault)},
 			{Name: "max_display_bytes", Label: "Max display bytes", Kind: interaction.FieldInteger, Default: &interaction.Value{Kind: interaction.ValueInteger, Integer: displayDefaultBytes}},
-			{Name: "rules", Label: "Rules", Description: "Per-tool overrides of the default action.", Kind: interaction.FieldList, Element: &interaction.Field{Name: "rule", Kind: interaction.FieldObject, Fields: []interaction.Field{
+			{Name: "rules", Label: "Rules", Description: "Per-tool overrides of the default action.", Kind: interaction.FieldList, Default: &rulesDefault, Element: &interaction.Field{Name: "rule", Kind: interaction.FieldObject, Fields: []interaction.Field{
 				{Name: "tool", Label: "Tool", Kind: interaction.FieldString, Required: true},
 				{Name: "action", Label: "Action", Kind: interaction.FieldChoice, Required: true, Options: actionOptions},
 			}}},
@@ -121,6 +122,17 @@ func (o *setupOperation) Invoke(ctx context.Context, request operation.Request) 
 		return operation.Result{}, err
 	}
 	return operation.Result{Output: output}, nil
+}
+
+func approvalRulesValue(rules []Rule) interaction.Value {
+	items := make([]interaction.Value, 0, len(rules))
+	for _, rule := range rules {
+		items = append(items, interaction.ObjectValue([]interaction.Entry{
+			{Name: "tool", Value: interaction.StringValue(rule.Tool)},
+			{Name: "action", Value: interaction.StringValue(rule.Action)},
+		}))
+	}
+	return interaction.ListValue(items)
 }
 
 func stringValue(value string) *interaction.Value {

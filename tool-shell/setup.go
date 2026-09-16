@@ -13,8 +13,8 @@ import (
 )
 
 const (
-	setupOperationName  = "tool.shell.config"
-	setupOperationGroup = "configuration"
+	setupOperationName  = "config"
+	setupOperationGroup = "tool-shell"
 )
 
 // setupOperation asks the Host for this Plugin's configuration through a

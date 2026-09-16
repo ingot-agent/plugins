@@ -11,8 +11,8 @@ import (
 )
 
 const (
-	setupOperationName  = "asset.local.config"
-	setupOperationGroup = "configuration"
+	setupOperationName  = "config"
+	setupOperationGroup = "asset-local"
 )
 
 // setupOperation asks the Host for this Plugin's configuration through a

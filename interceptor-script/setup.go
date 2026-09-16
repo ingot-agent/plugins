@@ -11,8 +11,8 @@ import (
 )
 
 const (
-	setupOperationName  = "interceptor.script.config"
-	setupOperationGroup = "configuration"
+	setupOperationName  = "config"
+	setupOperationGroup = "interceptor-script"
 )
 
 // setupOperation asks the Host for this Plugin's hook declarations through a
@@ -40,14 +40,16 @@ func (o *setupOperation) Invoke(ctx context.Context, request operation.Request) 
 	if o.scope == nil || o.scope.Dir() == "" {
 		return operation.Result{}, fmt.Errorf("interceptor.script config: state scope is required: %w", ErrInvalidConfig)
 	}
-	if _, err := loadConfig(o.scope.Dir()); err != nil {
+	current, err := loadConfig(o.scope.Dir())
+	if err != nil {
 		return operation.Result{}, err
 	}
+	hooksDefault := scriptHooksValue(current.Hooks)
 	response, err := request.Interaction.Request(ctx, interaction.Request{
 		Name:        setupOperationName,
 		Description: "One entry per hook; executable must be an absolute path.",
 		Fields: []interaction.Field{
-			{Name: "hooks", Label: "Hooks", Kind: interaction.FieldList, Element: &interaction.Field{Name: "hook", Kind: interaction.FieldObject, Fields: []interaction.Field{
+			{Name: "hooks", Label: "Hooks", Kind: interaction.FieldList, Default: &hooksDefault, Element: &interaction.Field{Name: "hook", Kind: interaction.FieldObject, Fields: []interaction.Field{
 				{Name: "name", Label: "Name", Kind: interaction.FieldString, Required: true},
 				{Name: "target", Label: "Target", Kind: interaction.FieldChoice, Required: true, Options: []interaction.Option{
 					{Value: "tool", Label: "Tool"},
@@ -121,6 +123,30 @@ func (o *setupOperation) Invoke(ctx context.Context, request operation.Request) 
 		return operation.Result{}, err
 	}
 	return operation.Result{Output: output}, nil
+}
+
+func scriptHooksValue(hooks []Hook) interaction.Value {
+	items := make([]interaction.Value, 0, len(hooks))
+	for _, hook := range hooks {
+		args := make([]interaction.Value, 0, len(hook.Args))
+		for _, arg := range hook.Args {
+			args = append(args, interaction.StringValue(arg))
+		}
+		entries := []interaction.Entry{
+			{Name: "name", Value: interaction.StringValue(hook.Name)},
+			{Name: "target", Value: interaction.StringValue(hook.Target)},
+			{Name: "executable", Value: interaction.StringValue(hook.Executable)},
+			{Name: "args", Value: interaction.ListValue(args)},
+		}
+		if hook.TimeoutSeconds != 0 {
+			entries = append(entries, interaction.Entry{Name: "timeout_seconds", Value: interaction.IntegerValue(int64(hook.TimeoutSeconds))})
+		}
+		if hook.MaxOutputBytes != 0 {
+			entries = append(entries, interaction.Entry{Name: "max_output_bytes", Value: interaction.IntegerValue(int64(hook.MaxOutputBytes))})
+		}
+		items = append(items, interaction.ObjectValue(entries))
+	}
+	return interaction.ListValue(items)
 }
 
 // validateHooks checks duplicate names, mirroring construction.

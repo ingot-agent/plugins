@@ -4,11 +4,14 @@ import { createPinia } from 'pinia'
 import Composer from './Composer.vue'
 import { useRuntime } from '../stores/runtime'
 import { i18n } from '../i18n'
+import type { Operation } from '../protocol'
 
 let wrapper: VueWrapper
-function composer() {
+function composer(operations: Operation[] = []) {
   const pinia = createPinia()
-  useRuntime(pinia).connection = 'online'
+  const runtime = useRuntime(pinia)
+  runtime.connection = 'online'
+  runtime.operations = operations
   wrapper = mount(Composer, { props: { sessionKey: 'new', running: [] }, global: { plugins: [pinia, i18n] } })
   return wrapper
 }
@@ -55,12 +58,33 @@ describe('composer drafts', () => {
     expect(view.get('textarea').element.value).toBe('')
   })
 
-  it('blocks submission while the session still needs a workspace', async () => {
+  it('blocks message submission while still allowing global commands without a workspace', async () => {
     const view = composer()
     await view.get('textarea').setValue('wait for workspace')
     await view.setProps({ disabled: true })
     await view.get('form').trigger('submit')
-    expect(view.get('textarea').attributes('disabled')).toBeDefined()
+    expect(view.get('textarea').attributes('disabled')).toBeUndefined()
     expect(view.emitted('send')).toBeUndefined()
+  })
+
+  it('executes a complete slash command without emitting a message', async () => {
+    const operation: Operation = { id: 'shell-config', group: 'tool-shell', name: 'config', description: 'Configure shell', inputSchema: {}, outputSchema: {} }
+    const view = composer([operation])
+    await view.setProps({ disabled: true })
+    await view.get('textarea').setValue('/tool-shell config')
+    await view.get('textarea').trigger('keydown', { key: 'Enter' })
+    expect(view.emitted('command')?.[0]).toEqual([operation])
+    expect(view.emitted('send')).toBeUndefined()
+  })
+
+  it('completes group and operation candidates from the keyboard', async () => {
+    const operation: Operation = { id: 'shell-config', group: 'tool-shell', name: 'config', description: 'Configure shell', inputSchema: {}, outputSchema: {} }
+    const view = composer([operation])
+    const input = view.get('textarea')
+    await input.setValue('/tool')
+    await input.trigger('keydown', { key: 'Enter' })
+    expect(input.element.value).toBe('/tool-shell ')
+    await input.trigger('keydown', { key: 'Tab' })
+    expect(input.element.value).toBe('/tool-shell config')
   })
 })

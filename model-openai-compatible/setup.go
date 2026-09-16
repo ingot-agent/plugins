@@ -11,8 +11,8 @@ import (
 )
 
 const (
-	setupOperationName  = "model.openai-compatible.config"
-	setupOperationGroup = "configuration"
+	setupOperationName  = "config"
+	setupOperationGroup = "model-openai-compatible"
 )
 
 // setupOperation asks the Host for this Plugin's provider list through a
@@ -46,13 +46,14 @@ func (o *setupOperation) Invoke(ctx context.Context, request operation.Request) 
 	if err != nil {
 		return operation.Result{}, err
 	}
+	providersDefault := providerListValue(current.Providers)
 	// Sensitive fields never carry a default back to the Host, so an existing
 	// key stays in place unless the operator supplies a new one.
 	response, err := request.Interaction.Request(ctx, interaction.Request{
 		Name:        setupOperationName,
 		Description: "One entry per OpenAI-compatible provider.",
 		Fields: []interaction.Field{
-			{Name: "providers", Label: "Providers", Kind: interaction.FieldList, Element: &interaction.Field{Name: "provider", Kind: interaction.FieldObject, Fields: []interaction.Field{
+			{Name: "providers", Label: "Providers", Kind: interaction.FieldList, Default: &providersDefault, Element: &interaction.Field{Name: "provider", Kind: interaction.FieldObject, Fields: []interaction.Field{
 				{Name: "name", Label: "Name", Description: "Stable provider name referenced by model.runtime.", Kind: interaction.FieldString, Required: true},
 				{Name: "base_url", Label: "Base URL", Description: "Absolute http/https endpoint.", Kind: interaction.FieldString, Required: true},
 				{Name: "api_key", Label: "API key", Kind: interaction.FieldString, Sensitive: true},
@@ -137,6 +138,24 @@ func (o *setupOperation) Invoke(ctx context.Context, request operation.Request) 
 		return operation.Result{}, err
 	}
 	return operation.Result{Output: output}, nil
+}
+
+func providerListValue(providers []ProviderConfig) interaction.Value {
+	items := make([]interaction.Value, 0, len(providers))
+	for _, provider := range providers {
+		models := make([]interaction.Value, 0, len(provider.Models))
+		for _, model := range provider.Models {
+			models = append(models, interaction.StringValue(model))
+		}
+		items = append(items, interaction.ObjectValue([]interaction.Entry{
+			{Name: "name", Value: interaction.StringValue(provider.Name)},
+			{Name: "base_url", Value: interaction.StringValue(provider.BaseURL)},
+			{Name: "models", Value: interaction.ListValue(models)},
+			{Name: "organization", Value: interaction.StringValue(provider.Organization)},
+			{Name: "project", Value: interaction.StringValue(provider.Project)},
+		}))
+	}
+	return interaction.ListValue(items)
 }
 
 func stringEntry(entries map[string]interaction.Value, name string) (string, bool) {
