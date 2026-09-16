@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math"
 	"reflect"
 	"unicode/utf8"
 
@@ -64,6 +63,7 @@ type Config struct {
 type Dependencies struct {
 	State             state.Scope
 	Model             model.Runtime
+	Providers         []ingotabi.Named[model.Provider]
 	Streaming         ingotabi.Optional[model.StreamingRuntime]
 	Tools             tool.Runtime
 	Store             session.Store
@@ -119,24 +119,22 @@ func New(ctx context.Context, deps Dependencies) (Exports, ingotabi.Cleanup, err
 	if err != nil {
 		return Exports{}, nil, fmt.Errorf("construct agent.default: %w: %w", err, ErrInvalidConfig)
 	}
+	if err := ingotabi.CheckUniqueNames(deps.Providers); err != nil {
+		return Exports{}, nil, fmt.Errorf("providers: %w: %w", ErrInvalidConfig, err)
+	}
+	providerNames := make([]string, 0, len(deps.Providers))
+	for _, provider := range deps.Providers {
+		providerNames = append(providerNames, provider.Name)
+	}
 	if deps.Streaming.Valid && isNil(deps.Streaming.Value) {
 		return Exports{}, nil, fmt.Errorf("streaming dependency is typed nil: %w", ErrInvalidConfig)
 	}
 	if deps.Compactor.Valid && isNil(deps.Compactor.Value) {
 		return Exports{}, nil, fmt.Errorf("compactor dependency is typed nil: %w", ErrInvalidConfig)
 	}
-	if cfg.Temperature != nil && (math.IsNaN(*cfg.Temperature) || math.IsInf(*cfg.Temperature, 0) || *cfg.Temperature < 0 || *cfg.Temperature > 2) {
-		return Exports{}, nil, fmt.Errorf("temperature must be in [0,2]: %w", ErrInvalidConfig)
-	}
-	if cfg.MaxTokens != nil && *cfg.MaxTokens < 1 {
-		return Exports{}, nil, fmt.Errorf("max_tokens must be positive: %w", ErrInvalidConfig)
-	}
-	maxRounds := cfg.MaxRounds
-	if maxRounds == 0 {
-		maxRounds = defaultMaxRounds
-	}
-	if maxRounds < 1 {
-		return Exports{}, nil, fmt.Errorf("max_rounds must be positive: %w", ErrInvalidConfig)
+	normalized, err := normalizeConfig(cfg, providerNames)
+	if err != nil {
+		return Exports{}, nil, err
 	}
 	interceptors := make([]agent.Interceptor, len(deps.Interceptors))
 	for i, interceptor := range deps.Interceptors {
@@ -160,11 +158,11 @@ func New(ctx context.Context, deps Dependencies) (Exports, ingotabi.Cleanup, err
 		model: deps.Model, streaming: deps.Streaming, tools: deps.Tools, store: deps.Store, assets: deps.Assets,
 		prompt: deps.Prompt, compactor: deps.Compactor, interceptors: interceptors,
 		roundInterceptors: roundInterceptors, observation: observationConsumer,
-		gates: newGateManager(), provider: cfg.Provider, modelName: cfg.Model,
-		temperature: copyFloat(cfg.Temperature), maxTokens: copyInt(cfg.MaxTokens),
-		maxRounds: maxRounds,
+		gates: newGateManager(), provider: normalized.Provider, modelName: normalized.Model,
+		temperature: copyFloat(normalized.Temperature), maxTokens: copyInt(normalized.MaxTokens),
+		maxRounds: normalized.MaxRounds,
 	}
-	return Exports{Runtime: instance, Streaming: instance, History: instance, Operations: []operation.Operation{&setupOperation{scope: deps.State}}}, nil, nil
+	return Exports{Runtime: instance, Streaming: instance, History: instance, Operations: []operation.Operation{&setupOperation{scope: deps.State, providerNames: providerNames, active: normalized}}}, nil, nil
 }
 
 // Load returns a validated, caller-owned snapshot of one session's persisted

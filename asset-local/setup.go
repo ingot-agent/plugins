@@ -3,22 +3,29 @@ package assetlocal
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"reflect"
 
 	"github.com/ingot-agent/ingot-abi/state"
 	"github.com/ingot-agent/sdk/interaction"
 	"github.com/ingot-agent/sdk/operation"
 )
 
+var ErrConfigConflict = errors.New("asset.local configuration changed during interaction")
+
 const (
-	setupOperationName  = "asset.local.config"
-	setupOperationGroup = "configuration"
+	setupOperationName  = "config"
+	setupOperationGroup = "asset-local"
 )
 
 // setupOperation asks the Host for this Plugin's configuration through a
 // structured interaction request and persists the answer in its own state
 // scope. The Host never decodes plugin configuration.
-type setupOperation struct{ scope state.Scope }
+type setupOperation struct {
+	scope  state.Scope
+	active Config
+}
 
 var _ operation.Operation = (*setupOperation)(nil)
 
@@ -90,13 +97,24 @@ func (o *setupOperation) Invoke(ctx context.Context, request operation.Request) 
 		return operation.Result{}, fmt.Errorf("asset.local config: missing io_concurrency: %w", ErrInvalidConfig)
 	}
 	updated := Config{MaxObjectBytes: object, MaxTotalBytes: total, IOConcurrency: int(concurrency)}
-	// Answers are explicit, so non-positive values are invalid rather than
-	// omitted fields that should fall back to defaults.
-	if updated.MaxObjectBytes < 1 || updated.MaxTotalBytes < 1 || updated.IOConcurrency < 1 {
-		return operation.Result{}, fmt.Errorf("limits must be positive: %w", ErrInvalidConfig)
+	effective, err := normalizeConfig(updated)
+	if err != nil {
+		return operation.Result{}, err
 	}
-	if updated.MaxObjectBytes > updated.MaxTotalBytes {
-		return operation.Result{}, fmt.Errorf("max_object_bytes exceeds max_total_bytes: %w", ErrInvalidConfig)
+	if err := ctx.Err(); err != nil {
+		return operation.Result{}, err
+	}
+	configCommitMu.Lock()
+	defer configCommitMu.Unlock()
+	latest, err := loadConfig(o.scope.Dir())
+	if err != nil {
+		return operation.Result{}, err
+	}
+	if !reflect.DeepEqual(latest, current) {
+		return operation.Result{}, ErrConfigConflict
+	}
+	if err := ctx.Err(); err != nil {
+		return operation.Result{}, err
 	}
 	if err := saveConfig(o.scope.Dir(), updated); err != nil {
 		return operation.Result{}, err
@@ -105,7 +123,7 @@ func (o *setupOperation) Invoke(ctx context.Context, request operation.Request) 
 		"max_object_bytes": updated.MaxObjectBytes,
 		"max_total_bytes":  updated.MaxTotalBytes,
 		"io_concurrency":   updated.IOConcurrency,
-		"restart_required": updated != current,
+		"restart_required": effective != o.active,
 	})
 	if err != nil {
 		return operation.Result{}, err

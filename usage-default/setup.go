@@ -3,7 +3,9 @@ package usagedefault
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"reflect"
 	"sort"
 
 	"github.com/ingot-agent/ingot-abi/state"
@@ -11,16 +13,22 @@ import (
 	"github.com/ingot-agent/sdk/operation"
 )
 
+var ErrConfigConflict = errors.New("usage.default configuration changed during interaction")
+
 const (
-	setupOperationName  = "usage.default.config"
-	setupOperationGroup = "configuration"
+	setupOperationName  = "config"
+	setupOperationGroup = "usage-default"
 )
 
 // setupOperation asks the Host for this Plugin's configuration through a
 // structured interaction request and persists the answer in its own state
 // scope. routes is a repeated object, which is why the interaction protocol
 // needs nested field kinds.
-type setupOperation struct{ scope state.Scope }
+type setupOperation struct {
+	scope         state.Scope
+	providerNames []string
+	active        Config
+}
 
 var _ operation.Operation = (*setupOperation)(nil)
 
@@ -30,7 +38,7 @@ func (*setupOperation) Definition() operation.Definition {
 		Description:  "Review and update the usage.default route table.",
 		Group:        setupOperationGroup,
 		InputSchema:  json.RawMessage(`{"type":"object","additionalProperties":false,"properties":{}}`),
-		OutputSchema: json.RawMessage(`{"type":"object"}`),
+		OutputSchema: json.RawMessage(`{"type":"object","additionalProperties":false,"required":["restart_required"],"properties":{"restart_required":{"type":"boolean"}}}`),
 	}
 }
 
@@ -58,12 +66,17 @@ func (o *setupOperation) Invoke(ctx context.Context, request operation.Request) 
 	for _, name := range profileNames {
 		options = append(options, interaction.Option{Value: name, Label: name})
 	}
+	routesDefault := usageRoutesValue(current.Routes)
+	providerOptions := make([]interaction.Option, 0, len(o.providerNames))
+	for _, name := range o.providerNames {
+		providerOptions = append(providerOptions, interaction.Option{Value: name, Label: name})
+	}
 	response, err := request.Interaction.Request(ctx, interaction.Request{
 		Name:        setupOperationName,
 		Description: "Model-to-profile routes and the token estimate cache size.",
 		Fields: []interaction.Field{
-			{Name: "routes", Label: "Routes", Description: "One route per provider and model pattern.", Kind: interaction.FieldList, Element: &interaction.Field{Name: "route", Kind: interaction.FieldObject, Fields: []interaction.Field{
-				{Name: "provider", Label: "Provider", Kind: interaction.FieldString, Required: true},
+			{Name: "routes", Label: "Routes", Description: "One route per provider and model pattern.", Kind: interaction.FieldList, Default: &routesDefault, Element: &interaction.Field{Name: "route", Kind: interaction.FieldObject, Fields: []interaction.Field{
+				{Name: "provider", Label: "Provider", Description: "Current providers are suggested; another name may be entered for a future provider.", Kind: interaction.FieldString, Required: true, Options: providerOptions},
 				{Name: "model_pattern", Label: "Model pattern", Description: "Regular expression matched against the model name.", Kind: interaction.FieldString, Required: true},
 				{Name: "profile", Label: "Profile", Kind: interaction.FieldChoice, Required: true, Options: options},
 			}}},
@@ -103,14 +116,50 @@ func (o *setupOperation) Invoke(ctx context.Context, request operation.Request) 
 	if _, err := compileRoutes(updated.Routes, profiles); err != nil {
 		return operation.Result{}, err
 	}
+	effective := cloneConfig(updated)
+	if effective.CacheEntries == 0 {
+		effective.CacheEntries = defaultCacheEntries
+	}
+	if err := ctx.Err(); err != nil {
+		return operation.Result{}, err
+	}
+	configCommitMu.Lock()
+	defer configCommitMu.Unlock()
+	latest, err := loadConfig(o.scope.Dir())
+	if err != nil {
+		return operation.Result{}, err
+	}
+	if !reflect.DeepEqual(latest, current) {
+		return operation.Result{}, ErrConfigConflict
+	}
+	if err := ctx.Err(); err != nil {
+		return operation.Result{}, err
+	}
 	if err := saveConfig(o.scope.Dir(), updated); err != nil {
 		return operation.Result{}, err
 	}
-	output, err := json.Marshal(map[string]any{"restart_required": true})
+	output, err := json.Marshal(map[string]any{"restart_required": !reflect.DeepEqual(effective, o.active)})
 	if err != nil {
 		return operation.Result{}, err
 	}
 	return operation.Result{Output: output}, nil
+}
+
+func cloneConfig(config Config) Config {
+	config.Routes = append([]Route(nil), config.Routes...)
+	return config
+}
+
+func usageRoutesValue(routes []Route) interaction.Value {
+	items := make([]interaction.Value, 0, len(routes))
+	for _, route := range routes {
+		items = append(items, interaction.ObjectValue([]interaction.Entry{
+			{Name: "provider", Value: interaction.StringValue(route.Provider)},
+			{Name: "model_pattern", Value: interaction.StringValue(route.ModelPattern)},
+			{Name: "profile", Value: interaction.StringValue(route.Profile)},
+		}))
+	}
+	return interaction.ListValue(items)
 }
 
 func answerInteger(response interaction.Response, name string) (int64, bool) {

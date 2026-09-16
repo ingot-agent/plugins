@@ -3,23 +3,30 @@ package promptdefault
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"reflect"
 
 	"github.com/ingot-agent/ingot-abi/state"
 	"github.com/ingot-agent/sdk/interaction"
 	"github.com/ingot-agent/sdk/operation"
 )
 
+var ErrConfigConflict = errors.New("prompt.default configuration changed during interaction")
+
 const (
-	setupOperationName  = "prompt.default.config"
-	setupOperationGroup = "configuration"
+	setupOperationName  = "config"
+	setupOperationGroup = "prompt-default"
 )
 
 // setupOperation asks the Host for this Plugin's configuration through a
 // structured interaction request and persists the answer in its own state
 // scope. The Plugin owns validation and persistence; the Host never decodes
 // plugin configuration.
-type setupOperation struct{ scope state.Scope }
+type setupOperation struct {
+	scope  state.Scope
+	active normalizedConfig
+}
 
 var _ operation.Operation = (*setupOperation)(nil)
 
@@ -29,7 +36,7 @@ func (*setupOperation) Definition() operation.Definition {
 		Description:  "System prompt content and byte limits.",
 		Group:        setupOperationGroup,
 		InputSchema:  json.RawMessage(`{"type":"object","additionalProperties":false,"properties":{}}`),
-		OutputSchema: json.RawMessage(`{"type":"object"}`),
+		OutputSchema: json.RawMessage(`{"type":"object","additionalProperties":false,"required":["restart_required"],"properties":{"restart_required":{"type":"boolean"}}}`),
 	}
 }
 
@@ -68,10 +75,29 @@ func (o *setupOperation) Invoke(ctx context.Context, request operation.Request) 
 	if v, ok := answerInteger(response, "max_system_bytes"); ok {
 		updated.MaxSystemBytes = int(v)
 	}
+	normalized, err := normalizeConfig(updated)
+	if err != nil {
+		return operation.Result{}, err
+	}
+	if err := ctx.Err(); err != nil {
+		return operation.Result{}, err
+	}
+	configCommitMu.Lock()
+	defer configCommitMu.Unlock()
+	latest, err := loadConfig(o.scope.Dir())
+	if err != nil {
+		return operation.Result{}, err
+	}
+	if !reflect.DeepEqual(latest, current) {
+		return operation.Result{}, ErrConfigConflict
+	}
+	if err := ctx.Err(); err != nil {
+		return operation.Result{}, err
+	}
 	if err := saveConfig(o.scope.Dir(), updated); err != nil {
 		return operation.Result{}, err
 	}
-	output, err := json.Marshal(map[string]any{"restart_required": updated != current})
+	output, err := json.Marshal(map[string]any{"restart_required": normalized != o.active})
 	if err != nil {
 		return operation.Result{}, err
 	}

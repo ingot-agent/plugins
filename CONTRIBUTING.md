@@ -11,6 +11,11 @@ must contain:
 - `ingot.plugin.toml`
 - `CHANGELOG.md`
 
+Official plugins that expose configuration through Operation and Interaction
+must follow [`docs/plugin-configuration-interaction-conventions.md`](docs/plugin-configuration-interaction-conventions.md).
+The repository-wide baseline review is recorded in
+[`docs/official-plugin-configuration-audit-2026-09-16.md`](docs/official-plugin-configuration-audit-2026-09-16.md).
+
 The module path must exactly match
 `github.com/ingot-agent/plugins/<plugin-directory>`. The manifest must contain
 a unique, non-empty top-level `name`.

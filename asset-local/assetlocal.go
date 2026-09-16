@@ -92,23 +92,9 @@ func New(ctx context.Context, deps Dependencies) (Exports, ingotabi.Cleanup, err
 	if err != nil {
 		return Exports{}, nil, fmt.Errorf("construct asset.local: %w: %w", err, ErrInvalidConfig)
 	}
-	maxObject, err := positiveDefault(cfg.MaxObjectBytes, defaultMaxObjectBytes, "max_object_bytes")
+	normalized, err := normalizeConfig(cfg)
 	if err != nil {
 		return Exports{}, nil, err
-	}
-	maxTotal, err := positiveDefault(cfg.MaxTotalBytes, defaultMaxTotalBytes, "max_total_bytes")
-	if err != nil {
-		return Exports{}, nil, err
-	}
-	if maxObject > maxTotal {
-		return Exports{}, nil, fmt.Errorf("max_object_bytes exceeds max_total_bytes: %w", ErrInvalidConfig)
-	}
-	concurrency := cfg.IOConcurrency
-	if concurrency == 0 {
-		concurrency = defaultIOConcurrency
-	}
-	if concurrency < 1 {
-		return Exports{}, nil, fmt.Errorf("io_concurrency must be positive: %w", ErrInvalidConfig)
 	}
 	root := deps.State.Dir()
 	if root == "" || !filepath.IsAbs(root) {
@@ -117,12 +103,34 @@ func New(ctx context.Context, deps Dependencies) (Exports, ingotabi.Cleanup, err
 	root = filepath.Clean(root)
 	instance := &store{
 		root: root, blobs: filepath.Join(root, "blobs"), staging: filepath.Join(root, "staging"),
-		maxObject: uint64(maxObject), maxTotal: uint64(maxTotal), slots: make(chan struct{}, concurrency),
+		maxObject: uint64(normalized.MaxObjectBytes), maxTotal: uint64(normalized.MaxTotalBytes), slots: make(chan struct{}, normalized.IOConcurrency),
 	}
 	if err := instance.initialize(ctx); err != nil {
 		return Exports{}, nil, err
 	}
-	return Exports{Store: instance, Operations: []operation.Operation{&setupOperation{scope: deps.State}}}, nil, nil
+	return Exports{Store: instance, Operations: []operation.Operation{&setupOperation{scope: deps.State, active: normalized}}}, nil, nil
+}
+
+func normalizeConfig(cfg Config) (Config, error) {
+	maxObject, err := positiveDefault(cfg.MaxObjectBytes, defaultMaxObjectBytes, "max_object_bytes")
+	if err != nil {
+		return Config{}, err
+	}
+	maxTotal, err := positiveDefault(cfg.MaxTotalBytes, defaultMaxTotalBytes, "max_total_bytes")
+	if err != nil {
+		return Config{}, err
+	}
+	if maxObject > maxTotal {
+		return Config{}, fmt.Errorf("max_object_bytes exceeds max_total_bytes: %w", ErrInvalidConfig)
+	}
+	concurrency := cfg.IOConcurrency
+	if concurrency == 0 {
+		concurrency = defaultIOConcurrency
+	}
+	if concurrency < 1 {
+		return Config{}, fmt.Errorf("io_concurrency must be positive: %w", ErrInvalidConfig)
+	}
+	return Config{MaxObjectBytes: maxObject, MaxTotalBytes: maxTotal, IOConcurrency: concurrency}, nil
 }
 
 func positiveDefault(value, fallback int64, field string) (int64, error) {

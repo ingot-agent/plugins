@@ -94,7 +94,7 @@ func New(ctx context.Context, deps Dependencies) (Exports, ingotabi.Cleanup, err
 	if isNil(deps.Backend.Events()) || isNil(deps.Backend.Interactions()) {
 		return Exports{}, nil, fmt.Errorf("backend events and interactions are required: %w", appbackend.ErrInvalidConfig)
 	}
-	operations, err := newOperationController(append(append([]operation.Operation(nil), deps.Operations...), newConfigOperations(deps.State)...))
+	operations, err := newOperationController(append(append([]operation.Operation(nil), deps.Operations...), newConfigOperations(deps.State, normalized)...))
 	if err != nil {
 		return Exports{}, nil, err
 	}

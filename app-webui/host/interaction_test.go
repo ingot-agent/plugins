@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math"
 	"reflect"
 	"strings"
@@ -277,6 +278,35 @@ func TestInteractionRequestValidatesWithoutConsumingPending(t *testing.T) {
 		if strings.Contains(string(record.Data), "server-default") || strings.Contains(string(record.Data), `"values"`) {
 			t.Fatalf("interaction event leaked response values: %s", record.Data)
 		}
+	}
+}
+
+func TestNestedSensitiveDefaultsAreSuppressedAsAWhole(t *testing.T) {
+	secret := interaction.StringValue("server-secret")
+	objectDefault := interaction.ObjectValue([]interaction.Entry{
+		{Name: "name", Value: interaction.StringValue("primary")},
+		{Name: "token", Value: secret},
+	})
+	fields := []interaction.Field{{
+		Name: "provider", Kind: interaction.FieldObject, Default: &objectDefault,
+		Fields: []interaction.Field{
+			{Name: "name", Kind: interaction.FieldString},
+			{Name: "token", Kind: interaction.FieldString, Sensitive: true},
+		},
+	}}
+	if err := validateFields(fields, ""); err != nil {
+		t.Fatal(err)
+	}
+	projected := projectFields(fields)
+	if len(projected) != 1 || !projected[0].HasDefault || projected[0].Default != nil {
+		t.Fatalf("projected nested secret default = %#v", projected)
+	}
+
+	safeDefault := interaction.ObjectValue([]interaction.Entry{{Name: "name", Value: interaction.StringValue("primary")}})
+	fields[0].Default = &safeDefault
+	projected = projectFields(fields)
+	if projected[0].Default == nil || strings.Contains(fmt.Sprint(projected[0].Default), "server-secret") {
+		t.Fatalf("safe nested default = %#v", projected[0])
 	}
 }
 

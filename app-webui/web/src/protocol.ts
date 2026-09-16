@@ -108,7 +108,7 @@ export interface Operation {
   id: string
   name: string
   description: string
-  group?: string
+  group: string
   inputSchema: Schema
   outputSchema: Schema
 }

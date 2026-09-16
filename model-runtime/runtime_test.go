@@ -167,9 +167,6 @@ func TestNewRejectsInvalidDependenciesAndDefaults(t *testing.T) {
 			{Name: "p", Value: validProvider}, {Name: "p", Value: validProvider},
 		}}},
 		{name: "typed nil provider", deps: modelruntime.Dependencies{Providers: []ingotabi.Named[model.Provider]{{Name: "p", Value: typedNilProvider}}}},
-		{name: "multiple providers without default", deps: modelruntime.Dependencies{Providers: []ingotabi.Named[model.Provider]{
-			{Name: "p1", Value: validProvider}, {Name: "p2", Value: validProvider},
-		}}},
 		{name: "unknown default provider", cfg: modelruntime.Config{DefaultProvider: "missing"}, deps: modelruntime.Dependencies{
 			Providers: []ingotabi.Named[model.Provider]{{Name: "p", Value: validProvider}},
 		}},
@@ -188,6 +185,19 @@ func TestNewRejectsInvalidDependenciesAndDefaults(t *testing.T) {
 				t.Fatalf("New() error = %v, want ErrInvalidConfig", err)
 			}
 		})
+	}
+}
+
+func TestMultipleProvidersWithoutDefaultConstructsAndRequiresSelectionAtCallTime(t *testing.T) {
+	provider := &fakeProvider{}
+	exports, _, err := modelruntime.New(context.Background(), withState(t, modelruntime.Config{}, modelruntime.Dependencies{Providers: []ingotabi.Named[model.Provider]{
+		{Name: "p1", Value: provider}, {Name: "p2", Value: provider},
+	}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := exports.Resolver.ResolveRequest(context.Background(), model.Request{Model: "m"}); !errors.Is(err, model.ErrProviderNotFound) {
+		t.Fatalf("missing provider error = %v", err)
 	}
 }
 

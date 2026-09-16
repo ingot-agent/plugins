@@ -3,23 +3,30 @@ package toolask
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"reflect"
 
 	"github.com/ingot-agent/ingot-abi/state"
 	"github.com/ingot-agent/sdk/interaction"
 	"github.com/ingot-agent/sdk/operation"
 )
 
+var ErrConfigConflict = errors.New("tool.ask configuration changed during interaction")
+
 const (
-	setupOperationName  = "tool.ask.config"
-	setupOperationGroup = "configuration"
+	setupOperationName  = "config"
+	setupOperationGroup = "tool-ask"
 )
 
 // setupOperation asks the Host for this Plugin's configuration through a
 // structured interaction request and persists the answer in its own state
 // scope. The Plugin owns validation and persistence; the Host never decodes
 // plugin configuration.
-type setupOperation struct{ scope state.Scope }
+type setupOperation struct {
+	scope  state.Scope
+	active Config
+}
 
 var _ operation.Operation = (*setupOperation)(nil)
 
@@ -29,7 +36,7 @@ func (*setupOperation) Definition() operation.Definition {
 		Description:  "Limits for the ask_user tool.",
 		Group:        setupOperationGroup,
 		InputSchema:  json.RawMessage(`{"type":"object","additionalProperties":false,"properties":{}}`),
-		OutputSchema: json.RawMessage(`{"type":"object"}`),
+		OutputSchema: json.RawMessage(`{"type":"object","additionalProperties":false,"required":["restart_required"],"properties":{"restart_required":{"type":"boolean"}}}`),
 	}
 }
 
@@ -44,14 +51,18 @@ func (o *setupOperation) Invoke(ctx context.Context, request operation.Request) 
 	if err != nil {
 		return operation.Result{}, err
 	}
+	effectiveCurrent, err := normalizeConfig(current)
+	if err != nil {
+		return operation.Result{}, err
+	}
 	response, err := request.Interaction.Request(ctx, interaction.Request{
 		Name:        setupOperationName,
 		Description: "Limits for the ask_user tool.",
 		Fields: []interaction.Field{
-			{Name: "max_prompt_bytes", Label: "Max Prompt Bytes", Kind: interaction.FieldInteger, Required: false, Default: &interaction.Value{Kind: interaction.ValueInteger, Integer: int64(current.MaxPromptBytes)}},
-			{Name: "max_response_bytes", Label: "Max Response Bytes", Kind: interaction.FieldInteger, Required: false, Default: &interaction.Value{Kind: interaction.ValueInteger, Integer: int64(current.MaxResponseBytes)}},
-			{Name: "max_options", Label: "Max Options", Kind: interaction.FieldInteger, Required: false, Default: &interaction.Value{Kind: interaction.ValueInteger, Integer: int64(current.MaxOptions)}},
-			{Name: "max_options_bytes", Label: "Max Options Bytes", Kind: interaction.FieldInteger, Required: false, Default: &interaction.Value{Kind: interaction.ValueInteger, Integer: int64(current.MaxOptionsBytes)}},
+			{Name: "max_prompt_bytes", Label: "Max Prompt Bytes", Kind: interaction.FieldInteger, Required: false, Default: &interaction.Value{Kind: interaction.ValueInteger, Integer: int64(effectiveCurrent.MaxPromptBytes)}},
+			{Name: "max_response_bytes", Label: "Max Response Bytes", Kind: interaction.FieldInteger, Required: false, Default: &interaction.Value{Kind: interaction.ValueInteger, Integer: int64(effectiveCurrent.MaxResponseBytes)}},
+			{Name: "max_options", Label: "Max Options", Kind: interaction.FieldInteger, Required: false, Default: &interaction.Value{Kind: interaction.ValueInteger, Integer: int64(effectiveCurrent.MaxOptions)}},
+			{Name: "max_options_bytes", Label: "Max Options Bytes", Kind: interaction.FieldInteger, Required: false, Default: &interaction.Value{Kind: interaction.ValueInteger, Integer: int64(effectiveCurrent.MaxOptionsBytes)}},
 		},
 	})
 	if err != nil {
@@ -72,10 +83,29 @@ func (o *setupOperation) Invoke(ctx context.Context, request operation.Request) 
 	if v, ok := answerInteger(response, "max_options_bytes"); ok {
 		updated.MaxOptionsBytes = int(v)
 	}
+	effective, err := normalizeConfig(updated)
+	if err != nil {
+		return operation.Result{}, err
+	}
+	if err := ctx.Err(); err != nil {
+		return operation.Result{}, err
+	}
+	configCommitMu.Lock()
+	defer configCommitMu.Unlock()
+	latest, err := loadConfig(o.scope.Dir())
+	if err != nil {
+		return operation.Result{}, err
+	}
+	if !reflect.DeepEqual(latest, current) {
+		return operation.Result{}, ErrConfigConflict
+	}
+	if err := ctx.Err(); err != nil {
+		return operation.Result{}, err
+	}
 	if err := saveConfig(o.scope.Dir(), updated); err != nil {
 		return operation.Result{}, err
 	}
-	output, err := json.Marshal(map[string]any{"restart_required": updated != current})
+	output, err := json.Marshal(map[string]any{"restart_required": effective != o.active})
 	if err != nil {
 		return operation.Result{}, err
 	}

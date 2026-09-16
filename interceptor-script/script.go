@@ -101,6 +101,7 @@ func New(ctx context.Context, deps Dependencies) (Exports, ingotabi.Cleanup, err
 		return Exports{}, nil, fmt.Errorf("construct interceptor.script: %w: %w", err, ErrInvalidConfig)
 	}
 	seen := make(map[string]struct{}, len(cfg.Hooks))
+	normalizedHooks := make([]normalizedHook, 0, len(cfg.Hooks))
 	var exports Exports
 	for i, candidate := range cfg.Hooks {
 		hook, err := normalizeHook(candidate)
@@ -111,6 +112,7 @@ func New(ctx context.Context, deps Dependencies) (Exports, ingotabi.Cleanup, err
 			return Exports{}, nil, fmt.Errorf("hooks[%d] duplicate name %q: %w", i, hook.name, ErrInvalidConfig)
 		}
 		seen[hook.name] = struct{}{}
+		normalizedHooks = append(normalizedHooks, hook)
 		switch hook.target {
 		case "tool":
 			exports.ToolInterceptors = append(exports.ToolInterceptors, &toolHook{hook: hook})
@@ -122,7 +124,7 @@ func New(ctx context.Context, deps Dependencies) (Exports, ingotabi.Cleanup, err
 			exports.AgentInterceptors = append(exports.AgentInterceptors, &agentHook{hook: hook})
 		}
 	}
-	exports.Operations = []operation.Operation{&setupOperation{scope: deps.State}}
+	exports.Operations = []operation.Operation{&setupOperation{scope: deps.State, active: normalizedHooks}}
 	return exports, nil, nil
 }
 

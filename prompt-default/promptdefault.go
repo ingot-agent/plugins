@@ -63,6 +63,12 @@ type renderer struct {
 	contributors []prompt.Contributor
 }
 
+type normalizedConfig struct {
+	systemPrompt string
+	maxBlock     int
+	maxSystem    int
+}
+
 // New snapshots the contributor collection and loads this Plugin's own
 // configuration from its state scope. A missing configuration file is the
 // normal Unconfigured state: the system prompt is empty and defaults apply.
@@ -80,19 +86,9 @@ func New(ctx context.Context, deps Dependencies) (Exports, ingotabi.Cleanup, err
 	if err != nil {
 		return Exports{}, nil, fmt.Errorf("construct prompt.default: %w: %w", err, ErrInvalidConfig)
 	}
-	if !utf8.ValidString(cfg.SystemPrompt) {
-		return Exports{}, nil, fmt.Errorf("system_prompt is invalid UTF-8: %w", ErrInvalidConfig)
-	}
-	maxBlock, err := positiveDefault(cfg.MaxBlockBytes, defaultMaxBlockBytes, "max_block_bytes")
+	normalized, err := normalizeConfig(cfg)
 	if err != nil {
 		return Exports{}, nil, err
-	}
-	maxSystem, err := positiveDefault(cfg.MaxSystemBytes, defaultMaxSystemBytes, "max_system_bytes")
-	if err != nil {
-		return Exports{}, nil, err
-	}
-	if len([]byte(cfg.SystemPrompt)) > maxSystem {
-		return Exports{}, nil, fmt.Errorf("system_prompt exceeds max_system_bytes: %w: %w", ErrInvalidConfig, ErrSystemLimit)
 	}
 	contributors := make([]prompt.Contributor, len(deps.Contributors))
 	for i, contributor := range deps.Contributors {
@@ -102,9 +98,27 @@ func New(ctx context.Context, deps Dependencies) (Exports, ingotabi.Cleanup, err
 		contributors[i] = contributor
 	}
 	return Exports{
-		Renderer:   &renderer{systemPrompt: cfg.SystemPrompt, maxBlock: maxBlock, maxSystem: maxSystem, contributors: contributors},
-		Operations: []operation.Operation{&setupOperation{scope: deps.State}},
+		Renderer:   &renderer{systemPrompt: normalized.systemPrompt, maxBlock: normalized.maxBlock, maxSystem: normalized.maxSystem, contributors: contributors},
+		Operations: []operation.Operation{&setupOperation{scope: deps.State, active: normalized}},
 	}, nil, nil
+}
+
+func normalizeConfig(cfg Config) (normalizedConfig, error) {
+	if !utf8.ValidString(cfg.SystemPrompt) {
+		return normalizedConfig{}, fmt.Errorf("system_prompt is invalid UTF-8: %w", ErrInvalidConfig)
+	}
+	maxBlock, err := positiveDefault(cfg.MaxBlockBytes, defaultMaxBlockBytes, "max_block_bytes")
+	if err != nil {
+		return normalizedConfig{}, err
+	}
+	maxSystem, err := positiveDefault(cfg.MaxSystemBytes, defaultMaxSystemBytes, "max_system_bytes")
+	if err != nil {
+		return normalizedConfig{}, err
+	}
+	if len([]byte(cfg.SystemPrompt)) > maxSystem {
+		return normalizedConfig{}, fmt.Errorf("system_prompt exceeds max_system_bytes: %w: %w", ErrInvalidConfig, ErrSystemLimit)
+	}
+	return normalizedConfig{systemPrompt: cfg.SystemPrompt, maxBlock: maxBlock, maxSystem: maxSystem}, nil
 }
 
 func positiveDefault(value, fallback int, field string) (int, error) {

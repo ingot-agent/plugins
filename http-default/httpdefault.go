@@ -59,6 +59,15 @@ type normalizedConfig struct {
 	tlsHandshakeTimeout time.Duration
 }
 
+type effectiveConfig struct {
+	proxyMode                  string
+	proxyURL                   string
+	maxIdleConns               int
+	maxIdleConnsPerHost        int
+	idleConnTimeoutSeconds     int
+	tlsHandshakeTimeoutSeconds int
+}
+
 // New loads this Plugin's own configuration from its state scope and
 // constructs an independent HTTP client and connection pool. A missing
 // configuration file is the normal Unconfigured state; defaults apply.
@@ -81,6 +90,10 @@ func New(ctx context.Context, deps Dependencies) (Exports, ingotabi.Cleanup, err
 	if err != nil {
 		return Exports{}, nil, err
 	}
+	active, err := effectiveConfiguration(cfg)
+	if err != nil {
+		return Exports{}, nil, err
+	}
 
 	transport := &http.Transport{
 		Proxy:                 normalized.proxy,
@@ -98,7 +111,26 @@ func New(ctx context.Context, deps Dependencies) (Exports, ingotabi.Cleanup, err
 		transport.CloseIdleConnections()
 		return nil
 	})
-	return Exports{Client: client, Operations: []operation.Operation{&setupOperation{scope: deps.State}}}, cleanup, nil
+	return Exports{Client: client, Operations: []operation.Operation{&setupOperation{scope: deps.State, active: active}}}, cleanup, nil
+}
+
+func effectiveConfiguration(cfg Config) (effectiveConfig, error) {
+	if _, err := normalizeConfig(cfg); err != nil {
+		return effectiveConfig{}, err
+	}
+	mode := cfg.ProxyMode
+	if mode == "" {
+		mode = "environment"
+	}
+	maxIdleConns, _ := positiveOrDefault("max_idle_conns", cfg.MaxIdleConns, defaultMaxIdleConns)
+	maxIdleConnsPerHost, _ := positiveOrDefault("max_idle_conns_per_host", cfg.MaxIdleConnsPerHost, defaultMaxIdleConnsPerHost)
+	idleSeconds, _ := positiveOrDefault("idle_conn_timeout_seconds", cfg.IdleConnTimeoutSeconds, defaultIdleConnTimeoutSeconds)
+	tlsSeconds, _ := positiveOrDefault("tls_handshake_timeout_seconds", cfg.TLSHandshakeTimeoutSeconds, defaultTLSHandshakeTimeoutSeconds)
+	return effectiveConfig{
+		proxyMode: mode, proxyURL: cfg.ProxyURL,
+		maxIdleConns: maxIdleConns, maxIdleConnsPerHost: maxIdleConnsPerHost,
+		idleConnTimeoutSeconds: idleSeconds, tlsHandshakeTimeoutSeconds: tlsSeconds,
+	}, nil
 }
 
 func normalizeConfig(cfg Config) (normalizedConfig, error) {
@@ -111,23 +143,23 @@ func normalizeConfig(cfg Config) (normalizedConfig, error) {
 	switch mode {
 	case "environment":
 		if cfg.ProxyURL != "" {
-			return normalizedConfig{}, configError("proxy_url", cfg.ProxyURL, "empty unless proxy_mode is url")
+			return normalizedConfig{}, proxyConfigError("empty unless proxy_mode is url")
 		}
 		proxy = http.ProxyFromEnvironment
 	case "direct":
 		if cfg.ProxyURL != "" {
-			return normalizedConfig{}, configError("proxy_url", cfg.ProxyURL, "empty unless proxy_mode is url")
+			return normalizedConfig{}, proxyConfigError("empty unless proxy_mode is url")
 		}
 	case "url":
 		if cfg.ProxyURL == "" {
-			return normalizedConfig{}, configError("proxy_url", cfg.ProxyURL, "an absolute http or https URL")
+			return normalizedConfig{}, proxyConfigError("an absolute http or https URL")
 		}
 		parsed, err := url.Parse(cfg.ProxyURL)
 		if err != nil {
-			return normalizedConfig{}, fmt.Errorf("proxy_url %q: %w: %w", cfg.ProxyURL, ErrInvalidConfig, err)
+			return normalizedConfig{}, proxyConfigError("an absolute http or https URL")
 		}
 		if (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" || parsed.RawQuery != "" || parsed.Fragment != "" {
-			return normalizedConfig{}, configError("proxy_url", cfg.ProxyURL, "an absolute http or https URL without query or fragment")
+			return normalizedConfig{}, proxyConfigError("an absolute http or https URL without query or fragment")
 		}
 		proxy = http.ProxyURL(parsed)
 	default:
@@ -172,6 +204,10 @@ func positiveOrDefault(field string, value, defaultValue int) (int, error) {
 
 func configError(field string, actual any, want string) error {
 	return fmt.Errorf("%s: got %v, want %s: %w", field, actual, want, ErrInvalidConfig)
+}
+
+func proxyConfigError(want string) error {
+	return fmt.Errorf("proxy_url: want %s: %w", want, ErrInvalidConfig)
 }
 
 type client struct {

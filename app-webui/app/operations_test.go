@@ -21,6 +21,19 @@ type testOperation struct {
 	invoke     func(context.Context, operation.Request) (operation.Result, error)
 }
 
+type testInteractionChannel struct {
+	request  interaction.Request
+	response interaction.Response
+}
+
+func (c *testInteractionChannel) Request(_ context.Context, request interaction.Request) (interaction.Response, error) {
+	c.request = request
+	return c.response, nil
+}
+func (*testInteractionChannel) Emit(context.Context, interaction.Event) error { return nil }
+func (*testInteractionChannel) Set(context.Context, interaction.State) error  { return nil }
+func (*testInteractionChannel) Clear(context.Context, string) error           { return nil }
+
 func (o *testOperation) Definition() operation.Definition { return o.definition }
 func (o *testOperation) Invoke(ctx context.Context, request operation.Request) (operation.Result, error) {
 	if o.invoke != nil {
@@ -31,6 +44,7 @@ func (o *testOperation) Invoke(ctx context.Context, request operation.Request) (
 
 func operationFixture(name string) *testOperation {
 	return &testOperation{definition: operation.Definition{Name: name, Description: "Echo a value",
+		Group:        "test",
 		InputSchema:  json.RawMessage(`{"type":"object","required":["value"],"properties":{"value":{"type":"integer","minimum":9007199254740993}},"additionalProperties":false}`),
 		OutputSchema: json.RawMessage(`{"type":"object","required":["value"],"properties":{"value":{"type":"integer"}},"additionalProperties":false}`)}}
 }
@@ -47,13 +61,13 @@ func configureOperations(t *testing.T, a *application, retention int, operations
 }
 
 func TestOperationDefinitionsValidateAndOwnSnapshots(t *testing.T) {
-	first, second := operationFixture("z.echo"), operationFixture("a.echo")
+	first, second := operationFixture("z-echo"), operationFixture("a-echo")
 	c, err := newOperationController([]operation.Operation{first, second})
 	if err != nil {
 		t.Fatal(err)
 	}
 	definitions := c.List()
-	if len(definitions) != 2 || definitions[0].Name != "z.echo" || definitions[1].Name != "a.echo" {
+	if len(definitions) != 2 || definitions[0].Name != "z-echo" || definitions[1].Name != "a-echo" {
 		t.Fatalf("definition order = %v", definitions)
 	}
 	definitions[0].InputSchema[0] = '!'
@@ -109,6 +123,55 @@ func TestSameNameOperationsCoexist(t *testing.T) {
 		if definitions[i].Name != "echo" || definitions[i].Group != want || definitions[i].ID == "" {
 			t.Fatalf("definition[%d] = %#v", i, definitions[i])
 		}
+	}
+}
+
+func TestDuplicateAndUngroupedOperationsCoexist(t *testing.T) {
+	first, second := operationFixture("config"), operationFixture("config")
+	first.definition.Group = "tool-shell"
+	second.definition.Group = "tool-shell"
+	ungrouped := operationFixture("config")
+	ungrouped.definition.Group = ""
+	c, err := newOperationController([]operation.Operation{first, second, ungrouped})
+	if err != nil {
+		t.Fatal(err)
+	}
+	definitions := c.List()
+	if len(definitions) != 3 || definitions[2].Group != "" {
+		t.Fatalf("definitions = %#v", definitions)
+	}
+}
+
+func TestAppConfigOperationUsesInteractionAndPersists(t *testing.T) {
+	dir := writeTestConfig(t, appbackend.Config{Backend: appbackend.BackendConfig{
+		Address: "127.0.0.1:7000", ReplayCapacity: 32, SubscriberBuffer: 16,
+		HeartbeatIntervalSeconds: 5, OperationRetention: 8, MaxAssetBytes: 1024,
+	}})
+	channel := &testInteractionChannel{response: interaction.Response{Values: []interaction.Answer{
+		{Name: "address", Value: interaction.StringValue("127.0.0.1:7001")},
+		{Name: "operation_retention", Value: interaction.IntegerValue(12)},
+	}}}
+	configOp := &configOperation{scope: testStateScope{dir: dir}}
+	definition := configOp.Definition()
+	if definition.Group != "app-webui" || definition.Name != "config" || string(definition.InputSchema) != `{"type":"object","additionalProperties":false,"properties":{}}` {
+		t.Fatalf("definition = %#v", definition)
+	}
+	result, err := configOp.Invoke(context.Background(), operation.Request{Input: json.RawMessage(`{}`), Interaction: channel})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if channel.request.Name != "config" || len(channel.request.Fields) != 6 || channel.request.Fields[0].Default.String != "127.0.0.1:7000" {
+		t.Fatalf("interaction request = %#v", channel.request)
+	}
+	stored, err := appbackend.LoadConfig(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Backend.Address != "127.0.0.1:7001" || stored.Backend.OperationRetention != 12 || stored.Backend.ReplayCapacity != 32 {
+		t.Fatalf("stored config = %#v", stored)
+	}
+	if !strings.Contains(string(result.Output), `"restart_required":true`) {
+		t.Fatalf("output = %s", result.Output)
 	}
 }
 

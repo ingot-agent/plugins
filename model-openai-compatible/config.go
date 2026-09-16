@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 
 	"github.com/pelletier/go-toml/v2"
 )
@@ -14,6 +15,8 @@ import (
 // Runtime state scope. The runtime never reads or decodes it; the file name
 // and its contents are this Plugin's private persistent contract.
 const configFileName = "config.toml"
+
+var configCommitMu sync.Mutex
 
 // loadConfig reads the Plugin-owned configuration from its Runtime state
 // scope. A missing file is the normal Unconfigured state and yields the
@@ -81,18 +84,26 @@ func saveConfig(scope string, config Config) error {
 // setup Operation, so a persisted list is always one the Plugin would accept at
 // startup. It validates the shape that does not need runtime dependencies.
 func validateProviders(config Config) error {
+	_, err := normalizeProviders(config)
+	return err
+}
+
+func normalizeProviders(config Config) ([]normalizedProviderConfig, error) {
 	if len(config.Providers) == 0 {
-		return configError("providers", "must contain at least one provider")
+		return nil, configError("providers", "must contain at least one provider")
 	}
 	seen := make(map[string]struct{}, len(config.Providers))
+	normalized := make([]normalizedProviderConfig, 0, len(config.Providers))
 	for i, candidate := range config.Providers {
-		if len(candidate.Name) > maxProviderNameBytes || !providerNamePattern.MatchString(candidate.Name) {
-			return fmt.Errorf("providers[%d]: %w", i, configError("name", "must match [a-z][a-z0-9]*(?:[._-][a-z0-9]+)* and be at most 64 bytes"))
+		provider, err := normalizeProviderConfig(candidate)
+		if err != nil {
+			return nil, fmt.Errorf("providers[%d]: %w", i, err)
 		}
-		if _, exists := seen[candidate.Name]; exists {
-			return fmt.Errorf("providers[%d]: %w", i, configError("name", "must be unique"))
+		if _, exists := seen[provider.name]; exists {
+			return nil, fmt.Errorf("providers[%d]: %w", i, configError("name", "must be unique"))
 		}
-		seen[candidate.Name] = struct{}{}
+		seen[provider.name] = struct{}{}
+		normalized = append(normalized, provider)
 	}
-	return nil
+	return normalized, nil
 }

@@ -7,7 +7,7 @@ import { useRuntime } from '../stores/runtime'
 import { APIError, errorMessage } from '../api'
 import { turnCopyTexts } from '../copy'
 import { titleForFirstMessage } from '../title'
-import type { Attachment, LiveTurn, Message, Part } from '../protocol'
+import type { Attachment, LiveTurn, Message, Operation, Part } from '../protocol'
 import Brand from '../components/Brand.vue'
 import Composer from '../components/Composer.vue'
 import ContentParts from '../components/ContentParts.vue'
@@ -23,7 +23,7 @@ import JsonBlock from '../components/JsonBlock.vue'
 import WorkspaceHeader from '../components/WorkspaceHeader.vue'
 import { readPreference, savePreference } from '../theme'
 import { shouldShowTurnByline } from './conversationDisplay'
-defineEmits<{ navigation: []; pending: [] }>()
+defineEmits<{ navigation: []; pending: []; operation: [operation: Operation, sessionId: string] }>()
 const runtime = useRuntime()
 const route = useRoute()
 const router = useRouter()
@@ -251,7 +251,7 @@ onBeforeUnmount(() => { media.removeEventListener('change', resize); composerObs
           <button type="button" class="btn small" :disabled="assigningWorkspace" @click="pickerOpen = true"><LoaderCircle v-if="assigningWorkspace" class="spin" :size="14" /><FolderOpen v-else :size="14" />{{ t(assigningWorkspace ? 'workspaceAssigning' : 'chooseWorkspace') }}</button>
         </div>
         <div v-if="session?.archivedAt" class="archive-banner"><span>{{ t('archivedSession') }}</span><button class="btn small" @click="restore">{{ t('restore') }}</button></div>
-        <Composer :session-key="sessionId || 'new'" :running="running" :archived="!!session?.archivedAt || (!!sessionId && !session)" :disabled="needsWorkspace || assigningWorkspace" :sending="sending" @send="send" />
+        <Composer :session-key="sessionId || 'new'" :running="running" :archived="!!session?.archivedAt || (!!sessionId && !session)" :disabled="needsWorkspace || assigningWorkspace" :sending="sending" @send="send" @command="$emit('operation', $event, sessionId)" />
       </div>
     </section>
     <aside v-if="details && !narrow" class="details-sidebar"><header><h2>{{ t('execution') }}</h2><button class="icon-button" :aria-label="t('close')" @click="details = false"><X :size="17" /></button></header><ExecutionPanel :session-id="sessionId" /></aside>

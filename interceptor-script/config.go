@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sync"
 
 	"github.com/pelletier/go-toml/v2"
 )
@@ -15,6 +16,8 @@ import (
 // Runtime state scope. The runtime never reads or decodes it; the file name
 // and its contents are this Plugin's private persistent contract.
 const configFileName = "config.toml"
+
+var configCommitMu sync.Mutex
 
 // loadConfig reads the Plugin-owned configuration from its Runtime state
 // scope. A missing file is the normal Unconfigured state and yields the

@@ -19,7 +19,9 @@ import (
 	"github.com/santhosh-tekuri/jsonschema/v6"
 )
 
-var operationName = regexp.MustCompile(`^[a-z][a-z0-9]*([._-][a-z0-9]+)*$`)
+var operationName = regexp.MustCompile(`^[a-z][a-z0-9-]{0,31}$`)
+
+var operationGroupName = regexp.MustCompile(`^[a-z][a-z0-9-]{0,47}$`)
 
 type registeredOperation struct {
 	operation     operation.Operation
@@ -27,20 +29,18 @@ type registeredOperation struct {
 }
 
 type operationController struct {
-	// entries is keyed by the host-generated internal ID, never by Name:
-	// two Plugins may export the same display name without colliding.
 	entries     map[string]registeredOperation
 	definitions []appbackend.OperationDefinition
 }
 
-// operationGroupName validates the optional presentation group hint.
-var operationGroupName = regexp.MustCompile(`^[a-z][a-z0-9]*([._-][a-z0-9]+)*$`)
-
-// newOperationController snapshots every operation definition, assigning a
-// stable internal ID to each. Same-name operations coexist: identity is the
-// internal ID, and Name is display-only.
+// newOperationController snapshots every operation definition and assigns a
+// stable internal ID to each. Group and Name remain display metadata and may
+// both repeat.
 func newOperationController(operations []operation.Operation) (*operationController, error) {
-	c := &operationController{entries: make(map[string]registeredOperation), definitions: make([]appbackend.OperationDefinition, 0, len(operations))}
+	c := &operationController{
+		entries:     make(map[string]registeredOperation),
+		definitions: make([]appbackend.OperationDefinition, 0, len(operations)),
+	}
 	for i, candidate := range operations {
 		if isNil(candidate) {
 			return nil, fmt.Errorf("operation %d is nil: %w", i, appbackend.ErrInvalidOperationDefinition)
@@ -49,7 +49,7 @@ func newOperationController(operations []operation.Operation) (*operationControl
 		if !operationName.MatchString(definition.Name) || definition.Description == "" || !utf8.ValidString(definition.Description) {
 			return nil, fmt.Errorf("operation %d has invalid name or description: %w", i, appbackend.ErrInvalidOperationDefinition)
 		}
-		if definition.Group != "" && (!operationGroupName.MatchString(definition.Group) || !utf8.ValidString(definition.Group)) {
+		if (definition.Group != "" && !operationGroupName.MatchString(definition.Group)) || !utf8.ValidString(definition.Group) {
 			return nil, fmt.Errorf("operation %q has invalid group %q: %w", definition.Name, definition.Group, appbackend.ErrInvalidOperationDefinition)
 		}
 		id := operationInternalID(definition.Name, i)

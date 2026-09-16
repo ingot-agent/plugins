@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 
 	"github.com/pelletier/go-toml/v2"
 )
@@ -14,6 +15,8 @@ import (
 // Runtime state scope. The runtime never reads or decodes it; the file name
 // and its contents are this Plugin's private persistent contract.
 const configFileName = "config.toml"
+
+var configCommitMu sync.Mutex
 
 // loadConfig reads the Plugin-owned configuration from its Runtime state
 // scope. A missing file is the normal Unconfigured state and yields the
@@ -49,7 +52,23 @@ func saveConfig(scope string, config Config) error {
 	if err := os.MkdirAll(scope, 0o700); err != nil {
 		return fmt.Errorf("create state scope: %w", err)
 	}
-	data, err := toml.Marshal(config)
+	type persistedConfig struct {
+		Shell          string            `toml:"shell"`
+		TimeoutSeconds int               `toml:"timeout_seconds"`
+		MaxOutputBytes int               `toml:"max_output_bytes"`
+		Environment    map[string]string `toml:"environment"`
+		InheritEnv     *[]string         `toml:"inherit_env,omitempty"`
+	}
+	stored := persistedConfig{
+		Shell:          config.Shell,
+		TimeoutSeconds: config.TimeoutSeconds,
+		MaxOutputBytes: config.MaxOutputBytes,
+		Environment:    config.Environment,
+	}
+	if config.InheritEnv != nil {
+		stored.InheritEnv = &config.InheritEnv
+	}
+	data, err := toml.Marshal(stored)
 	if err != nil {
 		return fmt.Errorf("encode plugin config: %w", err)
 	}

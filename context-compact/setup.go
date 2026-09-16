@@ -3,23 +3,31 @@ package contextcompact
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"reflect"
 
 	"github.com/ingot-agent/ingot-abi/state"
 	"github.com/ingot-agent/sdk/interaction"
 	"github.com/ingot-agent/sdk/operation"
 )
 
+var ErrConfigConflict = errors.New("context.compact configuration changed during interaction")
+
 const (
-	setupOperationName  = "context.compact.config"
-	setupOperationGroup = "configuration"
+	setupOperationName  = "config"
+	setupOperationGroup = "context-compact"
 )
 
 // setupOperation asks the Host for this Plugin's configuration through a
 // structured interaction request and persists the answer in its own state
 // scope. The Plugin owns validation and persistence; the Host never decodes
 // plugin configuration.
-type setupOperation struct{ scope state.Scope }
+type setupOperation struct {
+	scope         state.Scope
+	providerNames []string
+	active        normalizedConfig
+}
 
 var _ operation.Operation = (*setupOperation)(nil)
 
@@ -29,7 +37,7 @@ func (*setupOperation) Definition() operation.Definition {
 		Description:  "Context compaction thresholds and summarization limits.",
 		Group:        setupOperationGroup,
 		InputSchema:  json.RawMessage(`{"type":"object","additionalProperties":false,"properties":{}}`),
-		OutputSchema: json.RawMessage(`{"type":"object"}`),
+		OutputSchema: json.RawMessage(`{"type":"object","additionalProperties":false,"required":["restart_required"],"properties":{"restart_required":{"type":"boolean"}}}`),
 	}
 }
 
@@ -44,11 +52,20 @@ func (o *setupOperation) Invoke(ctx context.Context, request operation.Request) 
 	if err != nil {
 		return operation.Result{}, err
 	}
+	providerField := interaction.Field{Name: "provider", Label: "Provider", Description: "Empty uses the provider from the request being compacted.", Kind: interaction.FieldString, Required: false, Default: valuePointer(interaction.StringValue(current.Provider))}
+	if len(o.providerNames) > 0 {
+		providerField.Kind = interaction.FieldChoice
+		providerField.Required = true
+		providerField.Options = []interaction.Option{{Value: "", Label: "Request provider"}}
+		for _, name := range o.providerNames {
+			providerField.Options = append(providerField.Options, interaction.Option{Value: name, Label: name})
+		}
+	}
 	response, err := request.Interaction.Request(ctx, interaction.Request{
 		Name:        setupOperationName,
 		Description: "Context compaction thresholds and summarization limits.",
 		Fields: []interaction.Field{
-			{Name: "provider", Label: "Provider", Kind: interaction.FieldString, Required: false, Default: &interaction.Value{Kind: interaction.ValueString, String: current.Provider}},
+			providerField,
 			{Name: "model", Label: "Model", Kind: interaction.FieldString, Required: false, Default: &interaction.Value{Kind: interaction.ValueString, String: current.Model}},
 			{Name: "trigger_request_bytes", Label: "Trigger Request Bytes", Kind: interaction.FieldInteger, Required: false, Default: &interaction.Value{Kind: interaction.ValueInteger, Integer: int64(current.TriggerRequestBytes)}},
 			{Name: "target_request_bytes", Label: "Target Request Bytes", Kind: interaction.FieldInteger, Required: false, Default: &interaction.Value{Kind: interaction.ValueInteger, Integer: int64(current.TargetRequestBytes)}},
@@ -100,15 +117,36 @@ func (o *setupOperation) Invoke(ctx context.Context, request operation.Request) 
 	if v, ok := answerInteger(response, "max_summary_passes"); ok {
 		updated.MaxSummaryPasses = int(v)
 	}
+	normalized, err := normalizeConfigForProviders(updated, o.providerNames)
+	if err != nil {
+		return operation.Result{}, err
+	}
+	if err := ctx.Err(); err != nil {
+		return operation.Result{}, err
+	}
+	configCommitMu.Lock()
+	defer configCommitMu.Unlock()
+	latest, err := loadConfig(o.scope.Dir())
+	if err != nil {
+		return operation.Result{}, err
+	}
+	if !reflect.DeepEqual(latest, current) {
+		return operation.Result{}, ErrConfigConflict
+	}
+	if err := ctx.Err(); err != nil {
+		return operation.Result{}, err
+	}
 	if err := saveConfig(o.scope.Dir(), updated); err != nil {
 		return operation.Result{}, err
 	}
-	output, err := json.Marshal(map[string]any{"restart_required": updated != current})
+	output, err := json.Marshal(map[string]any{"restart_required": normalized != o.active})
 	if err != nil {
 		return operation.Result{}, err
 	}
 	return operation.Result{Output: output}, nil
 }
+
+func valuePointer(value interaction.Value) *interaction.Value { return &value }
 
 func answerInteger(response interaction.Response, name string) (int64, bool) {
 	for _, answer := range response.Values {

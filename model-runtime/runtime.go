@@ -86,25 +86,19 @@ func New(ctx context.Context, deps Dependencies) (Exports, ingotabi.Cleanup, err
 		return Exports{}, nil, fmt.Errorf("providers: %w: %w", ErrInvalidConfig, err)
 	}
 	providers := make(map[string]model.Provider, len(deps.Providers))
+	providerNames := make([]string, 0, len(deps.Providers))
 	for i, named := range deps.Providers {
 		if isNil(named.Value) {
 			return Exports{}, nil, fmt.Errorf("providers[%d] is nil: %w", i, ErrInvalidConfig)
 		}
 		providers[named.Name] = named.Value
+		providerNames = append(providerNames, named.Name)
 	}
-	defaultProvider := cfg.DefaultProvider
-	if defaultProvider == "" {
-		if len(deps.Providers) > 1 {
-			return Exports{}, nil, fmt.Errorf("default_provider is required with multiple providers: %w", ErrInvalidConfig)
-		}
-		if len(deps.Providers) == 1 {
-			defaultProvider = deps.Providers[0].Name
-		}
-	} else if len(providers) > 0 {
-		if _, ok := providers[defaultProvider]; !ok {
-			return Exports{}, nil, fmt.Errorf("default provider %q: %w: %w", defaultProvider, model.ErrProviderNotFound, ErrInvalidConfig)
-		}
+	effective, err := effectiveConfig(cfg, providerNames)
+	if err != nil && len(providerNames) > 0 {
+		return Exports{}, nil, fmt.Errorf("construct model.runtime: %w", err)
 	}
+	defaultProvider := effective.DefaultProvider
 
 	interceptors := make([]model.Interceptor, len(deps.Interceptors))
 	for i, interceptor := range deps.Interceptors {
@@ -125,7 +119,7 @@ func New(ctx context.Context, deps Dependencies) (Exports, ingotabi.Cleanup, err
 		providers: providers, defaultProvider: defaultProvider, defaultModel: cfg.DefaultModel,
 		interceptors: interceptors, streamInterceptors: streamInterceptors,
 	}
-	return Exports{Runtime: instance, Streaming: instance, Resolver: instance, Operations: []operation.Operation{&setupOperation{scope: deps.State}}}, nil, nil
+	return Exports{Runtime: instance, Streaming: instance, Resolver: instance, Operations: []operation.Operation{&setupOperation{scope: deps.State, providerNames: providerNames, active: effective}}}, nil, nil
 }
 
 // ResolveRequest returns a caller-owned request with provider and model

@@ -111,7 +111,7 @@ func New(ctx context.Context, deps Dependencies) (Exports, ingotabi.Cleanup, err
 			&readTool{config: config, workspace: deps.Workspace},
 			&searchTool{config: config, workspace: deps.Workspace},
 		},
-		Operations: []operation.Operation{&setupOperation{scope: deps.State}},
+		Operations: []operation.Operation{&setupOperation{scope: deps.State, active: config}},
 	}, nil, nil
 }
 

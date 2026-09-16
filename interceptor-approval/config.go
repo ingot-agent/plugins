@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
+	"sync"
 	"unicode/utf8"
 
 	"github.com/pelletier/go-toml/v2"
@@ -15,6 +17,8 @@ import (
 // Runtime state scope. The runtime never reads or decodes it; the file name
 // and its contents are this Plugin's private persistent contract.
 const configFileName = "config.toml"
+
+var configCommitMu sync.Mutex
 
 // loadConfig reads the Plugin-owned configuration from its Runtime state
 // scope. A missing file is the normal Unconfigured state and yields the
@@ -82,39 +86,46 @@ func saveConfig(scope string, config Config) error {
 // Operation, so a persisted change cannot introduce a configuration the Plugin
 // would refuse to start with.
 func validateConfig(cfg Config) error {
+	_, err := normalizeConfig(cfg)
+	return err
+}
+
+func normalizeConfig(cfg Config) (Config, error) {
 	defaultAction := cfg.DefaultAction
 	if defaultAction == "" {
 		defaultAction = actionAsk
 	}
 	if !validAction(defaultAction) {
-		return fmt.Errorf("invalid default_action %q: %w", defaultAction, ErrInvalidConfig)
+		return Config{}, fmt.Errorf("invalid default_action %q: %w", defaultAction, ErrInvalidConfig)
 	}
 	display := cfg.ArgumentDisplay
 	if display == "" {
 		display = displayFull
 	}
 	if display != displayFull && display != displayNamesOnly {
-		return fmt.Errorf("invalid argument_display %q: %w", display, ErrInvalidConfig)
+		return Config{}, fmt.Errorf("invalid argument_display %q: %w", display, ErrInvalidConfig)
 	}
 	maxDisplay := cfg.MaxDisplayBytes
 	if maxDisplay == 0 {
 		maxDisplay = defaultMaxDisplayBytes
 	}
 	if maxDisplay < 1 {
-		return fmt.Errorf("max_display_bytes must be positive: %w", ErrInvalidConfig)
+		return Config{}, fmt.Errorf("max_display_bytes must be positive: %w", ErrInvalidConfig)
 	}
 	rules := make(map[string]string, len(cfg.Rules))
 	for i, rule := range cfg.Rules {
 		if rule.Tool == "" || !utf8.ValidString(rule.Tool) {
-			return fmt.Errorf("rules[%d].tool must be non-empty UTF-8: %w", i, ErrInvalidConfig)
+			return Config{}, fmt.Errorf("rules[%d].tool must be non-empty UTF-8: %w", i, ErrInvalidConfig)
 		}
 		if !validAction(rule.Action) {
-			return fmt.Errorf("rules[%d].action is invalid: %w", i, ErrInvalidConfig)
+			return Config{}, fmt.Errorf("rules[%d].action is invalid: %w", i, ErrInvalidConfig)
 		}
 		if _, exists := rules[rule.Tool]; exists {
-			return fmt.Errorf("duplicate rule for %q: %w", rule.Tool, ErrInvalidConfig)
+			return Config{}, fmt.Errorf("duplicate rule for %q: %w", rule.Tool, ErrInvalidConfig)
 		}
 		rules[rule.Tool] = rule.Action
 	}
-	return nil
+	canonicalRules := append([]Rule(nil), cfg.Rules...)
+	sort.Slice(canonicalRules, func(i, j int) bool { return canonicalRules[i].Tool < canonicalRules[j].Tool })
+	return Config{DefaultAction: defaultAction, ArgumentDisplay: display, MaxDisplayBytes: maxDisplay, Rules: canonicalRules}, nil
 }
