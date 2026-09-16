@@ -3,12 +3,16 @@ package approval
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"reflect"
 
 	"github.com/ingot-agent/ingot-abi/state"
 	"github.com/ingot-agent/sdk/interaction"
 	"github.com/ingot-agent/sdk/operation"
 )
+
+var ErrConfigConflict = errors.New("interceptor.approval configuration changed during interaction")
 
 const (
 	setupOperationName  = "config"
@@ -19,7 +23,10 @@ const (
 // structured interaction request and persists the answer in its own state
 // scope. rules is a repeated object, which is why the interaction protocol
 // needs nested field kinds.
-type setupOperation struct{ scope state.Scope }
+type setupOperation struct {
+	scope  state.Scope
+	active Config
+}
 
 var _ operation.Operation = (*setupOperation)(nil)
 
@@ -29,7 +36,7 @@ func (*setupOperation) Definition() operation.Definition {
 		Description:  "Review and update the approval interceptor policy.",
 		Group:        setupOperationGroup,
 		InputSchema:  json.RawMessage(`{"type":"object","additionalProperties":false,"properties":{}}`),
-		OutputSchema: json.RawMessage(`{"type":"object"}`),
+		OutputSchema: json.RawMessage(`{"type":"object","additionalProperties":false,"required":["restart_required"],"properties":{"restart_required":{"type":"boolean"}}}`),
 	}
 }
 
@@ -111,13 +118,29 @@ func (o *setupOperation) Invoke(ctx context.Context, request operation.Request) 
 		}
 		updated.Rules = rules
 	}
-	if err := validateConfig(updated); err != nil {
+	normalized, err := normalizeConfig(updated)
+	if err != nil {
+		return operation.Result{}, err
+	}
+	if err := ctx.Err(); err != nil {
+		return operation.Result{}, err
+	}
+	configCommitMu.Lock()
+	defer configCommitMu.Unlock()
+	latest, err := loadConfig(o.scope.Dir())
+	if err != nil {
+		return operation.Result{}, err
+	}
+	if !reflect.DeepEqual(latest, current) {
+		return operation.Result{}, ErrConfigConflict
+	}
+	if err := ctx.Err(); err != nil {
 		return operation.Result{}, err
 	}
 	if err := saveConfig(o.scope.Dir(), updated); err != nil {
 		return operation.Result{}, err
 	}
-	output, err := json.Marshal(map[string]any{"restart_required": true})
+	output, err := json.Marshal(map[string]any{"restart_required": !reflect.DeepEqual(normalized, o.active)})
 	if err != nil {
 		return operation.Result{}, err
 	}

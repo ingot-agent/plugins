@@ -98,33 +98,9 @@ func New(ctx context.Context, deps Dependencies) (Exports, ingotabi.Cleanup, err
 	if err != nil {
 		return Exports{}, nil, fmt.Errorf("construct tool.runtime: %w: %w", err, ErrInvalidConfig)
 	}
-	maxArguments := cfg.MaxArgumentsBytes
-	if maxArguments == 0 {
-		maxArguments = defaultMaxArgumentsBytes
-	}
-	if maxArguments < 1 {
-		return Exports{}, nil, fmt.Errorf("max_arguments_bytes must be positive: %w", ErrInvalidConfig)
-	}
-	maxText := cfg.MaxTextBytes
-	if maxText == 0 {
-		maxText = defaultMaxTextBytes
-	}
-	if maxText < 1 {
-		return Exports{}, nil, fmt.Errorf("max_text_bytes must be positive: %w", ErrInvalidConfig)
-	}
-	maxInlinePart := cfg.MaxInlinePartBytes
-	if maxInlinePart == 0 {
-		maxInlinePart = defaultMaxInlinePart
-	}
-	if maxInlinePart < 1 {
-		return Exports{}, nil, fmt.Errorf("max_inline_part_bytes must be positive: %w", ErrInvalidConfig)
-	}
-	maxInline := cfg.MaxInlineBytes
-	if maxInline == 0 {
-		maxInline = defaultMaxInlineBytes
-	}
-	if maxInline < 1 {
-		return Exports{}, nil, fmt.Errorf("max_inline_bytes must be positive: %w", ErrInvalidConfig)
+	normalized, err := normalizeConfig(cfg)
+	if err != nil {
+		return Exports{}, nil, err
 	}
 	entries := make(map[string]registeredTool, len(deps.Tools))
 	definitions := make([]tool.Definition, 0, len(deps.Tools))
@@ -163,13 +139,41 @@ func New(ctx context.Context, deps Dependencies) (Exports, ingotabi.Cleanup, err
 			definitions:   definitions,
 			entries:       entries,
 			interceptors:  interceptors,
-			maxArguments:  maxArguments,
-			maxText:       maxText,
-			maxInlinePart: maxInlinePart,
-			maxInline:     maxInline,
+			maxArguments:  normalized.MaxArgumentsBytes,
+			maxText:       normalized.MaxTextBytes,
+			maxInlinePart: normalized.MaxInlinePartBytes,
+			maxInline:     normalized.MaxInlineBytes,
 		},
-		Operations: []operation.Operation{&setupOperation{scope: deps.State}},
+		Operations: []operation.Operation{&setupOperation{scope: deps.State, active: normalized}},
 	}, nil, nil
+}
+
+func normalizeConfig(cfg Config) (Config, error) {
+	if cfg.MaxArgumentsBytes == 0 {
+		cfg.MaxArgumentsBytes = defaultMaxArgumentsBytes
+	}
+	if cfg.MaxArgumentsBytes < 1 {
+		return Config{}, fmt.Errorf("max_arguments_bytes must be positive: %w", ErrInvalidConfig)
+	}
+	if cfg.MaxTextBytes == 0 {
+		cfg.MaxTextBytes = defaultMaxTextBytes
+	}
+	if cfg.MaxTextBytes < 1 {
+		return Config{}, fmt.Errorf("max_text_bytes must be positive: %w", ErrInvalidConfig)
+	}
+	if cfg.MaxInlinePartBytes == 0 {
+		cfg.MaxInlinePartBytes = defaultMaxInlinePart
+	}
+	if cfg.MaxInlinePartBytes < 1 {
+		return Config{}, fmt.Errorf("max_inline_part_bytes must be positive: %w", ErrInvalidConfig)
+	}
+	if cfg.MaxInlineBytes == 0 {
+		cfg.MaxInlineBytes = defaultMaxInlineBytes
+	}
+	if cfg.MaxInlineBytes < 1 {
+		return Config{}, fmt.Errorf("max_inline_bytes must be positive: %w", ErrInvalidConfig)
+	}
+	return cfg, nil
 }
 
 func validateDefinition(definition tool.Definition) error {

@@ -3,23 +3,32 @@ package httpdefault
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"reflect"
 
 	"github.com/ingot-agent/ingot-abi/state"
 	"github.com/ingot-agent/sdk/interaction"
 	"github.com/ingot-agent/sdk/operation"
 )
 
+var ErrConfigConflict = errors.New("http.default configuration changed during interaction")
+
 const (
 	setupOperationName  = "config"
 	setupOperationGroup = "http-default"
+	proxyURLKeep        = "keep"
+	proxyURLReplace     = "replace"
 )
 
 // setupOperation asks the Host for this Plugin's configuration through a
 // structured interaction request and persists the answer in its own state
 // scope. The Plugin owns validation and persistence; the Host never decodes
 // plugin configuration.
-type setupOperation struct{ scope state.Scope }
+type setupOperation struct {
+	scope  state.Scope
+	active effectiveConfig
+}
 
 var _ operation.Operation = (*setupOperation)(nil)
 
@@ -29,7 +38,7 @@ func (*setupOperation) Definition() operation.Definition {
 		Description:  "HTTP transport and proxy settings.",
 		Group:        setupOperationGroup,
 		InputSchema:  json.RawMessage(`{"type":"object","additionalProperties":false,"properties":{}}`),
-		OutputSchema: json.RawMessage(`{"type":"object"}`),
+		OutputSchema: json.RawMessage(`{"type":"object","additionalProperties":false,"required":["restart_required"],"properties":{"restart_required":{"type":"boolean"}}}`),
 	}
 }
 
@@ -44,12 +53,19 @@ func (o *setupOperation) Invoke(ctx context.Context, request operation.Request) 
 	if err != nil {
 		return operation.Result{}, err
 	}
+	currentEffective, err := effectiveConfiguration(current)
+	if err != nil {
+		return operation.Result{}, err
+	}
 	response, err := request.Interaction.Request(ctx, interaction.Request{
 		Name:        setupOperationName,
 		Description: "HTTP transport and proxy settings.",
 		Fields: []interaction.Field{
-			{Name: "proxy_mode", Label: "Proxy Mode", Kind: interaction.FieldString, Required: false, Default: &interaction.Value{Kind: interaction.ValueString, String: current.ProxyMode}},
-			{Name: "proxy_url", Label: "Proxy Url", Kind: interaction.FieldString, Required: false, Default: &interaction.Value{Kind: interaction.ValueString, String: current.ProxyURL}},
+			{Name: "proxy_mode", Label: "Proxy Mode", Kind: interaction.FieldChoice, Required: true, Default: valuePointer(interaction.StringValue(currentEffective.proxyMode)), Options: []interaction.Option{
+				{Value: "environment", Label: "Environment"},
+				{Value: "direct", Label: "Direct"},
+				{Value: "url", Label: "Proxy URL"},
+			}},
 			{Name: "max_idle_conns", Label: "Max Idle Conns", Kind: interaction.FieldInteger, Required: false, Default: &interaction.Value{Kind: interaction.ValueInteger, Integer: int64(current.MaxIdleConns)}},
 			{Name: "max_idle_conns_per_host", Label: "Max Idle Conns Per Host", Kind: interaction.FieldInteger, Required: false, Default: &interaction.Value{Kind: interaction.ValueInteger, Integer: int64(current.MaxIdleConnsPerHost)}},
 			{Name: "idle_conn_timeout_seconds", Label: "Idle Conn Timeout Seconds", Kind: interaction.FieldInteger, Required: false, Default: &interaction.Value{Kind: interaction.ValueInteger, Integer: int64(current.IdleConnTimeoutSeconds)}},
@@ -64,9 +80,8 @@ func (o *setupOperation) Invoke(ctx context.Context, request operation.Request) 
 	updated := current
 	if v, ok := answerString(response, "proxy_mode"); ok {
 		updated.ProxyMode = v
-	}
-	if v, ok := answerString(response, "proxy_url"); ok {
-		updated.ProxyURL = v
+	} else {
+		return operation.Result{}, fmt.Errorf("proxy_mode is required: %w", ErrInvalidConfig)
 	}
 	if v, ok := answerInteger(response, "max_idle_conns"); ok {
 		updated.MaxIdleConns = int(v)
@@ -80,15 +95,75 @@ func (o *setupOperation) Invoke(ctx context.Context, request operation.Request) 
 	if v, ok := answerInteger(response, "tls_handshake_timeout_seconds"); ok {
 		updated.TLSHandshakeTimeoutSeconds = int(v)
 	}
+	if updated.ProxyMode == "url" {
+		action := proxyURLReplace
+		if currentEffective.proxyMode == "url" && current.ProxyURL != "" {
+			actionResponse, err := request.Interaction.Request(ctx, interaction.Request{
+				Name:        setupOperationName + ".proxy-url-action",
+				Description: "Choose whether to retain or replace the stored proxy endpoint.",
+				Fields: []interaction.Field{{
+					Name: "proxy_url_action", Label: "Proxy URL", Kind: interaction.FieldChoice, Required: true,
+					Default: valuePointer(interaction.StringValue(proxyURLKeep)),
+					Options: []interaction.Option{{Value: proxyURLKeep, Label: "Keep"}, {Value: proxyURLReplace, Label: "Replace"}},
+				}},
+			})
+			if err != nil {
+				return operation.Result{}, err
+			}
+			selected, ok := answerString(actionResponse, "proxy_url_action")
+			if !ok || (selected != proxyURLKeep && selected != proxyURLReplace) {
+				return operation.Result{}, fmt.Errorf("proxy_url_action is invalid: %w", ErrInvalidConfig)
+			}
+			action = selected
+		}
+		if action == proxyURLReplace {
+			proxyResponse, err := request.Interaction.Request(ctx, interaction.Request{
+				Name:        setupOperationName + ".proxy-url",
+				Description: "Proxy endpoint used for HTTP requests.",
+				Fields:      []interaction.Field{{Name: "proxy_url", Label: "Proxy URL", Kind: interaction.FieldString, Required: true, Sensitive: true}},
+			})
+			if err != nil {
+				return operation.Result{}, err
+			}
+			proxyURL, ok := answerString(proxyResponse, "proxy_url")
+			if !ok || proxyURL == "" {
+				return operation.Result{}, fmt.Errorf("proxy_url is required when replacing: %w", ErrInvalidConfig)
+			}
+			updated.ProxyURL = proxyURL
+		}
+	} else {
+		updated.ProxyURL = ""
+	}
+	effective, err := effectiveConfiguration(updated)
+	if err != nil {
+		return operation.Result{}, err
+	}
+	if err := ctx.Err(); err != nil {
+		return operation.Result{}, err
+	}
+	configCommitMu.Lock()
+	defer configCommitMu.Unlock()
+	latest, err := loadConfig(o.scope.Dir())
+	if err != nil {
+		return operation.Result{}, err
+	}
+	if !reflect.DeepEqual(latest, current) {
+		return operation.Result{}, ErrConfigConflict
+	}
+	if err := ctx.Err(); err != nil {
+		return operation.Result{}, err
+	}
 	if err := saveConfig(o.scope.Dir(), updated); err != nil {
 		return operation.Result{}, err
 	}
-	output, err := json.Marshal(map[string]any{"restart_required": updated != current})
+	output, err := json.Marshal(map[string]any{"restart_required": effective != o.active})
 	if err != nil {
 		return operation.Result{}, err
 	}
 	return operation.Result{Output: output}, nil
 }
+
+func valuePointer(value interaction.Value) *interaction.Value { return &value }
 
 func answerInteger(response interaction.Response, name string) (int64, bool) {
 	for _, answer := range response.Values {

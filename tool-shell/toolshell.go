@@ -124,7 +124,7 @@ func New(ctx context.Context, deps Dependencies) (Exports, ingotabi.Cleanup, err
 	}
 	return Exports{
 		Tools:      []tool.Tool{&shellTool{config: normalized, workspace: deps.Workspace, observation: consumer}},
-		Operations: []operation.Operation{&setupOperation{scope: deps.State}},
+		Operations: []operation.Operation{&setupOperation{scope: deps.State, active: normalized}},
 	}, nil, nil
 }
 
@@ -198,6 +198,7 @@ func normalizeEnvironment(explicit map[string]string, inherited []string) ([]str
 			seen[identity] = struct{}{}
 			result = append(result, entry)
 		}
+		sortEnvironment(result)
 		return result, true, nil
 	}
 
@@ -219,7 +220,16 @@ func normalizeEnvironment(explicit map[string]string, inherited []string) ([]str
 		seen[identity] = struct{}{}
 		result = append(result, key+"="+value)
 	}
+	sortEnvironment(result)
 	return result, false, nil
+}
+
+func sortEnvironment(environment []string) {
+	sort.Slice(environment, func(i, j int) bool {
+		left, _, _ := strings.Cut(environment[i], "=")
+		right, _, _ := strings.Cut(environment[j], "=")
+		return environmentKeyIdentity(left) < environmentKeyIdentity(right)
+	})
 }
 
 func validateEnvironmentKey(key string) error {

@@ -81,7 +81,6 @@ func TestOperationDefinitionsValidateAndOwnSnapshots(t *testing.T) {
 		duplicate bool
 	}{
 		{"name", func(o *testOperation) { o.definition.Name = "Bad/Name" }, false},
-		{"missing group", func(o *testOperation) { o.definition.Group = "" }, false},
 		{"description", func(o *testOperation) { o.definition.Description = "" }, false},
 		{"schema", func(o *testOperation) { o.definition.InputSchema = json.RawMessage(`{"type":"bogus"}`) }, false},
 		{"draft", func(o *testOperation) {
@@ -127,13 +126,19 @@ func TestSameNameOperationsCoexist(t *testing.T) {
 	}
 }
 
-func TestDuplicateOperationCommandIsRejected(t *testing.T) {
+func TestDuplicateAndUngroupedOperationsCoexist(t *testing.T) {
 	first, second := operationFixture("config"), operationFixture("config")
 	first.definition.Group = "tool-shell"
 	second.definition.Group = "tool-shell"
-	_, err := newOperationController([]operation.Operation{first, second})
-	if !errors.Is(err, appbackend.ErrInvalidOperationDefinition) || !strings.Contains(err.Error(), `/tool-shell config`) {
-		t.Fatalf("duplicate command = %v", err)
+	ungrouped := operationFixture("config")
+	ungrouped.definition.Group = ""
+	c, err := newOperationController([]operation.Operation{first, second, ungrouped})
+	if err != nil {
+		t.Fatal(err)
+	}
+	definitions := c.List()
+	if len(definitions) != 3 || definitions[2].Group != "" {
+		t.Fatalf("definitions = %#v", definitions)
 	}
 }
 

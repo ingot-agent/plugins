@@ -43,8 +43,9 @@ export function parseComposerInput(text: string, operations: Operation[]): Parse
   const remainder = text.slice(separator).trimStart()
   const query = remainder.trimEnd()
   if (/\s/.test(query)) return { kind: 'invalid-command', reason: 'trailing-input', group: groupName, operation: query }
-  const exact = group.operations.find(operation => operation.name === query)
-  if (exact) return { kind: 'command', operation: exact }
+  const exact = group.operations.filter(operation => operation.name === query)
+  if (exact.length === 1) return { kind: 'command', operation: exact[0] }
+  if (exact.length > 1) return { kind: 'operation-search', group, query }
   if (!query || group.operations.some(operation => matches(operation.name, operation.description, query))) {
     return { kind: 'operation-search', group, query }
   }

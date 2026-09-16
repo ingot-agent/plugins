@@ -33,6 +33,8 @@ const entries = computed<unknown[]>(() => Array.isArray(current.value.value) ? c
 const pageKey = computed(() => JSON.stringify(path.value))
 const fieldId = (keys: Path) => props.id + '-' + keys.map(key => encodeURIComponent(String(key))).join('-')
 const compound = (field: InteractionField) => field.kind === 'object' || field.kind === 'list'
+const inlineObject = (field: InteractionField) => field.kind === 'object' && !!field.fields?.length && field.fields.every(member => !compound(member))
+const inlineList = (field: InteractionField) => field.kind === 'list' && !!field.element && !compound(field.element)
 
 function childValue(value: unknown, key: string | number): unknown {
   if (Array.isArray(value) && typeof key === 'number') return value[key]
@@ -97,6 +99,20 @@ async function remove(index: number) {
   await nextTick()
   heading.value?.focus({ preventScroll: true })
 }
+function inlineEntries(keys: Path): unknown[] {
+  const value = keys.reduce<unknown>((current, key) => childValue(current, key), props.modelValue)
+  return Array.isArray(value) ? value : []
+}
+async function addInline(keys: Path, field: InteractionField) {
+  if (!field.element) return
+  const values = inlineEntries(keys)
+  update(keys, [...values, newFieldValue(field.element)])
+  await nextTick()
+  document.getElementById(fieldId([...keys, values.length]))?.focus()
+}
+function removeInline(keys: Path, index: number) {
+  update(keys, inlineEntries(keys).filter((_, position) => position !== index))
+}
 function restore() {
   update(path.value, current.value.field.sensitive ? undefined : cloneInteractionValue(current.value.field.default))
 }
@@ -131,7 +147,21 @@ defineExpose({ revealError })
     <div :key="pageKey" class="field-page">
       <template v-if="current.field.kind === 'object'">
         <template v-for="field in current.field.fields" :key="field.name">
-          <div v-if="compound(field)" class="field-section-row" :class="{ 'field-invalid': invalid([...path, field.name]) }">
+          <section v-if="inlineObject(field)" class="field-inline-section" :class="{ 'field-invalid': invalid([...path, field.name]) }">
+            <div class="field-inline-heading"><div><strong>{{ field.label || field.name }}<span v-if="field.required" class="accent"> *</span></strong><p v-if="field.description">{{ field.description }}</p></div></div>
+            <FieldControl v-for="member in field.fields" :id="fieldId([...path, field.name, member.name])" :key="member.name" :field="member" :model-value="childValue(childValue(current.value, field.name), member.name)" :disabled="disabled" single-line @update:model-value="update([...path, field.name, member.name], $event)" />
+            <p v-if="invalid([...path, field.name])" class="error-text">{{ issue?.message }}</p>
+          </section>
+          <section v-else-if="inlineList(field)" class="field-inline-section" :class="{ 'field-invalid': invalid([...path, field.name]) }">
+            <div class="field-inline-heading"><div><strong>{{ field.label || field.name }}<span v-if="field.required" class="accent"> *</span></strong><p v-if="field.description">{{ field.description }}</p></div><button type="button" class="icon-button" :disabled="disabled" :aria-label="t('addListItem')" :title="t('addListItem')" @click="addInline([...path, field.name], field)"><Plus :size="15" /></button></div>
+            <div v-if="!inlineEntries([...path, field.name]).length" class="field-inline-empty">{{ t('emptyList') }}</div>
+            <div v-for="(entry, index) in inlineEntries([...path, field.name])" :key="index" class="field-entry inline">
+              <div class="field-entry-input"><span class="field-entry-index">{{ String(index + 1).padStart(2, '0') }}</span><FieldControl :id="fieldId([...path, field.name, index])" :field="{ ...field.element!, label: t('listItem', { index: index + 1 }) }" :model-value="entry" :disabled="disabled" single-line @update:model-value="update([...path, field.name, index], $event)" /></div>
+              <button type="button" class="icon-button field-remove" :disabled="disabled" :aria-label="t('removeListItem', { index: index + 1 })" :title="t('removeListItem', { index: index + 1 })" @click="removeInline([...path, field.name], index)"><Trash2 :size="15" /></button>
+            </div>
+            <p v-if="invalid([...path, field.name])" class="error-text">{{ issue?.message }}</p>
+          </section>
+          <div v-else-if="compound(field)" class="field-section-row" :class="{ 'field-invalid': invalid([...path, field.name]) }">
             <button :id="fieldId([...path, field.name]) + '-open'" type="button" class="field-open" @click="enter(field.name)">
               <span class="field-kind-icon"><List v-if="field.kind === 'list'" :size="18" /><Settings2 v-else :size="18" /></span>
               <span class="field-row-copy"><strong>{{ field.label || field.name }}<span v-if="field.required" class="accent"> *</span></strong><span v-if="field.description">{{ field.description }}</span></span>

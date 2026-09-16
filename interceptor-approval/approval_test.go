@@ -3,6 +3,7 @@ package approval
 import (
 	"context"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -85,6 +86,20 @@ func TestApprovalActionsAndRules(t *testing.T) {
 	if request.Fields[0].Name != decisionFieldName || request.Fields[0].Kind != interaction.FieldChoice || len(options) != 2 ||
 		options[0].Value != actionAllow || options[0].Label != "Yes" || options[1].Value != actionDeny || options[1].Label != "No" {
 		t.Fatalf("field=%#v", request.Fields[0])
+	}
+}
+
+func TestNormalizedRuleOrderMatchesRuntimeSemantics(t *testing.T) {
+	left, err := normalizeConfig(Config{Rules: []Rule{{Tool: "z", Action: actionAllow}, {Tool: "a", Action: actionDeny}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	right, err := normalizeConfig(Config{Rules: []Rule{{Tool: "a", Action: actionDeny}, {Tool: "z", Action: actionAllow}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(left, right) {
+		t.Fatalf("normalized configurations differ: %#v / %#v", left, right)
 	}
 }
 

@@ -19,6 +19,17 @@ describe('slash command parsing', () => {
     expect(parseComposerInput('/tool-shell config', operations)).toMatchObject({ kind: 'command', operation: { id: 'tool-shell-config' } })
   })
 
+  it('requires an internal-ID selection when display commands are duplicated', () => {
+    const duplicated = [
+      operation('tool-shell', 'config', 'First configuration'),
+      { ...operation('tool-shell', 'config', 'Second configuration'), id: 'tool-shell-config-2' },
+    ]
+    const parsed = parseComposerInput('/tool-shell config', duplicated)
+    expect(parsed).toMatchObject({ kind: 'operation-search', query: 'config' })
+    if (parsed.kind !== 'operation-search') throw new Error('expected operation search')
+    expect(parsed.group.operations.map(item => item.id)).toEqual(['tool-shell-config', 'tool-shell-config-2'])
+  })
+
   it('never treats unknown slash input as a model message and supports escaping', () => {
     expect(parseComposerInput('/unknown', operations)).toMatchObject({ kind: 'group-search', query: 'unknown' })
     expect(parseComposerInput('/unknown config', operations)).toMatchObject({ kind: 'invalid-command', reason: 'unknown-group' })

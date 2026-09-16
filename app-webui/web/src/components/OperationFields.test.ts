@@ -18,7 +18,7 @@ const fields = [field({ name: 'providers', label: 'Providers', kind: 'list', has
     field({ name: 'models', label: 'Models', kind: 'list', element: field({ name: 'model' }) }),
   ] }),
 })]
-const mountEditor = () => mount(defineComponent({ components: { OperationFields }, setup() { return { fields, values: ref(initialInteractionValues(fields)) } }, template: '<OperationFields id="test" v-model="values" :fields="fields" />' }), { global: { plugins: [i18n] } })
+const mountEditor = (editorFields = fields, initial = initialInteractionValues(editorFields), id = 'test') => mount(defineComponent({ components: { OperationFields }, setup() { return { fields: editorFields, values: ref(initial), id } }, template: '<OperationFields :id="id" v-model="values" :fields="fields" />' }), { global: { plugins: [i18n] } })
 
 describe('operation field navigation', () => {
   it('opens one level at a time and retains edits and untouched multiline values', async () => {
@@ -30,13 +30,23 @@ describe('operation field navigation', () => {
     expect(view.findAll('textarea')).toHaveLength(0)
     expect(view.get('#test-providers-0-secret').attributes('type')).toBe('password')
     await view.get('#test-providers-0-name').setValue('Updated')
-    await view.get('#test-providers-0-models-open').trigger('click')
-    expect(view.find('#test-providers-0-name').exists()).toBe(false)
     await view.get('#test-providers-0-models-0').setValue('model-b')
-    await view.get('.field-breadcrumbs .icon-button').trigger('click')
     expect(view.get<HTMLInputElement>('#test-providers-0-name').element.value).toBe('Updated')
     const values = interactionValues(fields, view.vm.values)
     expect(values).toEqual({ providers: [{ name: 'Updated', models: ['model-b'], prompt: 'line one\nline two' }] })
+    view.unmount()
+  })
+
+  it('edits simple nested objects without adding a navigation level', async () => {
+    const nested = [field({ name: 'limits', label: 'Limits', kind: 'object', fields: [
+      field({ name: 'soft', label: 'Soft limit', kind: 'integer' }),
+      field({ name: 'hard', label: 'Hard limit', kind: 'integer' }),
+    ] })]
+    const view = mountEditor(nested, { limits: { soft: 1, hard: 2 } }, 'nested')
+    expect(view.find('.field-breadcrumbs').exists()).toBe(false)
+    expect(view.get<HTMLInputElement>('#nested-limits-soft').element.value).toBe('1')
+    await view.get('#nested-limits-hard').setValue('3')
+    expect(view.vm.values).toEqual({ limits: { soft: 1, hard: '3' } })
     view.unmount()
   })
 

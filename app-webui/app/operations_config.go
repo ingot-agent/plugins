@@ -3,7 +3,9 @@ package appcomponent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"sync"
 
 	"github.com/ingot-agent/ingot-abi/state"
 	appbackend "github.com/ingot-agent/plugins/app-webui"
@@ -15,14 +17,22 @@ const setupOperationName = "config"
 
 const setupOperationGroup = "app-webui"
 
+var (
+	configCommitMu    sync.Mutex
+	errConfigConflict = errors.New("app.backend configuration changed during interaction")
+)
+
 // newConfigOperations returns the Plugin-owned configuration Operations. They
 // read and write this Plugin's own state scope; no host-side configuration
 // decoding or injection is involved.
-func newConfigOperations(scope state.Scope) []operation.Operation {
-	return []operation.Operation{&configOperation{scope: scope}}
+func newConfigOperations(scope state.Scope, active appbackend.NormalizedBackendConfig) []operation.Operation {
+	return []operation.Operation{&configOperation{scope: scope, active: active}}
 }
 
-type configOperation struct{ scope state.Scope }
+type configOperation struct {
+	scope  state.Scope
+	active appbackend.NormalizedBackendConfig
+}
 
 func (*configOperation) Definition() operation.Definition {
 	return operation.Definition{
@@ -58,6 +68,7 @@ func (o *configOperation) Invoke(ctx context.Context, request operation.Request)
 	if err != nil {
 		return operation.Result{}, err
 	}
+	currentBeforeUpdate := current
 	normalized, err := current.Normalize()
 	if err != nil {
 		return operation.Result{}, err
@@ -75,7 +86,7 @@ func (o *configOperation) Invoke(ctx context.Context, request operation.Request)
 			{Name: "address", Label: "Address", Description: "HTTP bind address, for example 127.0.0.1:7316.", Kind: interaction.FieldString, Required: true, Default: &address},
 			{Name: "replay_capacity", Label: "Replay capacity", Kind: interaction.FieldInteger, Required: true, Default: &replayCapacity},
 			{Name: "subscriber_buffer", Label: "Subscriber buffer", Kind: interaction.FieldInteger, Required: true, Default: &subscriberBuffer},
-			{Name: "heartbeat_interval_seconds", Label: "Heartbeat interval", Description: "Seconds; zero disables heartbeats.", Kind: interaction.FieldInteger, Required: true, Default: &heartbeatSeconds},
+			{Name: "heartbeat_interval_seconds", Label: "Heartbeat interval", Description: "Seconds; zero selects the built-in default.", Kind: interaction.FieldInteger, Required: true, Default: &heartbeatSeconds},
 			{Name: "operation_retention", Label: "Operation retention", Kind: interaction.FieldInteger, Required: true, Default: &operationRetention},
 			{Name: "max_asset_bytes", Label: "Maximum asset bytes", Kind: interaction.FieldInteger, Required: true, Default: &maxAssetBytes},
 		},
@@ -105,18 +116,28 @@ func (o *configOperation) Invoke(ctx context.Context, request operation.Request)
 	if err != nil {
 		return operation.Result{}, err
 	}
+	if err := ctx.Err(); err != nil {
+		return operation.Result{}, err
+	}
+	configCommitMu.Lock()
+	defer configCommitMu.Unlock()
+	latest, err := appbackend.LoadConfig(o.scope.Dir())
+	if err != nil {
+		return operation.Result{}, err
+	}
+	if latest != currentBeforeUpdate {
+		return operation.Result{}, errConfigConflict
+	}
+	if err := ctx.Err(); err != nil {
+		return operation.Result{}, err
+	}
 	if err := appbackend.SaveConfig(o.scope.Dir(), current); err != nil {
 		return operation.Result{}, err
 	}
 	// Binding a socket or resizing buffers cannot change in place, so the
 	// Plugin reports that a restart is required instead of pretending the
 	// running process adopted the new values.
-	restartRequired := updated.Address != normalized.Address ||
-		updated.ReplayCapacity != normalized.ReplayCapacity ||
-		updated.SubscriberBuffer != normalized.SubscriberBuffer ||
-		updated.Heartbeat != normalized.Heartbeat ||
-		updated.OperationRetention != normalized.OperationRetention ||
-		updated.MaxAssetBytes != normalized.MaxAssetBytes
+	restartRequired := updated != o.active
 	output, err := json.Marshal(map[string]any{
 		"address":                    updated.Address,
 		"replay_capacity":            updated.ReplayCapacity,

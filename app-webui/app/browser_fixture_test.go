@@ -323,6 +323,11 @@ func TestBrowserFixture(t *testing.T) {
 			{Name: "name", Value: interaction.StringValue("Example provider")},
 			{Name: "base_url", Value: interaction.StringValue("https://api.example.com/v1")},
 			{Name: "models", Value: interaction.ListValue([]interaction.Value{interaction.StringValue("example-chat"), interaction.StringValue("example-reasoner")})},
+			{Name: "default_headers", Value: interaction.ListValue([]interaction.Value{interaction.ObjectValue([]interaction.Entry{
+				{Name: "name", Value: interaction.StringValue("X-Tenant")},
+				{Name: "source", Value: interaction.StringValue("X-Tenant")},
+				{Name: "action", Value: interaction.StringValue("keep")},
+			})})},
 		})})
 		_, err := request.Interaction.Request(ctx, interaction.Request{
 			Name: "providers", Description: "One entry per OpenAI-compatible provider.",
@@ -331,6 +336,12 @@ func TestBrowserFixture(t *testing.T) {
 				{Name: "base_url", Label: "Base URL", Description: "Absolute http/https endpoint.", Kind: interaction.FieldString, Required: true},
 				{Name: "api_key", Label: "API key", Kind: interaction.FieldString, Sensitive: true},
 				{Name: "models", Label: "Models", Kind: interaction.FieldList, Element: &interaction.Field{Name: "model", Kind: interaction.FieldString}},
+				{Name: "default_headers", Label: "Default headers", Kind: interaction.FieldList, Element: &interaction.Field{Name: "header", Kind: interaction.FieldObject, Fields: []interaction.Field{
+					{Name: "name", Label: "Name", Kind: interaction.FieldString, Required: true},
+					{Name: "source", Label: "Existing header", Kind: interaction.FieldString, Required: true, Options: []interaction.Option{{Value: "X-Tenant", Label: "X-Tenant"}}},
+					{Name: "action", Label: "Value action", Kind: interaction.FieldChoice, Required: true, Options: []interaction.Option{{Value: "keep", Label: "Keep"}, {Value: "replace", Label: "Replace"}, {Value: "clear", Label: "Clear"}}},
+					{Name: "value", Label: "Value", Kind: interaction.FieldString, Sensitive: true},
+				}}},
 			}}}},
 		})
 		if err != nil {

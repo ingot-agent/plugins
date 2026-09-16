@@ -5,8 +5,6 @@ import (
 	"path/filepath"
 	"reflect"
 	"testing"
-
-	"github.com/pelletier/go-toml/v2"
 )
 
 // testStateScope is a Plugin-owned Runtime state scope rooted at a test
@@ -55,14 +53,7 @@ func persistTestConfig(t *testing.T, dir string, cfg Config) {
 	if reflect.ValueOf(cfg).IsZero() {
 		return
 	}
-	data, err := toml.Marshal(cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, configFileName), data, 0o600); err != nil {
+	if err := saveConfig(dir, cfg); err != nil {
 		t.Fatal(err)
 	}
 }

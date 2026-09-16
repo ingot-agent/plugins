@@ -337,6 +337,15 @@ details[open] > summary > .disclosure-chevron { transform: rotate(90deg); }
 .field-page { animation: field-enter .16s ease-out; }
 .field-section-row { border-bottom: 1px solid var(--line); }
 .field-section-row:first-child, .field-entry:first-child { border-top: 1px solid var(--line); }
+.field-inline-section { padding: 12px 0; border-bottom: 1px solid var(--line); }
+.field-inline-section:first-child { border-top: 1px solid var(--line); }
+.field-inline-heading { min-height: 28px; display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.field-inline-heading > div { min-width: 0; }
+.field-inline-heading strong { font-size: 12px; font-weight: 600; line-height: 1.5; overflow-wrap: anywhere; }
+.field-inline-heading p { margin: 3px 0 0; color: var(--muted); font-size: 11px; line-height: 1.6; }
+.field-inline-section > .form-field { padding-left: 12px; }
+.field-inline-empty { padding: 9px 12px; color: var(--muted); font-size: 12px; }
+.field-entry.inline:first-of-type { border-top: 1px solid var(--line); }
 .field-open { display: flex; align-items: center; gap: 12px; width: 100%; padding: 16px 4px; text-align: left; border: 0; background: transparent; color: var(--ink); border-radius: 4px; }
 .field-open:hover { background: var(--subtle); }
 .field-open > svg { flex-shrink: 0; }
@@ -392,6 +401,7 @@ details[open] > summary > .disclosure-chevron { transform: rotate(90deg); }
   .field-page-title h3 { font-size: 14px; }
   .field-breadcrumbs button:not(.icon-button), .field-breadcrumbs [aria-current] { max-width: 100px; }
   .operation-fields .field { font-size: 16px; }
+  .operation-fields .choice { flex-basis: 88px; min-width: 0; }
   .app-shell { grid-template-columns: minmax(0, 1fr); }.desktop-navigation { display: none; }.nav-toggle { display: inline-flex; }
   .workspace-header { padding: 8px 13px; min-height: 50px; gap: 8px; }.workspace-header-actions { gap: 2px; }.workspace-header-actions .connection-label { margin-right: 4px; }
   .connection-label { font-size: 10px; }.transcript { padding: 17px 18px 20px; }.composer-dock { padding: 8px 14px 12px; }

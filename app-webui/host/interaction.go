@@ -550,8 +550,10 @@ func projectFields(fields []interaction.Field) []appbackend.InteractionField {
 			Options: make([]appbackend.InteractionOption, len(field.Options)),
 			Fields:  projectFields(field.Fields),
 		}
-		if field.Default != nil && !field.Sensitive {
-			item.Default = projectValue(*field.Default)
+		if field.Default != nil {
+			if value, safe := projectFieldDefault(field, *field.Default); safe {
+				item.Default = value
+			}
 		}
 		for i, option := range field.Options {
 			item.Options[i] = appbackend.InteractionOption{Value: option.Value, Label: option.Label, Description: option.Description}
@@ -563,6 +565,42 @@ func projectFields(fields []interaction.Field) []appbackend.InteractionField {
 		projected = append(projected, item)
 	}
 	return projected
+}
+
+// projectFieldDefault projects a default only when the complete value tree is
+// safe to expose. Suppressing the enclosing compound value preserves its
+// server-side Default semantics without leaking or partially replacing a
+// nested sensitive value.
+func projectFieldDefault(field interaction.Field, value interaction.Value) (any, bool) {
+	if field.Sensitive {
+		return nil, false
+	}
+	switch field.Kind {
+	case interaction.FieldObject:
+		members := make(map[string]interaction.Field, len(field.Fields))
+		for _, member := range field.Fields {
+			members[member.Name] = member
+		}
+		for _, entry := range value.Entries {
+			member, ok := members[entry.Name]
+			if !ok {
+				return nil, false
+			}
+			if _, safe := projectFieldDefault(member, entry.Value); !safe {
+				return nil, false
+			}
+		}
+	case interaction.FieldList:
+		if field.Element == nil {
+			return nil, false
+		}
+		for _, item := range value.Items {
+			if _, safe := projectFieldDefault(*field.Element, item); !safe {
+				return nil, false
+			}
+		}
+	}
+	return projectValue(value), true
 }
 
 func projectState(state interaction.State) (appbackend.InteractionState, error) {

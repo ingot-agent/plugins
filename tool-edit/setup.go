@@ -3,12 +3,16 @@ package tooledit
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"reflect"
 
 	"github.com/ingot-agent/ingot-abi/state"
 	"github.com/ingot-agent/sdk/interaction"
 	"github.com/ingot-agent/sdk/operation"
 )
+
+var ErrConfigConflict = errors.New("tool.edit configuration changed during interaction")
 
 // setupOperationName is the local command name inside this Plugin's namespace.
 const setupOperationName = "config"
@@ -20,7 +24,10 @@ const setupOperationGroup = "tool-edit"
 // current values through a structured request, then persists the answer into
 // this Plugin's own state scope. The Plugin owns validation, persistence and
 // the decision of whether a change needs a restart.
-type setupOperation struct{ scope state.Scope }
+type setupOperation struct {
+	scope  state.Scope
+	active normalizedConfig
+}
 
 var _ operation.Operation = (*setupOperation)(nil)
 
@@ -89,7 +96,23 @@ func (o *setupOperation) Invoke(ctx context.Context, request operation.Request) 
 	if updated.MaxFileBytes < 1 || updated.MaxScanBytes < 1 {
 		return operation.Result{}, fmt.Errorf("limits must be positive: %w", ErrInvalidConfig)
 	}
-	if _, err := normalizeConfig(updated); err != nil {
+	normalized, err := normalizeConfig(updated)
+	if err != nil {
+		return operation.Result{}, err
+	}
+	if err := ctx.Err(); err != nil {
+		return operation.Result{}, err
+	}
+	configCommitMu.Lock()
+	defer configCommitMu.Unlock()
+	latest, err := loadConfig(o.scope.Dir())
+	if err != nil {
+		return operation.Result{}, err
+	}
+	if !reflect.DeepEqual(latest, current) {
+		return operation.Result{}, ErrConfigConflict
+	}
+	if err := ctx.Err(); err != nil {
 		return operation.Result{}, err
 	}
 	if err := saveConfig(o.scope.Dir(), updated); err != nil {
@@ -100,7 +123,7 @@ func (o *setupOperation) Invoke(ctx context.Context, request operation.Request) 
 	output, err := json.Marshal(map[string]any{
 		"max_file_bytes":   updated.MaxFileBytes,
 		"max_scan_bytes":   updated.MaxScanBytes,
-		"restart_required": updated != current,
+		"restart_required": normalized != o.active,
 	})
 	if err != nil {
 		return operation.Result{}, err

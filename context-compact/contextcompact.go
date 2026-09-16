@@ -63,9 +63,10 @@ type Config struct {
 
 // Dependencies contains the model chokepoint and append-oriented Session store.
 type Dependencies struct {
-	Model model.Runtime
-	Store session.Store
-	State state.Scope
+	Model     model.Runtime
+	Providers []ingotabi.Named[model.Provider]
+	Store     session.Store
+	State     state.Scope
 }
 
 // Exports contains the context compactor capability.
@@ -106,21 +107,44 @@ func New(ctx context.Context, deps Dependencies) (Exports, ingotabi.Cleanup, err
 	if isNil(deps.Model) || isNil(deps.Store) || isNil(deps.State) {
 		return Exports{}, nil, fmt.Errorf("model, store, and state dependencies are required: %w", ErrInvalidConfig)
 	}
+	if err := ingotabi.CheckUniqueNames(deps.Providers); err != nil {
+		return Exports{}, nil, fmt.Errorf("providers: %w: %w", ErrInvalidConfig, err)
+	}
+	providerNames := make([]string, 0, len(deps.Providers))
+	for _, provider := range deps.Providers {
+		providerNames = append(providerNames, provider.Name)
+	}
 	cfg, err := loadConfig(deps.State.Dir())
 	if err != nil {
 		return Exports{}, nil, fmt.Errorf("construct context.compact: %w: %w", err, ErrInvalidConfig)
 	}
-	normalized, err := normalizeConfig(cfg)
+	normalized, err := normalizeConfigForProviders(cfg, providerNames)
 	if err != nil {
 		return Exports{}, nil, err
 	}
 	instance := &compactor{model: deps.Model, store: deps.Store, cfg: normalized, gates: newGateManager()}
-	return Exports{Compactor: instance, Operations: []operation.Operation{&setupOperation{scope: deps.State}}}, nil, nil
+	return Exports{Compactor: instance, Operations: []operation.Operation{&setupOperation{scope: deps.State, providerNames: providerNames, active: normalized}}}, nil, nil
 }
 
 func normalizeConfig(cfg Config) (normalizedConfig, error) {
+	return normalizeConfigForProviders(cfg, nil)
+}
+
+func normalizeConfigForProviders(cfg Config, providerNames []string) (normalizedConfig, error) {
 	if !utf8.ValidString(cfg.Provider) || !utf8.ValidString(cfg.Model) {
 		return normalizedConfig{}, fmt.Errorf("provider or model is invalid UTF-8: %w", ErrInvalidConfig)
+	}
+	if cfg.Provider != "" && len(providerNames) > 0 {
+		available := false
+		for _, name := range providerNames {
+			if cfg.Provider == name {
+				available = true
+				break
+			}
+		}
+		if !available {
+			return normalizedConfig{}, fmt.Errorf("provider %q is unavailable: %w", cfg.Provider, ErrInvalidConfig)
+		}
 	}
 	// Both bounds have defaults so an Unconfigured Plugin still constructs;
 	// compaction only becomes active once a caller configures it.

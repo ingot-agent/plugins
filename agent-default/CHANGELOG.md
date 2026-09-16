@@ -7,6 +7,10 @@ All notable changes to this plugin are documented in this file.
 ### Changed
 
 - Expose configuration as `/agent-default config` using a stable plugin Group and local operation Name.
+- Present the available providers as a closed choice and configure optional
+  numeric overrides through explicit inherit or override actions.
+- Reject stale configuration writes and report restart requirements against
+  the running configuration.
 
 ## 0.1.0 - 2026-09-13
 

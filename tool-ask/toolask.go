@@ -135,41 +135,45 @@ func New(ctx context.Context, deps Dependencies) (Exports, ingotabi.Cleanup, err
 	if err != nil {
 		return Exports{}, nil, fmt.Errorf("construct tool.ask: %w: %w", err, ErrInvalidConfig)
 	}
-	maxPrompt := cfg.MaxPromptBytes
-	if maxPrompt == 0 {
-		maxPrompt = defaultMaxPromptBytes
-	}
-	if maxPrompt < 1 {
-		return Exports{}, nil, fmt.Errorf("max_prompt_bytes must be positive: %w", ErrInvalidConfig)
-	}
-	maxResponse := cfg.MaxResponseBytes
-	if maxResponse == 0 {
-		maxResponse = defaultMaxResponseBytes
-	}
-	if maxResponse < 1 {
-		return Exports{}, nil, fmt.Errorf("max_response_bytes must be positive: %w", ErrInvalidConfig)
-	}
-	maxOptions := cfg.MaxOptions
-	if maxOptions == 0 {
-		maxOptions = defaultMaxOptions
-	}
-	if maxOptions < 1 {
-		return Exports{}, nil, fmt.Errorf("max_options must be positive: %w", ErrInvalidConfig)
-	}
-	maxOptionsBytes := cfg.MaxOptionsBytes
-	if maxOptionsBytes == 0 {
-		maxOptionsBytes = defaultMaxOptionsBytes
-	}
-	if maxOptionsBytes < 1 {
-		return Exports{}, nil, fmt.Errorf("max_options_bytes must be positive: %w", ErrInvalidConfig)
+	normalized, err := normalizeConfig(cfg)
+	if err != nil {
+		return Exports{}, nil, err
 	}
 	return Exports{
 		Tools: []tool.Tool{&askTool{
-			interactions: deps.Interaction, maxPromptBytes: maxPrompt, maxResponseBytes: maxResponse,
-			maxOptions: maxOptions, maxOptionsBytes: maxOptionsBytes,
+			interactions: deps.Interaction, maxPromptBytes: normalized.MaxPromptBytes, maxResponseBytes: normalized.MaxResponseBytes,
+			maxOptions: normalized.MaxOptions, maxOptionsBytes: normalized.MaxOptionsBytes,
 		}},
-		Operations: []operation.Operation{&setupOperation{scope: deps.State}},
+		Operations: []operation.Operation{&setupOperation{scope: deps.State, active: normalized}},
 	}, nil, nil
+}
+
+func normalizeConfig(cfg Config) (Config, error) {
+	if cfg.MaxPromptBytes == 0 {
+		cfg.MaxPromptBytes = defaultMaxPromptBytes
+	}
+	if cfg.MaxPromptBytes < 1 {
+		return Config{}, fmt.Errorf("max_prompt_bytes must be positive: %w", ErrInvalidConfig)
+	}
+	if cfg.MaxResponseBytes == 0 {
+		cfg.MaxResponseBytes = defaultMaxResponseBytes
+	}
+	if cfg.MaxResponseBytes < 1 {
+		return Config{}, fmt.Errorf("max_response_bytes must be positive: %w", ErrInvalidConfig)
+	}
+	if cfg.MaxOptions == 0 {
+		cfg.MaxOptions = defaultMaxOptions
+	}
+	if cfg.MaxOptions < 1 {
+		return Config{}, fmt.Errorf("max_options must be positive: %w", ErrInvalidConfig)
+	}
+	if cfg.MaxOptionsBytes == 0 {
+		cfg.MaxOptionsBytes = defaultMaxOptionsBytes
+	}
+	if cfg.MaxOptionsBytes < 1 {
+		return Config{}, fmt.Errorf("max_options_bytes must be positive: %w", ErrInvalidConfig)
+	}
+	return cfg, nil
 }
 
 func (t *askTool) Definition() tool.Definition {

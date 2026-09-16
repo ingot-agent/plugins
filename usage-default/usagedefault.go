@@ -52,8 +52,9 @@ type Route struct {
 // Dependencies contains the request resolver used to materialize model
 // runtime defaults.
 type Dependencies struct {
-	Resolver model.RequestResolver
-	State    state.Scope
+	Resolver  model.RequestResolver
+	Providers []ingotabi.Named[model.Provider]
+	State     state.Scope
 }
 
 // Exports contains the model input counter.
@@ -104,6 +105,13 @@ func New(ctx context.Context, deps Dependencies) (Exports, ingotabi.Cleanup, err
 	if isNil(deps.Resolver) || isNil(deps.State) {
 		return Exports{}, nil, fmt.Errorf("resolver and state dependencies are required: %w", ErrInvalidConfig)
 	}
+	if err := ingotabi.CheckUniqueNames(deps.Providers); err != nil {
+		return Exports{}, nil, fmt.Errorf("providers: %w: %w", ErrInvalidConfig, err)
+	}
+	providerNames := make([]string, 0, len(deps.Providers))
+	for _, provider := range deps.Providers {
+		providerNames = append(providerNames, provider.Name)
+	}
 	cfg, err := loadConfig(deps.State.Dir())
 	if err != nil {
 		return Exports{}, nil, fmt.Errorf("construct usage.default: %w: %w", err, ErrInvalidConfig)
@@ -129,6 +137,8 @@ func New(ctx context.Context, deps Dependencies) (Exports, ingotabi.Cleanup, err
 	if capacity == 0 {
 		capacity = defaultCacheEntries
 	}
+	active := cloneConfig(cfg)
+	active.CacheEntries = capacity
 	instance := newCounter(deps.Resolver, routes, capacity)
 	cleanup := ingotabi.Cleanup(func(cleanupCtx context.Context) error {
 		if cleanupCtx == nil {
@@ -140,7 +150,7 @@ func New(ctx context.Context, deps Dependencies) (Exports, ingotabi.Cleanup, err
 		instance.close()
 		return nil
 	})
-	return Exports{Counter: instance, Operations: []operation.Operation{&setupOperation{scope: deps.State}}}, cleanup, nil
+	return Exports{Counter: instance, Operations: []operation.Operation{&setupOperation{scope: deps.State, providerNames: providerNames, active: active}}}, cleanup, nil
 }
 
 func newCounter(resolver model.RequestResolver, routes []compiledRoute, capacity int) *counter {

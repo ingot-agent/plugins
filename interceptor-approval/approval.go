@@ -94,43 +94,17 @@ func New(ctx context.Context, deps Dependencies) (Exports, ingotabi.Cleanup, err
 	if err != nil {
 		return Exports{}, nil, fmt.Errorf("construct interceptor.approval: %w: %w", err, ErrInvalidConfig)
 	}
-	defaultAction := cfg.DefaultAction
-	if defaultAction == "" {
-		defaultAction = actionAsk
+	normalized, err := normalizeConfig(cfg)
+	if err != nil {
+		return Exports{}, nil, err
 	}
-	if !validAction(defaultAction) {
-		return Exports{}, nil, fmt.Errorf("invalid default_action %q: %w", defaultAction, ErrInvalidConfig)
-	}
-	display := cfg.ArgumentDisplay
-	if display == "" {
-		display = displayFull
-	}
-	if display != displayFull && display != displayNamesOnly {
-		return Exports{}, nil, fmt.Errorf("invalid argument_display %q: %w", display, ErrInvalidConfig)
-	}
-	maxDisplay := cfg.MaxDisplayBytes
-	if maxDisplay == 0 {
-		maxDisplay = defaultMaxDisplayBytes
-	}
-	if maxDisplay < 1 {
-		return Exports{}, nil, fmt.Errorf("max_display_bytes must be positive: %w", ErrInvalidConfig)
-	}
-	rules := make(map[string]string, len(cfg.Rules))
-	for i, rule := range cfg.Rules {
-		if rule.Tool == "" || !utf8.ValidString(rule.Tool) {
-			return Exports{}, nil, fmt.Errorf("rules[%d].tool must be non-empty UTF-8: %w", i, ErrInvalidConfig)
-		}
-		if !validAction(rule.Action) {
-			return Exports{}, nil, fmt.Errorf("rules[%d].action is invalid: %w", i, ErrInvalidConfig)
-		}
-		if _, exists := rules[rule.Tool]; exists {
-			return Exports{}, nil, fmt.Errorf("duplicate rule for %q: %w", rule.Tool, ErrInvalidConfig)
-		}
+	rules := make(map[string]string, len(normalized.Rules))
+	for _, rule := range normalized.Rules {
 		rules[rule.Tool] = rule.Action
 	}
 	return Exports{
-		Interceptors: []tool.Interceptor{&approvalInterceptor{defaultAction: defaultAction, display: display, maxDisplay: maxDisplay, rules: rules, interaction: deps.Interaction}},
-		Operations:   []operation.Operation{&setupOperation{scope: deps.State}},
+		Interceptors: []tool.Interceptor{&approvalInterceptor{defaultAction: normalized.DefaultAction, display: normalized.ArgumentDisplay, maxDisplay: normalized.MaxDisplayBytes, rules: rules, interaction: deps.Interaction}},
+		Operations:   []operation.Operation{&setupOperation{scope: deps.State, active: normalized}},
 	}, nil, nil
 }
 

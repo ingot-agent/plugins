@@ -137,6 +137,20 @@ type provider struct {
 	assets           asset.Resolver
 }
 
+type normalizedProviderConfig struct {
+	name             string
+	endpoint         string
+	apiKey           string
+	organization     string
+	project          string
+	models           map[string]struct{}
+	headers          http.Header
+	maxResponseBytes int
+	maxErrorBytes    int
+	maxAssetBytes    int
+	assetConcurrency int
+}
+
 // New loads this Plugin's own provider configuration from its state scope,
 // validates it, and snapshots all provider configuration. A missing
 // configuration file is the normal Unconfigured state: no providers are
@@ -159,31 +173,37 @@ func New(ctx context.Context, deps Dependencies) (Exports, ingotabi.Cleanup, err
 		return Exports{Operations: []operation.Operation{&setupOperation{scope: deps.State}}}, nil, nil
 	}
 
-	items := make([]ingotabi.Named[model.Provider], 0, len(cfg.Providers))
-	for i, candidate := range cfg.Providers {
-		instance, err := newProvider(candidate, deps.HTTP, deps.Assets)
-		if err != nil {
-			return Exports{}, nil, fmt.Errorf("providers[%d]: %w", i, err)
-		}
+	normalized, err := normalizeProviders(cfg)
+	if err != nil {
+		return Exports{}, nil, fmt.Errorf("construct model.openai-compatible: %w", err)
+	}
+	items := make([]ingotabi.Named[model.Provider], 0, len(normalized))
+	for _, candidate := range normalized {
+		instance := newProviderFromNormalized(candidate, deps.HTTP, deps.Assets)
 		items = append(items, ingotabi.Named[model.Provider]{Name: instance.name, Value: instance})
 	}
-	if err := ingotabi.CheckUniqueNames(items); err != nil {
-		return Exports{}, nil, fmt.Errorf("providers: %w: %w", ErrInvalidConfig, err)
-	}
-	return Exports{Providers: items, Operations: []operation.Operation{&setupOperation{scope: deps.State}}}, nil, nil
+	return Exports{Providers: items, Operations: []operation.Operation{&setupOperation{scope: deps.State, active: normalized}}}, nil, nil
 }
 
 func newProvider(cfg ProviderConfig, client httpx.Client, assets asset.Resolver) (*provider, error) {
+	normalized, err := normalizeProviderConfig(cfg)
+	if err != nil {
+		return nil, err
+	}
+	return newProviderFromNormalized(normalized, client, assets), nil
+}
+
+func normalizeProviderConfig(cfg ProviderConfig) (normalizedProviderConfig, error) {
 	if len(cfg.Name) > maxProviderNameBytes || !providerNamePattern.MatchString(cfg.Name) {
-		return nil, configError("name", "must match [a-z][a-z0-9]*(?:[._-][a-z0-9]+)* and be at most 64 bytes")
+		return normalizedProviderConfig{}, configError("name", "must match [a-z][a-z0-9]*(?:[._-][a-z0-9]+)* and be at most 64 bytes")
 	}
 	parsed, err := url.Parse(cfg.BaseURL)
 	if err != nil || !utf8.ValidString(cfg.BaseURL) || parsed.Scheme == "" || parsed.Host == "" ||
 		(parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.User != nil {
-		return nil, configError("base_url", "must be an absolute http/https URL without userinfo, query, or fragment")
+		return normalizedProviderConfig{}, configError("base_url", "must be an absolute http/https URL without userinfo, query, or fragment")
 	}
 	if !validHeaderValue(cfg.APIKey) || !validHeaderValue(cfg.Organization) || !validHeaderValue(cfg.Project) {
-		return nil, configError("authentication headers", "contain invalid control characters")
+		return normalizedProviderConfig{}, configError("authentication headers", "contain invalid control characters")
 	}
 	parsed.Path = strings.TrimRight(parsed.Path, "/")
 	parsed.RawPath = strings.TrimRight(parsed.RawPath, "/")
@@ -191,28 +211,28 @@ func newProvider(cfg ProviderConfig, client httpx.Client, assets asset.Resolver)
 
 	maxResponse, err := positiveDefault(cfg.MaxResponseBytes, defaultMaxResponseBytes, "max_response_bytes")
 	if err != nil {
-		return nil, err
+		return normalizedProviderConfig{}, err
 	}
 	maxError, err := positiveDefault(cfg.MaxErrorBodyBytes, defaultMaxErrorBodyBytes, "max_error_body_bytes")
 	if err != nil {
-		return nil, err
+		return normalizedProviderConfig{}, err
 	}
 	maxAsset, err := positiveDefault(cfg.MaxAssetBytes, defaultMaxAssetBytes, "max_asset_bytes")
 	if err != nil {
-		return nil, err
+		return normalizedProviderConfig{}, err
 	}
 	assetConcurrency, err := positiveDefault(cfg.AssetConcurrency, defaultAssetConcurrency, "asset_concurrency")
 	if err != nil {
-		return nil, err
+		return normalizedProviderConfig{}, err
 	}
 
 	models := make(map[string]struct{}, len(cfg.Models))
 	for i, name := range cfg.Models {
 		if name == "" || !utf8.ValidString(name) {
-			return nil, configError(fmt.Sprintf("models[%d]", i), "must be non-empty UTF-8")
+			return normalizedProviderConfig{}, configError(fmt.Sprintf("models[%d]", i), "must be non-empty UTF-8")
 		}
 		if _, exists := models[name]; exists {
-			return nil, configError(fmt.Sprintf("models[%d]", i), "duplicates an earlier model")
+			return normalizedProviderConfig{}, configError(fmt.Sprintf("models[%d]", i), "duplicates an earlier model")
 		}
 		models[name] = struct{}{}
 	}
@@ -222,20 +242,20 @@ func newProvider(cfg ProviderConfig, client httpx.Client, assets asset.Resolver)
 	for key, value := range cfg.DefaultHeaders {
 		canonical := http.CanonicalHeaderKey(key)
 		if !validHeaderName(key) || !validHeaderValue(value) {
-			return nil, configError("default_headers", "contains an invalid header")
+			return normalizedProviderConfig{}, configError("default_headers", "contains an invalid header")
 		}
 		lower := strings.ToLower(canonical)
 		if ownedHeader(lower) {
-			return nil, configError("default_headers."+key, "is owned by the plugin")
+			return normalizedProviderConfig{}, configError("default_headers."+key, "is owned by the plugin")
 		}
 		if previous, exists := seen[lower]; exists {
-			return nil, configError("default_headers."+key, "duplicates "+previous+" case-insensitively")
+			return normalizedProviderConfig{}, configError("default_headers."+key, "duplicates "+previous+" case-insensitively")
 		}
 		seen[lower] = key
 		headers.Set(canonical, value)
 	}
 
-	return &provider{
+	return normalizedProviderConfig{
 		name:             cfg.Name,
 		endpoint:         endpoint,
 		apiKey:           cfg.APIKey,
@@ -246,10 +266,18 @@ func newProvider(cfg ProviderConfig, client httpx.Client, assets asset.Resolver)
 		maxResponseBytes: maxResponse,
 		maxErrorBytes:    maxError,
 		maxAssetBytes:    maxAsset,
-		assetSlots:       make(chan struct{}, assetConcurrency),
-		http:             client,
-		assets:           assets,
+		assetConcurrency: assetConcurrency,
 	}, nil
+}
+
+func newProviderFromNormalized(cfg normalizedProviderConfig, client httpx.Client, assets asset.Resolver) *provider {
+	return &provider{
+		name: cfg.name, endpoint: cfg.endpoint, apiKey: cfg.apiKey,
+		organization: cfg.organization, project: cfg.project, models: cfg.models,
+		headers: cfg.headers, maxResponseBytes: cfg.maxResponseBytes,
+		maxErrorBytes: cfg.maxErrorBytes, maxAssetBytes: cfg.maxAssetBytes,
+		assetSlots: make(chan struct{}, cfg.assetConcurrency), http: client, assets: assets,
+	}
 }
 
 func positiveDefault(value, fallback int, field string) (int, error) {
