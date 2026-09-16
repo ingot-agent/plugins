@@ -46,6 +46,8 @@ INGOT_WEBUI_FIXTURE_ADDR=127.0.0.1:7316 node scripts/fixture.mjs
 
 ## 状态边界
 
+Operation 的 Interaction 表单按层级编辑 Object/List：先显示字段或列表摘要，点击后在同宽区域进入下一层，使用返回按钮或面包屑返回。未提交的值在层级切换时保留，校验失败会定位到对应字段。Operation 弹窗和调试页使用单行输入；普通对话中的自由文本回复仍支持多行。弹窗的提交按钮固定在底部。
+
 - `api.ts` / `sse.ts`：JSON 命令与 fetch SSE，错误不会触发自动重试执行。
 - `state.ts` / `stores/runtime.ts`：快照 + cursor 引导、revision 去重、请求代际保护、权威历史替换，以及有限的当前连接执行记录。实时 Turn 按收到事件的顺序追加正文、独立推理段、工具调用和 Interaction；连续文本增量合并，工具进度与结果更新原卡片。新模型调用会开始新的文本段。
 - `forms.ts`：Interaction 字段转换与 Operation 简单 Schema 判断；复杂结构或不安全的大整数保留在 JSON 模式提交，完整校验交给后端。

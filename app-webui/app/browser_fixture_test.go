@@ -284,7 +284,61 @@ func TestBrowserFixture(t *testing.T) {
 	complex.definition.InputSchema = json.RawMessage("{\"type\":\"object\",\"properties\":{\"items\":{\"type\":\"array\"}},\"required\":[\"items\"]}")
 	complex.definition.OutputSchema = json.RawMessage("{\"type\":\"object\"}")
 	complex.invoke = echo.invoke
-	a.operations, err = newOperationController([]operation.Operation{echo, wait, complex})
+	config := operationFixture("config")
+	config.definition.Group = "tool-shell"
+	config.definition.Description = "Configure the shell fixture."
+	config.definition.InputSchema = json.RawMessage(`{"type":"object","additionalProperties":false,"properties":{}}`)
+	config.definition.OutputSchema = json.RawMessage(`{"type":"object"}`)
+	config.invoke = func(ctx context.Context, request operation.Request) (operation.Result, error) {
+		rules := interaction.ListValue([]interaction.Value{interaction.ObjectValue([]interaction.Entry{
+			{Name: "tool", Value: interaction.StringValue("workspace.inspect")},
+			{Name: "action", Value: interaction.StringValue("ask")},
+		})})
+		response, err := request.Interaction.Request(ctx, interaction.Request{
+			Name: "config", Description: "Edit shell approval rules.",
+			Fields: []interaction.Field{{Name: "rules", Label: "Rules", Kind: interaction.FieldList, Default: &rules, Element: &interaction.Field{Name: "rule", Kind: interaction.FieldObject, Fields: []interaction.Field{
+				{Name: "tool", Label: "Tool", Kind: interaction.FieldString, Required: true},
+				{Name: "action", Label: "Action", Kind: interaction.FieldChoice, Required: true, Options: []interaction.Option{{Value: "ask", Label: "Ask"}, {Value: "allow", Label: "Allow"}}},
+			}}}},
+		})
+		if err != nil {
+			return operation.Result{}, err
+		}
+		count := 0
+		for _, value := range response.Values {
+			if value.Name == "rules" && value.Value.Kind == interaction.ValueList {
+				count = len(value.Value.Items)
+			}
+		}
+		output, err := json.Marshal(map[string]any{"rules": count})
+		return operation.Result{Output: output}, err
+	}
+	providers := operationFixture("config")
+	providers.definition.Group = "model-openai-compatible"
+	providers.definition.Description = "Review and update the OpenAI-compatible model providers."
+	providers.definition.InputSchema = config.definition.InputSchema
+	providers.definition.OutputSchema = json.RawMessage(`{"type":"object"}`)
+	providers.invoke = func(ctx context.Context, request operation.Request) (operation.Result, error) {
+		defaults := interaction.ListValue([]interaction.Value{interaction.ObjectValue([]interaction.Entry{
+			{Name: "name", Value: interaction.StringValue("Example provider")},
+			{Name: "base_url", Value: interaction.StringValue("https://api.example.com/v1")},
+			{Name: "models", Value: interaction.ListValue([]interaction.Value{interaction.StringValue("example-chat"), interaction.StringValue("example-reasoner")})},
+		})})
+		_, err := request.Interaction.Request(ctx, interaction.Request{
+			Name: "providers", Description: "One entry per OpenAI-compatible provider.",
+			Fields: []interaction.Field{{Name: "providers", Label: "Providers", Kind: interaction.FieldList, Default: &defaults, Element: &interaction.Field{Name: "provider", Kind: interaction.FieldObject, Fields: []interaction.Field{
+				{Name: "name", Label: "Name", Description: "Stable provider name referenced by model.runtime.", Kind: interaction.FieldString, Required: true},
+				{Name: "base_url", Label: "Base URL", Description: "Absolute http/https endpoint.", Kind: interaction.FieldString, Required: true},
+				{Name: "api_key", Label: "API key", Kind: interaction.FieldString, Sensitive: true},
+				{Name: "models", Label: "Models", Kind: interaction.FieldList, Element: &interaction.Field{Name: "model", Kind: interaction.FieldString}},
+			}}}},
+		})
+		if err != nil {
+			return operation.Result{}, err
+		}
+		return operation.Result{Output: json.RawMessage(`{"saved":true}`)}, nil
+	}
+	a.operations, err = newOperationController([]operation.Operation{echo, wait, complex, config, providers})
 	if err != nil {
 		t.Fatal(err)
 	}

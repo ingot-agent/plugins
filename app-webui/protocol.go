@@ -168,14 +168,14 @@ type InteractionHost interface {
 }
 
 // OperationDefinition is an immutable operation's public JSON contract. ID is
-// the host-generated internal identity used for invocation; Name is the
-// Plugin-chosen display identity and may be duplicated across Plugins. Group is
-// a Plugin-chosen presentation hint that may be empty ("ungrouped").
+// the host-generated internal identity used for invocation. Group is the
+// Plugin's command namespace, Name is local to that namespace, and the pair is
+// unique within the application composition.
 type OperationDefinition struct {
 	ID           string          `json:"id"`
 	Name         string          `json:"name"`
 	Description  string          `json:"description"`
-	Group        string          `json:"group,omitempty"`
+	Group        string          `json:"group"`
 	InputSchema  json.RawMessage `json:"inputSchema"`
 	OutputSchema json.RawMessage `json:"outputSchema"`
 }

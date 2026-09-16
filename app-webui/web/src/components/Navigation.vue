@@ -2,7 +2,7 @@
 import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
-import { Search, Plus, Archive, Layers, Settings2, MessageSquare, Folder, PanelLeftClose } from 'lucide-vue-next'
+import { Search, Plus, Archive, Settings2, MessageSquare, Folder, PanelLeftClose } from 'lucide-vue-next'
 import { useRuntime } from '../stores/runtime'
 import { useRelativeTime, workspaceBasename } from '../time'
 import Brand from './Brand.vue'
@@ -73,7 +73,6 @@ const groups = computed<Group[]>(() => {
       <p v-if="!groups.length" class="nav-empty">{{ t(search ? 'noMatches' : 'emptySessions') }}</p>
     </div>
     <div class="nav-footer">
-      <RouterLink to="/operations" class="nav-bottom-link" @click="$emit('navigate')"><Layers :size="17" />{{ t('operations') }}<span v-if="runtime.operations.length" class="count ml-auto">{{ runtime.operations.length }}</span></RouterLink>
       <button class="nav-bottom-link w-full" @click="$emit('settings')"><Settings2 :size="17" />{{ t('settings') }}</button>
       <div class="workspace-label"><span class="workspace-avatar">i</span><div><span class="text-xs font-medium">{{ t('local') }}</span><div class="muted text-[11px]">Ingot</div></div><span class="connection-dot ml-auto" :class="{ online: runtime.connection === 'online' }" :title="t('connection.' + runtime.connection)" /></div>
     </div>

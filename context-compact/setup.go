@@ -11,8 +11,8 @@ import (
 )
 
 const (
-	setupOperationName  = "context.compact.config"
-	setupOperationGroup = "configuration"
+	setupOperationName  = "config"
+	setupOperationGroup = "context-compact"
 )
 
 // setupOperation asks the Host for this Plugin's configuration through a

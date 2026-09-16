@@ -11,8 +11,8 @@ import (
 )
 
 const (
-	setupOperationName  = "http.default.config"
-	setupOperationGroup = "configuration"
+	setupOperationName  = "config"
+	setupOperationGroup = "http-default"
 )
 
 // setupOperation asks the Host for this Plugin's configuration through a

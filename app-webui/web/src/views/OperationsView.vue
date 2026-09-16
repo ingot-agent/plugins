@@ -44,7 +44,7 @@ function setMode(next: 'form' | 'json') {
   error.value = ''
   if (next === mode.value || !selected.value) return
   if (next === 'json') {
-    try { json.value = JSON.stringify(interactionValues(fields.value.map(field => ({ ...field, required: false })), values.value), null, 2) }
+    try { json.value = JSON.stringify(interactionValues(fields.value.map(field => ({ ...field, required: false })), values.value)) }
     catch (cause) { error.value = t(errorMessage(cause)); return }
   } else {
     if (!canRoundtripForm(json.value, selected.value.inputSchema)) { error.value = t('unsafeForm'); return }
@@ -77,7 +77,7 @@ async function stop(id: string) {
     <div v-else class="operations-grid">
       <section class="operation-form card">
         <label for="operation-name" class="field-label">{{ t('selectOperation') }}</label>
-        <select id="operation-name" v-model="selectedId" class="field mt-2"><option v-for="item in runtime.operations" :key="item.id" :value="item.id">{{ item.group ? item.group + " / " : "" }}{{ item.name }}</option></select>
+        <select id="operation-name" v-model="selectedId" class="field mt-2"><option v-for="item in runtime.operations" :key="item.id" :value="item.id">/{{ item.group }} {{ item.name }}</option></select>
         <template v-if="selected">
           <p class="muted my-5 text-sm leading-relaxed">{{ selected.description }}</p>
           <form @submit.prevent="run">
@@ -90,10 +90,10 @@ async function stop(id: string) {
                     <option :value="undefined">{{ t('choose') }}</option><option v-for="(value, index) in selected.inputSchema.properties[field.name].enum" :key="index" :value="value">{{ String(value) }}</option>
                   </select>
                 </div>
-                <FieldControl v-else :id="'op-' + field.name" v-model="values[field.name]" :field="field" :disabled="busy" />
+                <FieldControl v-else :id="'op-' + field.name" v-model="values[field.name]" :field="field" :disabled="busy" single-line />
               </template>
             </template>
-            <template v-else><p v-if="!formSupported" class="muted text-xs mb-3">{{ t('complexSchema') }}</p><textarea v-model="json" class="field json-input" rows="10" :aria-label="t('input')" spellcheck="false" /></template>
+            <template v-else><p v-if="!formSupported" class="muted text-xs mb-3">{{ t('complexSchema') }}</p><input v-model="json" type="text" class="field json-input" :aria-label="t('input')" spellcheck="false" /></template>
             <details class="schema-disclosure"><summary><ChevronRight :size="13" class="disclosure-chevron" />{{ t('schema') }}</summary><JsonBlock :value="selected.inputSchema" /></details>
             <label for="operation-session" class="field-label">{{ t('session') }} <span class="muted font-normal">· {{ t('optional') }}</span></label>
             <select id="operation-session" v-model="sessionId" class="field mt-2 mb-5"><option value="">{{ t('noSession') }}</option><option v-for="session in runtime.orderedSessions" :key="session.id" :value="session.id">{{ session.title }}</option></select>

@@ -11,8 +11,8 @@ import (
 )
 
 const (
-	setupOperationName  = "tool.ask.config"
-	setupOperationGroup = "configuration"
+	setupOperationName  = "config"
+	setupOperationGroup = "tool-ask"
 )
 
 // setupOperation asks the Host for this Plugin's configuration through a

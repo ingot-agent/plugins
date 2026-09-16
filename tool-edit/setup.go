@@ -10,14 +10,11 @@ import (
 	"github.com/ingot-agent/sdk/operation"
 )
 
-// setupOperationName is the stable protocol identity of this Plugin's
-// configuration Operation. The Host discovers it like any other Operation and
-// never special-cases it.
-const setupOperationName = "tool.edit.config"
+// setupOperationName is the local command name inside this Plugin's namespace.
+const setupOperationName = "config"
 
-// setupOperationGroup is a presentation hint so a host can organize
-// configuration Operations together. The SDK only carries the slot.
-const setupOperationGroup = "configuration"
+// setupOperationGroup is this Plugin's stable command namespace.
+const setupOperationGroup = "tool-edit"
 
 // setupOperation implements Operation + Interaction: it asks the Host for the
 // current values through a structured request, then persists the answer into
