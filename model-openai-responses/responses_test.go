@@ -109,6 +109,7 @@ func TestCompleteMapsResponsesRequestAndResponse(t *testing.T) {
 	}
 	var payload struct {
 		Model           string  `json:"model"`
+		Instructions    string  `json:"instructions"`
 		Stream          bool    `json:"stream"`
 		Store           bool    `json:"store"`
 		Temperature     float64 `json:"temperature"`
@@ -131,10 +132,10 @@ func TestCompleteMapsResponsesRequestAndResponse(t *testing.T) {
 	if err := json.Unmarshal(requestBody, &payload); err != nil {
 		t.Fatal(err)
 	}
-	if payload.Model != "requested-model" || payload.Stream || payload.Store || payload.Temperature != 0.25 || payload.MaxOutputTokens != 128 {
+	if payload.Model != "requested-model" || payload.Instructions != "system" || payload.Stream || payload.Store || payload.Temperature != 0.25 || payload.MaxOutputTokens != 128 {
 		t.Fatalf("payload = %s", requestBody)
 	}
-	wantTypes := []string{"message", "message", "message", "function_call", "function_call_output"}
+	wantTypes := []string{"message", "message", "function_call", "function_call_output"}
 	gotTypes := make([]string, len(payload.Input))
 	for i := range payload.Input {
 		gotTypes[i] = payload.Input[i].Type
@@ -142,7 +143,7 @@ func TestCompleteMapsResponsesRequestAndResponse(t *testing.T) {
 	if !reflect.DeepEqual(gotTypes, wantTypes) {
 		t.Fatalf("input types = %v, want %v; payload = %s", gotTypes, wantTypes, requestBody)
 	}
-	if payload.Input[2].Role != "assistant" || payload.Input[3].CallID != "call-previous" || payload.Input[3].Name != "read_file" || payload.Input[3].Arguments != `{"path":"README.md"}` || payload.Input[4].Output != "contents" {
+	if payload.Input[1].Role != "assistant" || payload.Input[2].CallID != "call-previous" || payload.Input[2].Name != "read_file" || payload.Input[2].Arguments != `{"path":"README.md"}` || payload.Input[3].Output != "contents" {
 		t.Fatalf("conversation input = %s", requestBody)
 	}
 	var userContent []struct {
@@ -150,7 +151,7 @@ func TestCompleteMapsResponsesRequestAndResponse(t *testing.T) {
 		Text     string `json:"text"`
 		ImageURL string `json:"image_url"`
 	}
-	if err := json.Unmarshal(payload.Input[1].Content, &userContent); err != nil {
+	if err := json.Unmarshal(payload.Input[0].Content, &userContent); err != nil {
 		t.Fatal(err)
 	}
 	wantImage := "data:image/png;base64," + base64.StdEncoding.EncodeToString([]byte{0, 1, 2})
@@ -162,6 +163,43 @@ func TestCompleteMapsResponsesRequestAndResponse(t *testing.T) {
 	}
 	if bytes.Contains(requestBody, []byte(`"messages"`)) || bytes.Contains(requestBody, []byte(`"max_tokens"`)) {
 		t.Fatalf("request contains Chat Completions fields: %s", requestBody)
+	}
+}
+
+func TestCompleteOnlyPromotesLeadingSystemMessage(t *testing.T) {
+	var requestBody []byte
+	provider := newProvider(t, openairesponses.ProviderConfig{Name: "p", BaseURL: "https://example.test"}, clientFunc(func(_ context.Context, request *http.Request) (*http.Response, error) {
+		requestBody, _ = io.ReadAll(request.Body)
+		return httpResponse(http.StatusOK, `{"id":"resp_1","object":"response","status":"completed","model":"m","output":[]}`), nil
+	}), assetResolver{data: map[string][]byte{}})
+
+	_, err := provider.Complete(context.Background(), model.Request{
+		Model: "m",
+		Messages: []model.Message{
+			{Role: model.RoleSystem, Content: content.Content{content.Text("global "), content.Text("instructions")}},
+			{Role: model.RoleUser, Content: content.FromText("question")},
+			{Role: model.RoleSystem, Content: content.FromText("historical system message")},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var payload struct {
+		Instructions string `json:"instructions"`
+		Input        []struct {
+			Role    string `json:"role"`
+			Content string `json:"content"`
+		} `json:"input"`
+	}
+	if err := json.Unmarshal(requestBody, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Instructions != "global instructions" {
+		t.Fatalf("instructions = %q; payload = %s", payload.Instructions, requestBody)
+	}
+	if len(payload.Input) != 2 || payload.Input[0].Role != "user" || payload.Input[1].Role != "system" || payload.Input[1].Content != "historical system message" {
+		t.Fatalf("input = %#v; payload = %s", payload.Input, requestBody)
 	}
 }
 

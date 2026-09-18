@@ -4,6 +4,11 @@ All notable changes to this plugin are documented in this file.
 
 ## Unreleased
 
+### Fixed
+
+- Map the leading SDK system message to the Responses API `instructions`
+  field instead of including it in conversation `input`.
+
 ### Added
 
 - Add an independent OpenAI Responses API model provider with complete and
