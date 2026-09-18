@@ -115,9 +115,9 @@ type Dependencies struct {
 	State  state.Scope
 }
 
-// Exports contains named model providers in declaration order.
+// Exports contains a live source of named model providers in declaration order.
 type Exports struct {
-	Providers  []ingotabi.Named[model.Provider]
+	Source     model.ProviderSource
 	Operations []operation.Operation
 }
 
@@ -152,10 +152,9 @@ type normalizedProviderConfig struct {
 }
 
 // New loads this Plugin's own provider configuration from its state scope,
-// validates it, and snapshots all provider configuration. A missing
-// configuration file is the normal Unconfigured state: no providers are
-// exported, and the runtime still starts so setup can happen through an
-// Operation.
+// validates it, and exports a stable source of provider snapshots. A missing
+// configuration file is the normal Unconfigured state: the source is empty
+// until setup publishes its first provider configuration.
 func New(ctx context.Context, deps Dependencies) (Exports, ingotabi.Cleanup, error) {
 	if ctx == nil || isNil(deps.HTTP) || isNil(deps.Assets) || isNil(deps.State) {
 		return Exports{}, nil, fmt.Errorf("construct model.openai-compatible: %w", ErrInvalidConfig)
@@ -167,22 +166,16 @@ func New(ctx context.Context, deps Dependencies) (Exports, ingotabi.Cleanup, err
 	if err != nil {
 		return Exports{}, nil, fmt.Errorf("construct model.openai-compatible: %w: %w", err, ErrInvalidConfig)
 	}
-	if len(cfg.Providers) == 0 {
-		// Unconfigured: export only the setup Operation so the user can add a
-		// provider without editing state by hand.
-		return Exports{Operations: []operation.Operation{&setupOperation{scope: deps.State}}}, nil, nil
+	var normalized []normalizedProviderConfig
+	if len(cfg.Providers) != 0 {
+		normalized, err = normalizeProviders(cfg)
+		if err != nil {
+			return Exports{}, nil, fmt.Errorf("construct model.openai-compatible: %w", err)
+		}
 	}
-
-	normalized, err := normalizeProviders(cfg)
-	if err != nil {
-		return Exports{}, nil, fmt.Errorf("construct model.openai-compatible: %w", err)
-	}
-	items := make([]ingotabi.Named[model.Provider], 0, len(normalized))
-	for _, candidate := range normalized {
-		instance := newProviderFromNormalized(candidate, deps.HTTP, deps.Assets)
-		items = append(items, ingotabi.Named[model.Provider]{Name: instance.name, Value: instance})
-	}
-	return Exports{Providers: items, Operations: []operation.Operation{&setupOperation{scope: deps.State, active: normalized}}}, nil, nil
+	source := &providerSource{http: deps.HTTP, assets: deps.Assets}
+	source.current.Store(source.prepare(normalized))
+	return Exports{Source: source, Operations: []operation.Operation{&setupOperation{scope: deps.State, source: source}}}, nil, nil
 }
 
 func newProvider(cfg ProviderConfig, client httpx.Client, assets asset.Resolver) (*provider, error) {
@@ -513,7 +506,3 @@ func isNil(value any) bool {
 		return false
 	}
 }
-
-var (
-	_ model.StreamingProvider = (*provider)(nil)
-)

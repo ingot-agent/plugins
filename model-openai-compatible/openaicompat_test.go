@@ -126,7 +126,7 @@ func TestCompleteMapsRequestHeadersAndResponse(t *testing.T) {
 		t.Fatal(err)
 	}
 	headers["X-Tenant"] = "mutated"
-	result, err := exports.Providers[0].Value.Complete(context.Background(), model.Request{Model: "requested-model", Messages: []model.Message{{Role: model.RoleUser, Content: content.FromText("hi")}}})
+	result, err := providerEntries(t, exports)[0].Complete(context.Background(), model.Request{Model: "requested-model", Messages: []model.Message{{Role: model.RoleUser, Content: content.FromText("hi")}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -213,7 +213,7 @@ func TestCompleteMapsInlineURIAndAssetImages(t *testing.T) {
 		content.URI(content.KindImage, "image/jpeg", "remote.jpg", "https://cdn.example/image.jpg"),
 		content.AssetPart(content.KindImage, "image/webp", "stored.webp", asset.Reference{ID: "asset-1"}),
 	}
-	if _, err := exports.Providers[0].Value.Complete(context.Background(), model.Request{Model: "m", Messages: []model.Message{{Role: model.RoleUser, Content: input}}}); err != nil {
+	if _, err := providerEntries(t, exports)[0].Complete(context.Background(), model.Request{Model: "m", Messages: []model.Message{{Role: model.RoleUser, Content: input}}}); err != nil {
 		t.Fatal(err)
 	}
 	var wire struct {
@@ -298,7 +298,7 @@ func TestCompleteRejectsOversizedAssetBeforeOpen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = exports.Providers[0].Value.Complete(context.Background(), model.Request{Model: "m", Messages: []model.Message{{
+	_, err = providerEntries(t, exports)[0].Complete(context.Background(), model.Request{Model: "m", Messages: []model.Message{{
 		Role:    model.RoleUser,
 		Content: content.Content{content.AssetPart(content.KindImage, "image/png", "large.png", asset.Reference{ID: "large"})},
 	}}})
@@ -329,7 +329,7 @@ func TestCompleteCancellationClosesBlockedAssetReader(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	result := make(chan error, 1)
 	go func() {
-		_, completeErr := exports.Providers[0].Value.Complete(ctx, model.Request{Model: "m", Messages: []model.Message{{
+		_, completeErr := providerEntries(t, exports)[0].Complete(ctx, model.Request{Model: "m", Messages: []model.Message{{
 			Role: model.RoleUser,
 			Content: content.Content{content.AssetPart(
 				content.KindImage,
@@ -388,7 +388,7 @@ func TestStreamingDeliversOrderedTextAndRequiresDone(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	streaming := exports.Providers[0].Value.(model.StreamingProvider)
+	streaming := providerEntries(t, exports)[0]
 	var chunks []string
 	var events []model.StreamEventKind
 	result, err := streaming.Stream(context.Background(), model.Request{Model: "m"}, func(event model.StreamEvent) error {
@@ -414,7 +414,7 @@ func TestStreamingDeliversOrderedTextAndRequiresDone(t *testing.T) {
 		return response(http.StatusOK, "data: {\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\"},\"finish_reason\":\"stop\"}]}\n\n"), nil
 	})
 	exports, _, _ = openaicompat.New(context.Background(), withState(t, openaicompat.Config{Providers: []openaicompat.ProviderConfig{{Name: "p", BaseURL: "https://example.test"}}}, dependencies(client)))
-	_, err = exports.Providers[0].Value.(model.StreamingProvider).Stream(context.Background(), model.Request{Model: "m"}, func(model.StreamEvent) error { return nil })
+	_, err = providerEntries(t, exports)[0].Stream(context.Background(), model.Request{Model: "m"}, func(model.StreamEvent) error { return nil })
 	if !errors.Is(err, openaicompat.ErrProtocol) {
 		t.Fatalf("missing DONE error=%v", err)
 	}
@@ -432,7 +432,7 @@ func TestConfigRejectsOwnedHeadersAndResponseLimit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = exports.Providers[0].Value.Complete(context.Background(), model.Request{Model: "m"})
+	_, err = providerEntries(t, exports)[0].Complete(context.Background(), model.Request{Model: "m"})
 	if !errors.Is(err, openaicompat.ErrResponseLimit) {
 		t.Fatalf("limit error=%v", err)
 	}
@@ -500,8 +500,9 @@ func TestNewPreservesProviderOrderAndRejectsDuplicateNames(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(exports.Providers) != 2 || exports.Providers[0].Name != "primary" || exports.Providers[1].Name != "fallback" {
-		t.Fatalf("providers=%#v", exports.Providers)
+	entries := providerEntries(t, exports)
+	if len(entries) != 2 || entries[0].Name != "primary" || entries[1].Name != "fallback" {
+		t.Fatalf("providers=%#v", entries)
 	}
 	_, _, err = openaicompat.New(context.Background(), withState(t, openaicompat.Config{Providers: []openaicompat.ProviderConfig{
 		{Name: "same", BaseURL: "https://one.example"},
@@ -596,7 +597,7 @@ func TestStreamingAccumulatesToolCallsAndRejectsUnsupportedType(t *testing.T) {
 	}, "\n")
 	provider := newProvider(t, openaicompat.ProviderConfig{Name: "p", BaseURL: "https://example.test"}, clientFunc(func(context.Context, *http.Request) (*http.Response, error) {
 		return response(http.StatusOK, valid), nil
-	})).(model.StreamingProvider)
+	}))
 	result, err := provider.Stream(context.Background(), model.Request{Model: "m"}, func(model.StreamEvent) error { return nil })
 	if err != nil {
 		t.Fatal(err)
@@ -608,7 +609,7 @@ func TestStreamingAccumulatesToolCallsAndRejectsUnsupportedType(t *testing.T) {
 	invalid := "data: {\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"tool_calls\":[{\"index\":0,\"type\":\"custom\"}]},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n"
 	provider = newProvider(t, openaicompat.ProviderConfig{Name: "p", BaseURL: "https://example.test"}, clientFunc(func(context.Context, *http.Request) (*http.Response, error) {
 		return response(http.StatusOK, invalid), nil
-	})).(model.StreamingProvider)
+	}))
 	_, err = provider.Stream(context.Background(), model.Request{Model: "m"}, func(model.StreamEvent) error { return nil })
 	if !errors.Is(err, openaicompat.ErrProtocol) {
 		t.Fatalf("unsupported type error=%v", err)
@@ -619,7 +620,7 @@ func TestStreamingRequiresDoneAsOnlyDataLine(t *testing.T) {
 	body := "data: [DONE]\ndata: \n\n"
 	provider := newProvider(t, openaicompat.ProviderConfig{Name: "p", BaseURL: "https://example.test"}, clientFunc(func(context.Context, *http.Request) (*http.Response, error) {
 		return response(http.StatusOK, body), nil
-	})).(model.StreamingProvider)
+	}))
 	_, err := provider.Stream(context.Background(), model.Request{Model: "m"}, func(model.StreamEvent) error { return nil })
 	if !errors.Is(err, openaicompat.ErrProtocol) {
 		t.Fatalf("error=%v", err)
@@ -629,7 +630,7 @@ func TestStreamingRequiresDoneAsOnlyDataLine(t *testing.T) {
 func TestStreamingAppliesTotalResponseLimit(t *testing.T) {
 	provider := newProvider(t, openaicompat.ProviderConfig{Name: "p", BaseURL: "https://example.test", MaxResponseBytes: 8}, clientFunc(func(context.Context, *http.Request) (*http.Response, error) {
 		return response(http.StatusOK, strings.Repeat("x", 9)), nil
-	})).(model.StreamingProvider)
+	}))
 	_, err := provider.Stream(context.Background(), model.Request{Model: "m"}, func(model.StreamEvent) error { return nil })
 	if !errors.Is(err, openaicompat.ErrResponseLimit) {
 		t.Fatalf("error=%v", err)
@@ -640,7 +641,7 @@ func TestStreamingCancellationClosesBlockedBody(t *testing.T) {
 	body := newBlockingBody()
 	provider := newProvider(t, openaicompat.ProviderConfig{Name: "p", BaseURL: "https://example.test"}, clientFunc(func(context.Context, *http.Request) (*http.Response, error) {
 		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: body}, nil
-	})).(model.StreamingProvider)
+	}))
 	ctx, cancel := context.WithCancel(context.Background())
 	result := make(chan error, 1)
 	go func() {
@@ -667,7 +668,7 @@ func TestStreamingHandlerErrorIsPreservedAndBodyClosed(t *testing.T) {
 	body := &trackingBody{Reader: strings.NewReader("data: {\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"x\"},\"finish_reason\":null}]}\n\n")}
 	provider := newProvider(t, openaicompat.ProviderConfig{Name: "p", BaseURL: "https://example.test"}, clientFunc(func(context.Context, *http.Request) (*http.Response, error) {
 		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: body}, nil
-	})).(model.StreamingProvider)
+	}))
 	handlerErr := errors.New("handler stopped")
 	_, err := provider.Stream(context.Background(), model.Request{Model: "m"}, func(model.StreamEvent) error { return handlerErr })
 	if !errors.Is(err, handlerErr) {
@@ -686,7 +687,7 @@ func TestProviderSupportsConcurrentCompleteAndStream(t *testing.T) {
 		return response(http.StatusOK, `{"model":"m","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`), nil
 	})
 	provider := newProvider(t, openaicompat.ProviderConfig{Name: "p", BaseURL: "https://example.test"}, client)
-	streaming := provider.(model.StreamingProvider)
+	streaming := provider
 	errorsFound := make(chan error, 20)
 	var wait sync.WaitGroup
 	for i := 0; i < 10; i++ {
@@ -711,13 +712,13 @@ func TestProviderSupportsConcurrentCompleteAndStream(t *testing.T) {
 	}
 }
 
-func newProvider(t *testing.T, cfg openaicompat.ProviderConfig, client httpx.Client) model.Provider {
+func newProvider(t *testing.T, cfg openaicompat.ProviderConfig, client httpx.Client) model.ProviderEntry {
 	t.Helper()
 	exports, _, err := openaicompat.New(context.Background(), withState(t, openaicompat.Config{Providers: []openaicompat.ProviderConfig{cfg}}, dependencies(client)))
 	if err != nil {
 		t.Fatal(err)
 	}
-	return exports.Providers[0].Value
+	return providerEntries(t, exports)[0]
 }
 
 type blockingBody struct {

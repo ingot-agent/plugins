@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"reflect"
 	"slices"
+	"sync/atomic"
 	"unicode/utf8"
 
 	"github.com/ingot-agent/ingot-abi"
@@ -36,7 +37,7 @@ type Config struct {
 
 // Dependencies contains providers and the independent complete/stream chains.
 type Dependencies struct {
-	Providers          []ingotabi.Named[model.Provider]
+	ProviderSources    []model.ProviderSource
 	Interceptors       []model.Interceptor
 	StreamInterceptors []model.StreamInterceptor
 	State              state.Scope
@@ -53,17 +54,15 @@ type Exports struct {
 }
 
 type runtime struct {
-	providers          map[string]model.Provider
-	defaultProvider    string
-	defaultModel       string
+	providerSources    []model.ProviderSource
+	config             atomic.Pointer[Config]
 	interceptors       []model.Interceptor
 	streamInterceptors []model.StreamInterceptor
 }
 
-// New snapshots providers, loads this Plugin's own configuration from its
-// state scope, and composes immutable runtime state. A missing configuration
-// file is the normal Unconfigured state: no default provider or model is
-// selected and callers must supply them explicitly.
+// New retains provider sources and loads this Plugin's own configuration.
+// Sources and interceptor chains are fixed; provider snapshots and defaults
+// can change between calls. Missing configuration is the Unconfigured state.
 func New(ctx context.Context, deps Dependencies) (Exports, ingotabi.Cleanup, error) {
 	if ctx == nil {
 		return Exports{}, nil, fmt.Errorf("construct model.runtime: %w", ErrInvalidConfig)
@@ -78,27 +77,14 @@ func New(ctx context.Context, deps Dependencies) (Exports, ingotabi.Cleanup, err
 	if err != nil {
 		return Exports{}, nil, fmt.Errorf("construct model.runtime: %w: %w", err, ErrInvalidConfig)
 	}
-	// An Unconfigured provider Plugin exports no providers. The runtime must
-	// still construct so the user can complete setup through an Operation;
-	// model calls then fail with model.ErrProviderNotFound at call time
-	// instead of preventing the whole Runtime from starting.
-	if err := ingotabi.CheckUniqueNames(deps.Providers); err != nil {
-		return Exports{}, nil, fmt.Errorf("providers: %w: %w", ErrInvalidConfig, err)
+	if err := validateConfig(cfg); err != nil {
+		return Exports{}, nil, err
 	}
-	providers := make(map[string]model.Provider, len(deps.Providers))
-	providerNames := make([]string, 0, len(deps.Providers))
-	for i, named := range deps.Providers {
-		if isNil(named.Value) {
-			return Exports{}, nil, fmt.Errorf("providers[%d] is nil: %w", i, ErrInvalidConfig)
+	for i, source := range deps.ProviderSources {
+		if isNil(source) {
+			return Exports{}, nil, fmt.Errorf("provider_sources[%d] is nil: %w", i, ErrInvalidConfig)
 		}
-		providers[named.Name] = named.Value
-		providerNames = append(providerNames, named.Name)
 	}
-	effective, err := effectiveConfig(cfg, providerNames)
-	if err != nil && len(providerNames) > 0 {
-		return Exports{}, nil, fmt.Errorf("construct model.runtime: %w", err)
-	}
-	defaultProvider := effective.DefaultProvider
 
 	interceptors := make([]model.Interceptor, len(deps.Interceptors))
 	for i, interceptor := range deps.Interceptors {
@@ -116,10 +102,11 @@ func New(ctx context.Context, deps Dependencies) (Exports, ingotabi.Cleanup, err
 	}
 
 	instance := &runtime{
-		providers: providers, defaultProvider: defaultProvider, defaultModel: cfg.DefaultModel,
-		interceptors: interceptors, streamInterceptors: streamInterceptors,
+		providerSources: slices.Clone(deps.ProviderSources),
+		interceptors:    interceptors, streamInterceptors: streamInterceptors,
 	}
-	return Exports{Runtime: instance, Streaming: instance, Resolver: instance, Operations: []operation.Operation{&setupOperation{scope: deps.State, providerNames: providerNames, active: effective}}}, nil, nil
+	instance.config.Store(&cfg)
+	return Exports{Runtime: instance, Streaming: instance, Resolver: instance, Operations: []operation.Operation{&setupOperation{scope: deps.State, runtime: instance}}}, nil, nil
 }
 
 // ResolveRequest returns a caller-owned request with provider and model
@@ -133,8 +120,12 @@ func (r *runtime) ResolveRequest(ctx context.Context, request model.Request) (mo
 		return model.Request{}, err
 	}
 	owned := cloneRequest(request)
-	r.applyDefaults(&owned)
-	if _, err := r.selectProvider(owned); err != nil {
+	selection, err := r.snapshot(ctx)
+	if err != nil {
+		return model.Request{}, err
+	}
+	selection.applyDefaults(&owned)
+	if _, err := selection.selectProvider(owned); err != nil {
 		return model.Request{}, err
 	}
 	if err := validateRequest(owned); err != nil {
@@ -151,7 +142,11 @@ func (r *runtime) Complete(ctx context.Context, request model.Request) (model.Re
 		return model.Response{}, err
 	}
 	owned := cloneRequest(request)
-	r.applyDefaults(&owned)
+	selection, err := r.snapshot(ctx)
+	if err != nil {
+		return model.Response{}, err
+	}
+	selection.applyDefaults(&owned)
 	terminal := func(callCtx context.Context, selected model.Request) (model.Response, error) {
 		if callCtx == nil {
 			return model.Response{}, errors.New("model runtime interceptor supplied nil context")
@@ -159,7 +154,7 @@ func (r *runtime) Complete(ctx context.Context, request model.Request) (model.Re
 		if err := validateRequest(selected); err != nil {
 			return model.Response{}, err
 		}
-		provider, err := r.selectProvider(selected)
+		provider, err := selection.selectProvider(selected)
 		if err != nil {
 			return model.Response{}, err
 		}
@@ -200,7 +195,11 @@ func (r *runtime) Stream(ctx context.Context, request model.Request, handler mod
 		return model.Response{}, errors.New("model streaming runtime: nil handler")
 	}
 	owned := cloneRequest(request)
-	r.applyDefaults(&owned)
+	selection, err := r.snapshot(ctx)
+	if err != nil {
+		return model.Response{}, err
+	}
+	selection.applyDefaults(&owned)
 	stream := newStreamValidator(handler)
 	terminal := model.StreamNext(func(callCtx context.Context, selected model.Request, selectedHandler model.StreamHandler) (model.Response, error) {
 		if callCtx == nil {
@@ -209,18 +208,17 @@ func (r *runtime) Stream(ctx context.Context, request model.Request, handler mod
 		if err := validateRequest(selected); err != nil {
 			return model.Response{}, err
 		}
-		provider, err := r.selectProvider(selected)
+		provider, err := selection.selectProvider(selected)
 		if err != nil {
 			return model.Response{}, err
 		}
-		streaming, ok := provider.(model.StreamingProvider)
-		if !ok || isNil(streaming) {
+		if provider.Stream == nil {
 			return model.Response{}, fmt.Errorf("provider %q: %w", selected.Provider, model.ErrStreamingUnsupported)
 		}
 		if err := callCtx.Err(); err != nil {
 			return model.Response{}, err
 		}
-		response, err := streaming.Stream(callCtx, cloneRequest(selected), selectedHandler)
+		response, err := provider.Stream(callCtx, cloneRequest(selected), selectedHandler)
 		if err != nil {
 			return cloneResponse(response), err
 		}
@@ -256,25 +254,55 @@ func (r *runtime) Stream(ctx context.Context, request model.Request, handler mod
 	return cloneResponse(response), err
 }
 
-func (r *runtime) applyDefaults(request *model.Request) {
+type providerSnapshot struct {
+	providers map[string]model.ProviderEntry
+	names     []string
+	defaults  Config
+}
+
+func (r *runtime) snapshot(ctx context.Context) (providerSnapshot, error) {
+	selection := providerSnapshot{providers: make(map[string]model.ProviderEntry), defaults: *r.config.Load()}
+	for i, source := range r.providerSources {
+		entries, err := source.Snapshot(ctx)
+		if err != nil {
+			return providerSnapshot{}, fmt.Errorf("provider_sources[%d]: %w", i, err)
+		}
+		for _, entry := range entries {
+			if entry.Name == "" || !utf8.ValidString(entry.Name) || entry.Complete == nil {
+				return providerSnapshot{}, fmt.Errorf("provider_sources[%d] contains an invalid provider: %w", i, ErrInvalidConfig)
+			}
+			if _, exists := selection.providers[entry.Name]; exists {
+				return providerSnapshot{}, fmt.Errorf("duplicate provider %q: %w", entry.Name, ErrInvalidConfig)
+			}
+			selection.providers[entry.Name] = entry
+			selection.names = append(selection.names, entry.Name)
+		}
+	}
+	if selection.defaults.DefaultProvider == "" && len(selection.names) == 1 {
+		selection.defaults.DefaultProvider = selection.names[0]
+	}
+	return selection, nil
+}
+
+func (s providerSnapshot) applyDefaults(request *model.Request) {
 	if request.Provider == "" {
-		request.Provider = r.defaultProvider
+		request.Provider = s.defaults.DefaultProvider
 	}
 	if request.Model == "" {
-		request.Model = r.defaultModel
+		request.Model = s.defaults.DefaultModel
 	}
 }
 
-func (r *runtime) selectProvider(request model.Request) (model.Provider, error) {
+func (s providerSnapshot) selectProvider(request model.Request) (model.ProviderEntry, error) {
 	if request.Provider == "" {
-		return nil, fmt.Errorf("empty provider: %w", model.ErrProviderNotFound)
+		return model.ProviderEntry{}, fmt.Errorf("empty provider: %w", model.ErrProviderNotFound)
 	}
-	provider, ok := r.providers[request.Provider]
+	provider, ok := s.providers[request.Provider]
 	if !ok {
-		return nil, fmt.Errorf("provider %q: %w", request.Provider, model.ErrProviderNotFound)
+		return model.ProviderEntry{}, fmt.Errorf("provider %q: %w", request.Provider, model.ErrProviderNotFound)
 	}
 	if request.Model == "" {
-		return nil, fmt.Errorf("empty model for provider %q: set default_model in [plugins.model.runtime] or model in [plugins.agent.default]: %w", request.Provider, model.ErrModelNotFound)
+		return model.ProviderEntry{}, fmt.Errorf("empty model for provider %q: set default_model in [plugins.model.runtime] or model in [plugins.agent.default]: %w", request.Provider, model.ErrModelNotFound)
 	}
 	return provider, nil
 }

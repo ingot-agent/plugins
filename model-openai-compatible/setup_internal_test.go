@@ -13,6 +13,7 @@ import (
 
 	"github.com/ingot-agent/sdk/asset"
 	"github.com/ingot-agent/sdk/interaction"
+	"github.com/ingot-agent/sdk/model"
 	"github.com/ingot-agent/sdk/operation"
 )
 
@@ -61,7 +62,13 @@ func TestSetupRenamePreservesSecretAndHiddenProviderFields(t *testing.T) {
 	if err := saveConfig(scope.Dir(), current); err != nil {
 		t.Fatal(err)
 	}
-	exports, _, err := New(context.Background(), Dependencies{HTTP: setupTestHTTP{}, Assets: setupTestAssets{}, State: scope})
+	inspected := errors.New("request inspected")
+	var captured *http.Request
+	client := liveTestHTTP(func(_ context.Context, request *http.Request) (*http.Response, error) {
+		captured = request
+		return nil, inspected
+	})
+	exports, _, err := New(context.Background(), Dependencies{HTTP: client, Assets: setupTestAssets{}, State: scope})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,8 +98,15 @@ func TestSetupRenamePreservesSecretAndHiddenProviderFields(t *testing.T) {
 	if err := json.Unmarshal(result.Output, &output); err != nil {
 		t.Fatal(err)
 	}
-	if output.Providers != 1 || !output.RestartRequired {
+	if output.Providers != 1 || output.RestartRequired {
 		t.Fatalf("output = %#v", output)
+	}
+	entries := liveEntries(t, exports)
+	if _, err := entries[0].Complete(context.Background(), model.Request{Model: "m"}); !errors.Is(err, inspected) {
+		t.Fatalf("renamed provider request error = %v", err)
+	}
+	if entries[0].Name != "renamed" || captured.Header.Get("Authorization") != "Bearer secret" || captured.Header.Get("X-Tenant") != "one" {
+		t.Fatal("renamed provider did not retain its active credentials")
 	}
 
 	providersField := findSetupField(t, channel.request.Fields, "providers")
@@ -120,9 +134,17 @@ func TestSetupManagesDefaultHeadersAndProviderLimits(t *testing.T) {
 	if err := saveConfig(scope.Dir(), current); err != nil {
 		t.Fatal(err)
 	}
-	exports, _, err := New(context.Background(), Dependencies{HTTP: setupTestHTTP{}, Assets: setupTestAssets{}, State: scope})
+	var captured *http.Request
+	client := liveTestHTTP(func(_ context.Context, request *http.Request) (*http.Response, error) {
+		captured = request
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader("{}" + strings.Repeat(" ", 148)))}, nil
+	})
+	exports, _, err := New(context.Background(), Dependencies{HTTP: client, Assets: setupTestAssets{}, State: scope})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if _, err := liveEntries(t, exports)[0].Complete(context.Background(), model.Request{Model: "m"}); !errors.Is(err, ErrResponseLimit) {
+		t.Fatalf("original response limit error = %v", err)
 	}
 	channel := &setupTestChannel{respond: func(request interaction.Request) (interaction.Response, error) {
 		providers := findSetupField(t, request.Fields, "providers")
@@ -144,12 +166,18 @@ func TestSetupManagesDefaultHeadersAndProviderLimits(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	provider := stored.Providers[0]
-	if provider.MaxResponseBytes != 200 || provider.MaxErrorBodyBytes != 101 || provider.MaxAssetBytes != 102 || provider.AssetConcurrency != 2 {
-		t.Fatalf("stored limits = %#v", provider)
+	saved := stored.Providers[0]
+	if saved.MaxResponseBytes != 200 || saved.MaxErrorBodyBytes != 101 || saved.MaxAssetBytes != 102 || saved.AssetConcurrency != 2 {
+		t.Fatalf("stored limits = %#v", saved)
 	}
-	if !reflect.DeepEqual(provider.DefaultHeaders, map[string]string{"X-Renamed": "new-value"}) {
-		t.Fatalf("stored headers = %#v", provider.DefaultHeaders)
+	if !reflect.DeepEqual(saved.DefaultHeaders, map[string]string{"X-Renamed": "new-value"}) {
+		t.Fatalf("stored headers = %#v", saved.DefaultHeaders)
+	}
+	if _, err := liveEntries(t, exports)[0].Complete(context.Background(), model.Request{Model: "m"}); !errors.Is(err, ErrProtocol) {
+		t.Fatalf("updated response limit should allow parsing: %v", err)
+	}
+	if captured.Header.Get("X-Renamed") != "new-value" || captured.Header.Get("X-Secret") != "" {
+		t.Fatal("saved headers were not published")
 	}
 }
 

@@ -6,6 +6,11 @@ All notable changes to this plugin are documented in this file.
 
 ### Changed
 
+- Replace static provider exports with a live `model.ProviderSource`; saved
+  provider configuration applies to subsequent calls without restarting,
+  while existing calls retain their original provider instances.
+- Expose provider invocation callbacks directly in `model.ProviderEntry`,
+  removing the old provider interfaces and streaming type assertions.
 - Expose configuration as `/model-openai-compatible config` using a stable plugin Group and local operation Name.
 - Populate provider and model lists from saved configuration without exposing API keys.
 - Cover headers and all provider resource limits, and manage API keys and

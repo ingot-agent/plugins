@@ -10,6 +10,7 @@ import (
 
 	"github.com/ingot-agent/ingot-abi/state"
 	"github.com/ingot-agent/sdk/interaction"
+	"github.com/ingot-agent/sdk/model"
 	"github.com/ingot-agent/sdk/operation"
 )
 
@@ -25,9 +26,9 @@ const (
 // scope. routes is a repeated object, which is why the interaction protocol
 // needs nested field kinds.
 type setupOperation struct {
-	scope         state.Scope
-	providerNames []string
-	active        Config
+	scope           state.Scope
+	providerSources []model.ProviderSource
+	active          Config
 }
 
 var _ operation.Operation = (*setupOperation)(nil)
@@ -53,6 +54,10 @@ func (o *setupOperation) Invoke(ctx context.Context, request operation.Request) 
 	if err != nil {
 		return operation.Result{}, err
 	}
+	providerNames, err := currentProviderNames(ctx, o.providerSources)
+	if err != nil {
+		return operation.Result{}, err
+	}
 	profiles, err := builtInProfiles()
 	if err != nil {
 		return operation.Result{}, err
@@ -67,8 +72,8 @@ func (o *setupOperation) Invoke(ctx context.Context, request operation.Request) 
 		options = append(options, interaction.Option{Value: name, Label: name})
 	}
 	routesDefault := usageRoutesValue(current.Routes)
-	providerOptions := make([]interaction.Option, 0, len(o.providerNames))
-	for _, name := range o.providerNames {
+	providerOptions := make([]interaction.Option, 0, len(providerNames))
+	for _, name := range providerNames {
 		providerOptions = append(providerOptions, interaction.Option{Value: name, Label: name})
 	}
 	response, err := request.Interaction.Request(ctx, interaction.Request{
@@ -114,6 +119,9 @@ func (o *setupOperation) Invoke(ctx context.Context, request operation.Request) 
 		return operation.Result{}, fmt.Errorf("cache_entries must not be negative: %w", ErrInvalidConfig)
 	}
 	if _, err := compileRoutes(updated.Routes, profiles); err != nil {
+		return operation.Result{}, err
+	}
+	if _, err := currentProviderNames(ctx, o.providerSources); err != nil {
 		return operation.Result{}, err
 	}
 	effective := cloneConfig(updated)

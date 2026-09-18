@@ -37,7 +37,7 @@ func TestReasoningFieldsRemainTransientAndOrdered(t *testing.T) {
 			sse.WriteString(`data: {"model":"m","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}` + "\n\ndata: [DONE]\n\n")
 			provider := newProvider(t, openaicompat.ProviderConfig{Name: "p", BaseURL: "https://example.test"}, clientFunc(func(context.Context, *http.Request) (*http.Response, error) {
 				return response(http.StatusOK, sse.String()), nil
-			})).(model.StreamingProvider)
+			}))
 			var texts []string
 			var semantics []model.StreamSemantic
 			active := map[model.StreamSemantic]bool{}
@@ -81,7 +81,7 @@ func TestReasoningHandlerFailureAndCancellationStopSameChunk(t *testing.T) {
 		body := &trackingBody{Reader: strings.NewReader(`data: {"model":"m","choices":[{"index":0,"delta":{"role":"assistant","reasoning_content":"think","content":"must not arrive"},"finish_reason":"stop"}]}` + "\n\ndata: [DONE]\n\n")}
 		provider := newProvider(t, openaicompat.ProviderConfig{Name: "p", BaseURL: "https://example.test"}, clientFunc(func(context.Context, *http.Request) (*http.Response, error) {
 			return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: body}, nil
-		})).(model.StreamingProvider)
+		}))
 		ctx, cancel := context.WithCancel(context.Background())
 		consumerErr := errors.New("consumer stopped")
 		count := 0

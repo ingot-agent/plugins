@@ -333,7 +333,7 @@ func TestStreamMapsTypedResponsesEvents(t *testing.T) {
 	provider := newProvider(t, openairesponses.ProviderConfig{Name: "p", BaseURL: "https://example.test"}, clientFunc(func(_ context.Context, request *http.Request) (*http.Response, error) {
 		requestBody, _ = io.ReadAll(request.Body)
 		return httpResponse(http.StatusOK, sse), nil
-	}), assetResolver{data: map[string][]byte{}}).(model.StreamingProvider)
+	}), assetResolver{data: map[string][]byte{}})
 
 	var events []model.StreamEvent
 	result, err := provider.Stream(context.Background(), model.Request{Model: "m"}, func(event model.StreamEvent) error {
@@ -377,7 +377,7 @@ func TestStreamMapsTypedResponsesEvents(t *testing.T) {
 func TestStreamRejectsMissingTerminalAndMismatchedFinal(t *testing.T) {
 	t.Run("missing terminal", func(t *testing.T) {
 		body := "event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"output_index\":0,\"content_index\":0,\"delta\":\"x\"}\n\n"
-		provider := newProvider(t, openairesponses.ProviderConfig{Name: "p", BaseURL: "https://example.test"}, staticClient(body), assetResolver{data: map[string][]byte{}}).(model.StreamingProvider)
+		provider := newProvider(t, openairesponses.ProviderConfig{Name: "p", BaseURL: "https://example.test"}, staticClient(body), assetResolver{data: map[string][]byte{}})
 		_, err := provider.Stream(context.Background(), model.Request{Model: "m"}, func(model.StreamEvent) error { return nil })
 		if !errors.Is(err, openairesponses.ErrProtocol) {
 			t.Fatalf("error = %v", err)
@@ -393,7 +393,7 @@ func TestStreamRejectsMissingTerminalAndMismatchedFinal(t *testing.T) {
 			`data: {"type":"response.completed","response":{"id":"resp_1","object":"response","status":"completed","model":"m","output":[{"type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"y"}]}]}}`,
 			``,
 		}, "\n")
-		provider := newProvider(t, openairesponses.ProviderConfig{Name: "p", BaseURL: "https://example.test"}, staticClient(body), assetResolver{data: map[string][]byte{}}).(model.StreamingProvider)
+		provider := newProvider(t, openairesponses.ProviderConfig{Name: "p", BaseURL: "https://example.test"}, staticClient(body), assetResolver{data: map[string][]byte{}})
 		_, err := provider.Stream(context.Background(), model.Request{Model: "m"}, func(model.StreamEvent) error { return nil })
 		if !errors.Is(err, openairesponses.ErrProtocol) {
 			t.Fatalf("error = %v", err)
@@ -406,7 +406,7 @@ func TestStreamPreservesHandlerErrorAndAppliesLimit(t *testing.T) {
 	body := &trackingBody{Reader: strings.NewReader("data: {\"type\":\"response.output_text.delta\",\"output_index\":0,\"content_index\":0,\"delta\":\"x\"}\n\n")}
 	provider := newProvider(t, openairesponses.ProviderConfig{Name: "p", BaseURL: "https://example.test"}, clientFunc(func(context.Context, *http.Request) (*http.Response, error) {
 		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: body}, nil
-	}), assetResolver{data: map[string][]byte{}}).(model.StreamingProvider)
+	}), assetResolver{data: map[string][]byte{}})
 	_, err := provider.Stream(context.Background(), model.Request{Model: "m"}, func(event model.StreamEvent) error {
 		if event.Kind == model.StreamPartStart {
 			return handlerErr
@@ -417,7 +417,7 @@ func TestStreamPreservesHandlerErrorAndAppliesLimit(t *testing.T) {
 		t.Fatalf("error = %v, closed = %v", err, body.isClosed())
 	}
 
-	provider = newProvider(t, openairesponses.ProviderConfig{Name: "p", BaseURL: "https://example.test", MaxResponseBytes: 8}, staticClient(strings.Repeat("x", 9)), assetResolver{data: map[string][]byte{}}).(model.StreamingProvider)
+	provider = newProvider(t, openairesponses.ProviderConfig{Name: "p", BaseURL: "https://example.test", MaxResponseBytes: 8}, staticClient(strings.Repeat("x", 9)), assetResolver{data: map[string][]byte{}})
 	_, err = provider.Stream(context.Background(), model.Request{Model: "m"}, func(model.StreamEvent) error { return nil })
 	if !errors.Is(err, openairesponses.ErrResponseLimit) {
 		t.Fatalf("limit error = %v", err)
@@ -454,7 +454,7 @@ func TestProviderSupportsConcurrentCompleteAndStream(t *testing.T) {
 		return httpResponse(http.StatusOK, `{"id":"resp_1","object":"response","status":"completed","model":"m","output":[]}`), nil
 	})
 	provider := newProvider(t, openairesponses.ProviderConfig{Name: "p", BaseURL: "https://example.test"}, client, assetResolver{data: map[string][]byte{}})
-	streaming := provider.(model.StreamingProvider)
+	streaming := provider
 	errorsFound := make(chan error, 20)
 	var wait sync.WaitGroup
 	for i := 0; i < 10; i++ {
@@ -492,13 +492,13 @@ func staticClient(body string) httpx.Client {
 	})
 }
 
-func newProvider(t *testing.T, cfg openairesponses.ProviderConfig, client httpx.Client, assets asset.Resolver) model.Provider {
+func newProvider(t *testing.T, cfg openairesponses.ProviderConfig, client httpx.Client, assets asset.Resolver) model.ProviderEntry {
 	t.Helper()
 	exports, _, err := openairesponses.New(context.Background(), withState(t, openairesponses.Config{Providers: []openairesponses.ProviderConfig{cfg}}, openairesponses.Dependencies{HTTP: client, Assets: assets}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	return exports.Providers[0].Value
+	return providerEntries(t, exports)[0]
 }
 
 type trackingBody struct {

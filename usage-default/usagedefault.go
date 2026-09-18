@@ -52,9 +52,9 @@ type Route struct {
 // Dependencies contains the request resolver used to materialize model
 // runtime defaults.
 type Dependencies struct {
-	Resolver  model.RequestResolver
-	Providers []ingotabi.Named[model.Provider]
-	State     state.Scope
+	Resolver        model.RequestResolver
+	ProviderSources []model.ProviderSource
+	State           state.Scope
 }
 
 // Exports contains the model input counter.
@@ -105,12 +105,10 @@ func New(ctx context.Context, deps Dependencies) (Exports, ingotabi.Cleanup, err
 	if isNil(deps.Resolver) || isNil(deps.State) {
 		return Exports{}, nil, fmt.Errorf("resolver and state dependencies are required: %w", ErrInvalidConfig)
 	}
-	if err := ingotabi.CheckUniqueNames(deps.Providers); err != nil {
-		return Exports{}, nil, fmt.Errorf("providers: %w: %w", ErrInvalidConfig, err)
-	}
-	providerNames := make([]string, 0, len(deps.Providers))
-	for _, provider := range deps.Providers {
-		providerNames = append(providerNames, provider.Name)
+	for i, source := range deps.ProviderSources {
+		if isNil(source) {
+			return Exports{}, nil, fmt.Errorf("provider_sources[%d] is nil: %w", i, ErrInvalidConfig)
+		}
 	}
 	cfg, err := loadConfig(deps.State.Dir())
 	if err != nil {
@@ -150,7 +148,7 @@ func New(ctx context.Context, deps Dependencies) (Exports, ingotabi.Cleanup, err
 		instance.close()
 		return nil
 	})
-	return Exports{Counter: instance, Operations: []operation.Operation{&setupOperation{scope: deps.State, providerNames: providerNames, active: active}}}, cleanup, nil
+	return Exports{Counter: instance, Operations: []operation.Operation{&setupOperation{scope: deps.State, providerSources: append([]model.ProviderSource(nil), deps.ProviderSources...), active: active}}}, cleanup, nil
 }
 
 func newCounter(resolver model.RequestResolver, routes []compiledRoute, capacity int) *counter {

@@ -4,6 +4,14 @@ All notable changes to this plugin are documented in this file.
 
 ## Unreleased
 
+### Changed
+
+- Replace static provider exports with a live `model.ProviderSource`; saved
+  provider configuration applies to subsequent calls without restarting,
+  while existing calls retain their original provider instances.
+- Expose provider invocation callbacks directly in `model.ProviderEntry`,
+  removing the old provider interfaces and streaming type assertions.
+
 ### Fixed
 
 - Map the leading SDK system message to the Responses API `instructions`

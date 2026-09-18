@@ -6,9 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"slices"
 
 	"github.com/ingot-agent/ingot-abi/state"
 	"github.com/ingot-agent/sdk/interaction"
+	"github.com/ingot-agent/sdk/model"
 	"github.com/ingot-agent/sdk/operation"
 )
 
@@ -24,9 +26,9 @@ const (
 // scope. The Plugin owns validation and persistence; the Host never decodes
 // plugin configuration.
 type setupOperation struct {
-	scope         state.Scope
-	providerNames []string
-	active        normalizedConfig
+	scope           state.Scope
+	providerSources []model.ProviderSource
+	active          normalizedConfig
 }
 
 var _ operation.Operation = (*setupOperation)(nil)
@@ -52,14 +54,16 @@ func (o *setupOperation) Invoke(ctx context.Context, request operation.Request) 
 	if err != nil {
 		return operation.Result{}, err
 	}
-	providerField := interaction.Field{Name: "provider", Label: "Provider", Description: "Empty uses the provider from the request being compacted.", Kind: interaction.FieldString, Required: false, Default: valuePointer(interaction.StringValue(current.Provider))}
-	if len(o.providerNames) > 0 {
-		providerField.Kind = interaction.FieldChoice
-		providerField.Required = true
-		providerField.Options = []interaction.Option{{Value: "", Label: "Request provider"}}
-		for _, name := range o.providerNames {
-			providerField.Options = append(providerField.Options, interaction.Option{Value: name, Label: name})
-		}
+	providerNames, err := currentProviderNames(ctx, o.providerSources)
+	if err != nil {
+		return operation.Result{}, err
+	}
+	providerField := interaction.Field{Name: "provider", Label: "Provider", Description: "Empty uses the provider from the request being compacted.", Kind: interaction.FieldChoice, Required: true, Options: []interaction.Option{{Value: "", Label: "Request provider"}}}
+	if current.Provider == "" || slices.Contains(providerNames, current.Provider) {
+		providerField.Default = valuePointer(interaction.StringValue(current.Provider))
+	}
+	for _, name := range providerNames {
+		providerField.Options = append(providerField.Options, interaction.Option{Value: name, Label: name})
 	}
 	response, err := request.Interaction.Request(ctx, interaction.Request{
 		Name:        setupOperationName,
@@ -117,7 +121,11 @@ func (o *setupOperation) Invoke(ctx context.Context, request operation.Request) 
 	if v, ok := answerInteger(response, "max_summary_passes"); ok {
 		updated.MaxSummaryPasses = int(v)
 	}
-	normalized, err := normalizeConfigForProviders(updated, o.providerNames)
+	providerNames, err = currentProviderNames(ctx, o.providerSources)
+	if err != nil {
+		return operation.Result{}, err
+	}
+	normalized, err := normalizeConfigForProviders(updated, providerNames)
 	if err != nil {
 		return operation.Result{}, err
 	}

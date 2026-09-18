@@ -6,6 +6,10 @@ All notable changes to this plugin are documented in this file.
 
 ### Changed
 
+- Consume provider entries with required Complete and optional Stream callbacks;
+  remove dependency on the former provider execution interfaces.
+- Discover provider choices through live `model.ProviderSource` snapshots,
+  validate selections at submission, and allow repairing removed providers.
 - Expose configuration as `/context-compact config` using a stable plugin Group and local operation Name.
 - Validate setup with the same normalization used at construction and present
   the available providers as a closed choice.

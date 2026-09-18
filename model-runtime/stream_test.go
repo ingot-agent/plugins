@@ -6,7 +6,6 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/ingot-agent/ingot-abi"
 	modelruntime "github.com/ingot-agent/plugins/model-runtime"
 	"github.com/ingot-agent/sdk/content"
 	"github.com/ingot-agent/sdk/model"
@@ -46,7 +45,7 @@ func TestReasoningStreamValidation(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			provider := &eventStreamingProvider{events: tc.events, response: model.Response{Message: model.Message{Role: model.RoleAssistant, Content: tc.final}}}
-			exports, _, err := modelruntime.New(context.Background(), withState(t, modelruntime.Config{DefaultModel: "m"}, modelruntime.Dependencies{Providers: []ingotabi.Named[model.Provider]{{Name: "p", Value: provider}}}))
+			exports, _, err := modelruntime.New(context.Background(), withState(t, modelruntime.Config{DefaultModel: "m"}, modelruntime.Dependencies{ProviderSources: []model.ProviderSource{fixedProviderSource{Name: "p", Complete: provider.Complete, Stream: provider.Stream}}}))
 			if err != nil {
 				t.Fatal(err)
 			}

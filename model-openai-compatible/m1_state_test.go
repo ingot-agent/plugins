@@ -1,12 +1,14 @@
 package openaicompat_test
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"reflect"
 	"testing"
 
 	openaicompat "github.com/ingot-agent/plugins/model-openai-compatible"
+	"github.com/ingot-agent/sdk/model"
 
 	"github.com/pelletier/go-toml/v2"
 )
@@ -15,6 +17,18 @@ import (
 // directory. Tests persist this Plugin's own configuration there exactly as a
 // real runtime hands the scope to the Plugin.
 type testStateScope struct{ dir string }
+
+func providerEntries(t *testing.T, exports openaicompat.Exports) []model.ProviderEntry {
+	t.Helper()
+	if exports.Source == nil {
+		t.Fatal("provider source is nil")
+	}
+	entries, err := exports.Source.Snapshot(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return entries
+}
 
 func (s testStateScope) Dir() string { return s.dir }
 

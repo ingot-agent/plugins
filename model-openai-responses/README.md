@@ -1,7 +1,8 @@
 # model-openai-responses
 
 `model-openai-responses` adapts the OpenAI Responses API to Ingot's
-`model.Provider` and `model.StreamingProvider` contracts.
+`model.ProviderSource` contract. Each named `model.ProviderEntry` provides
+complete and streaming invocation callbacks bound to its configuration.
 
 The plugin sends requests to `POST <base_url>/responses`. It supports:
 
@@ -13,6 +14,12 @@ The plugin sends requests to `POST <base_url>/responses`. It supports:
   transient reasoning text or summaries;
 - multiple named providers with model allowlists, custom headers, response
   limits, and secret-safe interactive configuration.
+
+The plugin exports a stable `model.ProviderSource`, including before its first
+provider is configured. Saving `/model-openai-responses config` immediately
+publishes the updated providers for subsequent model calls and configuration
+forms. Existing requests and streams finish using their original configuration;
+no restart is required. The configuration is persisted before it becomes active.
 
 Requests explicitly set `store` to `false`, so the provider remains stateless
 and Ingot session history stays authoritative. SDK `model.Message` does not
