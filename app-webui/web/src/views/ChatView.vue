@@ -18,7 +18,6 @@ import ExecutionPanel from '../components/ExecutionPanel.vue'
 import SessionMenu from '../components/SessionMenu.vue'
 import StatusBadge from '../components/StatusBadge.vue'
 import Overlay from '../components/Overlay.vue'
-import DirectoryPicker from '../components/DirectoryPicker.vue'
 import JsonBlock from '../components/JsonBlock.vue'
 import WorkspaceHeader from '../components/WorkspaceHeader.vue'
 import { readPreference, savePreference } from '../theme'
@@ -38,21 +37,15 @@ const hostStates = computed(() => Object.values(runtime.interactionStates).filte
 const sending = ref(false)
 const details = ref(readPreference('details', 'closed') === 'open')
 const showToolCalls = ref(readPreference('tool-calls', 'visible') === 'visible')
-// The workspace root for a brand-new conversation is chosen here, then bound
-// immutably to the created Session. The most recently used root is remembered
-// for convenience; the durable authority remains the Session binding.
-const workspace = ref(localStorage.getItem('ingot.workspace') || '')
-const pickerOpen = ref(false)
+// An explicit selection applies only to the pending new Session. Empty means
+// the server-owned default Workspace will be bound when the Session is created.
+const workspace = ref('')
+const selectingWorkspace = ref(false)
 const assigningWorkspace = ref(false)
 const needsWorkspace = computed(() => Boolean(session.value && !session.value.workspace))
-function rememberWorkspace() {
-  const root = workspace.value.trim()
-  if (root) localStorage.setItem('ingot.workspace', root)
-}
+const effectiveWorkspace = computed(() => workspace.value.trim() || runtime.defaultWorkspace)
 async function selectWorkspace(path: string) {
   workspace.value = path
-  pickerOpen.value = false
-  rememberWorkspace()
   if (!needsWorkspace.value || !sessionId.value) return
   assigningWorkspace.value = true
   try {
@@ -61,6 +54,17 @@ async function selectWorkspace(path: string) {
     runtime.notify(errorMessage(error))
   } finally {
     assigningWorkspace.value = false
+  }
+}
+async function chooseWorkspace() {
+  selectingWorkspace.value = true
+  try {
+    const result = await runtime.pickWorkspace(effectiveWorkspace.value)
+    if (result.path) await selectWorkspace(result.path)
+  } catch (error) {
+    runtime.notify(errorMessage(error))
+  } finally {
+    selectingWorkspace.value = false
   }
 }
 const narrow = ref(window.matchMedia('(max-width: 1199px)').matches)
@@ -124,12 +128,10 @@ onMounted(() => {
 watch(details, value => savePreference('details', value ? 'open' : 'closed'))
 watch(showToolCalls, value => savePreference('tool-calls', value ? 'visible' : 'hidden'))
 watch(sessionId, id => { runtime.activeSession = id; following.value = true; if (id) void runtime.loadHistory(id) }, { immediate: true })
-// A directory chosen in the sidebar starts a brand-new conversation scoped to that workspace.
-watch(() => route.query.workspace, value => {
-  if (welcome.value && typeof value === 'string' && value) {
-    workspace.value = value
-    rememberWorkspace()
-  }
+// A directory chosen in the sidebar starts one new conversation in that
+// Workspace. Ordinary new conversations always reset to the server default.
+watch(() => [sessionId.value, route.query.workspace] as const, ([id, value]) => {
+  workspace.value = !id && typeof value === 'string' ? value : ''
 }, { immediate: true })
 function onScroll() { if (scroll.value) following.value = scroll.value.scrollHeight - scroll.value.scrollTop - scroll.value.clientHeight < 100 }
 function scrollToBottom(behavior: ScrollBehavior = 'auto') {
@@ -167,20 +169,10 @@ async function send(input: string, attachments: Attachment[], done: () => void) 
     let id = sessionId.value
     if (!id) {
       const root = workspace.value.trim()
-      if (!root) {
-        runtime.notify(t('workspaceRequired'), 'error')
-        return
-      }
-      rememberWorkspace()
       const title = titleForFirstMessage(input) || t('newChat')
       const item = await runtime.createSession(title, root)
       id = item.id
       await router.push('/sessions/' + encodeURIComponent(id))
-    }
-    if (needsWorkspace.value) {
-      runtime.notify(t('workspaceRequiredExisting'), 'error')
-      pickerOpen.value = true
-      return
     }
     await runtime.send(id, input, attachments)
     done()
@@ -239,23 +231,22 @@ onBeforeUnmount(() => { media.removeEventListener('change', resize); composerObs
       </div>
       <div ref="composerDock" class="composer-dock" :class="{ 'welcome-composer': welcome }">
         <div v-if="welcome" class="workspace-picker">
-          <button type="button" class="workspace-browse" :aria-label="t('chooseWorkspace')" @click="pickerOpen = true">
-            <FolderOpen :size="16" /><span>{{ t('chooseWorkspace') }}</span>
+          <button type="button" class="workspace-browse" :aria-label="t('chooseWorkspace')" :disabled="selectingWorkspace" @click="chooseWorkspace">
+            <LoaderCircle v-if="selectingWorkspace" class="spin" :size="16" /><FolderOpen v-else :size="16" /><span>{{ t(selectingWorkspace ? 'workspaceSelecting' : 'chooseWorkspace') }}</span>
           </button>
-          <span v-if="workspace" class="workspace-chosen truncate" :title="workspace">{{ workspace }}</span>
-          <span class="muted text-xs shrink-0">{{ t('workspaceHint') }}</span>
+          <span v-if="effectiveWorkspace" class="workspace-chosen truncate" :title="effectiveWorkspace">{{ effectiveWorkspace }}</span>
+          <span class="muted text-xs shrink-0">{{ t(workspace ? 'workspaceHint' : 'defaultWorkspace') }}</span>
         </div>
         <button v-if="!following && !welcome" class="latest-button" @click="latest"><ArrowDown :size="14" />{{ t('showLatest') }}</button>
         <div v-if="needsWorkspace" class="workspace-assignment-banner">
-          <div><strong>{{ t('workspaceRequiredTitle') }}</strong><p>{{ t('workspaceRequiredExisting') }}</p></div>
-          <button type="button" class="btn small" :disabled="assigningWorkspace" @click="pickerOpen = true"><LoaderCircle v-if="assigningWorkspace" class="spin" :size="14" /><FolderOpen v-else :size="14" />{{ t(assigningWorkspace ? 'workspaceAssigning' : 'chooseWorkspace') }}</button>
+          <div><strong>{{ t('workspaceDefaultTitle') }}</strong><p>{{ t('workspaceDefaultExisting', { path: runtime.defaultWorkspace }) }}</p></div>
+          <button type="button" class="btn small" :disabled="selectingWorkspace || assigningWorkspace" @click="chooseWorkspace"><LoaderCircle v-if="selectingWorkspace || assigningWorkspace" class="spin" :size="14" /><FolderOpen v-else :size="14" />{{ t(assigningWorkspace ? 'workspaceAssigning' : selectingWorkspace ? 'workspaceSelecting' : 'chooseWorkspace') }}</button>
         </div>
         <div v-if="session?.archivedAt" class="archive-banner"><span>{{ t('archivedSession') }}</span><button class="btn small" @click="restore">{{ t('restore') }}</button></div>
-        <Composer :session-key="sessionId || 'new'" :running="running" :archived="!!session?.archivedAt || (!!sessionId && !session)" :disabled="needsWorkspace || assigningWorkspace" :sending="sending" @send="send" @command="$emit('operation', $event, sessionId)" />
+        <Composer :session-key="sessionId || 'new'" :running="running" :archived="!!session?.archivedAt || (!!sessionId && !session)" :disabled="selectingWorkspace || assigningWorkspace" :sending="sending" @send="send" @command="$emit('operation', $event, sessionId)" />
       </div>
     </section>
     <aside v-if="details && !narrow" class="details-sidebar"><header><h2>{{ t('execution') }}</h2><button class="icon-button" :aria-label="t('close')" @click="details = false"><X :size="17" /></button></header><ExecutionPanel :session-id="sessionId" /></aside>
     <Overlay :open="details && narrow" :title="t('execution')" drawer @update:open="details = $event"><ExecutionPanel :session-id="sessionId" /></Overlay>
   </div>
-  <DirectoryPicker :open="pickerOpen" :initial-path="workspace || undefined" @update:open="pickerOpen = $event" @select="selectWorkspace" />
 </template>

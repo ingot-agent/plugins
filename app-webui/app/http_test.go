@@ -8,8 +8,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
-	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -221,7 +219,12 @@ func testApplication(t *testing.T) *application {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	a := &application{backend: deps.Backend, agent: controller, sessions: sessions}
+	defaultWorkspace := t.TempDir()
+	a := &application{
+		backend: deps.Backend, agent: controller, sessions: sessions,
+		defaultWorkspace: defaultWorkspace,
+		workspacePicker:  &stubWorkspacePicker{canceled: true},
+	}
 	a.turns = newTurnRegistry(ctx, controller, deps.Backend.Events())
 	a.operations, err = newOperationController(nil)
 	if err != nil {
@@ -248,6 +251,20 @@ func testApplication(t *testing.T) *application {
 		}
 	})
 	return a
+}
+
+type stubWorkspacePicker struct {
+	path      string
+	canceled  bool
+	err       error
+	initial   string
+	callCount int
+}
+
+func (p *stubWorkspacePicker) Select(_ context.Context, initialPath string) (string, bool, error) {
+	p.initial = initialPath
+	p.callCount++
+	return p.path, p.canceled, p.err
 }
 
 func TestHTTPRejectsInvalidJSONObjects(t *testing.T) {
@@ -388,7 +405,7 @@ func TestSessionHTTPAndBootstrap(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &state); err != nil {
 		t.Fatal(err)
 	}
-	if w.Header().Get("Cache-Control") != "no-store" || state.Cursor != 2 || len(state.Sessions) != 1 || state.Sessions[0].Title != "renamed" {
+	if w.Header().Get("Cache-Control") != "no-store" || state.Cursor != 2 || state.Workspace.DefaultPath != a.defaultWorkspace || len(state.Sessions) != 1 || state.Sessions[0].Title != "renamed" {
 		t.Fatalf("state = %#v, headers = %v", state, w.Header())
 	}
 	if !state.Agent.Capabilities.Run || state.Agent.Capabilities.Stream || state.Turns == nil || state.Interactions == nil || state.InteractionStates == nil {
@@ -506,17 +523,21 @@ func readResponse(t *testing.T, response *http.Response, status int) []byte {
 	return body
 }
 
-func TestCreateSessionRequiresAbsoluteWorkspace(t *testing.T) {
+func TestCreateSessionUsesDefaultWorkspaceAndRejectsInvalidExplicitPath(t *testing.T) {
 	a := testApplication(t)
-	for _, body := range []string{
-		`{"title":"x","workspace":""}`,
-		`{"title":"x","workspace":"relative/path"}`,
-		`{"title":"x"}`,
-	} {
+	for _, body := range []string{`{"title":"empty","workspace":""}`, `{"title":"missing"}`} {
 		w := httptest.NewRecorder()
 		a.routes().ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/sessions", strings.NewReader(body)))
-		if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), `"workspace_required"`) {
-			t.Fatalf("body %s = %d %s", body, w.Code, w.Body.String())
+		var item appbackend.Session
+		if w.Code != http.StatusCreated || json.Unmarshal(w.Body.Bytes(), &item) != nil || item.Workspace != a.defaultWorkspace {
+			t.Fatalf("default workspace body %s = %d %s", body, w.Code, w.Body.String())
+		}
+	}
+	for _, body := range []string{`{"title":"relative","workspace":"relative/path"}`, `{"title":"missing","workspace":"/path/that/does/not/exist"}`} {
+		w := httptest.NewRecorder()
+		a.routes().ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/sessions", strings.NewReader(body)))
+		if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), `"workspace_invalid"`) {
+			t.Fatalf("invalid workspace body %s = %d %s", body, w.Code, w.Body.String())
 		}
 	}
 }
@@ -690,7 +711,7 @@ func TestSessionCreateCompensationSurvivesRequestCancellation(t *testing.T) {
 	}
 }
 
-func TestUnboundSessionCanAssignWorkspaceOnce(t *testing.T) {
+func TestUnboundSessionUsesDefaultWorkspaceOnFirstTurn(t *testing.T) {
 	a := testApplication(t)
 	controller := a.sessions.(*defaultSessionController)
 	metadata, err := controller.store.Create(context.Background(), session.CreateRequest{Title: "legacy"})
@@ -700,8 +721,21 @@ func TestUnboundSessionCanAssignWorkspaceOnce(t *testing.T) {
 
 	turn := httptest.NewRecorder()
 	a.routes().ServeHTTP(turn, httptest.NewRequest(http.MethodPost, "/api/turns", strings.NewReader(`{"sessionId":"`+string(metadata.ID)+`","input":"hello"}`)))
-	if turn.Code != http.StatusConflict || !strings.Contains(turn.Body.String(), `"workspace_not_assigned"`) {
+	if turn.Code != http.StatusAccepted {
 		t.Fatalf("unbound turn = %d %s", turn.Code, turn.Body.String())
+	}
+	item, err := a.sessions.Get(context.Background(), metadata.ID)
+	if err != nil || item.Workspace != a.defaultWorkspace {
+		t.Fatalf("auto-bound session = %#v, %v", item, err)
+	}
+}
+
+func TestUnboundSessionCanAssignWorkspaceOnce(t *testing.T) {
+	a := testApplication(t)
+	controller := a.sessions.(*defaultSessionController)
+	metadata, err := controller.store.Create(context.Background(), session.CreateRequest{Title: "legacy"})
+	if err != nil {
+		t.Fatal(err)
 	}
 
 	root := t.TempDir()
@@ -726,35 +760,84 @@ func TestUnboundSessionCanAssignWorkspaceOnce(t *testing.T) {
 	}
 }
 
-func TestWorkspaceBrowseListsSubdirectories(t *testing.T) {
-	root := t.TempDir()
-	sub := filepath.Join(root, "project-a")
-	if err := os.MkdirAll(sub, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(root, "notes.txt"), []byte("x"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+func TestForkBindsLegacySourceToDefaultWorkspace(t *testing.T) {
 	a := testApplication(t)
-	w := httptest.NewRecorder()
-	a.routes().ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/workspace/browse?path="+url.QueryEscape(root), nil))
-	if w.Code != http.StatusOK {
-		t.Fatalf("browse = %d %s", w.Code, w.Body.String())
+	controller := a.sessions.(*defaultSessionController)
+	source, err := controller.store.Create(context.Background(), session.CreateRequest{Title: "legacy"})
+	if err != nil {
+		t.Fatal(err)
 	}
-	var result appbackend.WorkspaceBrowse
+	w := httptest.NewRecorder()
+	a.routes().ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/sessions/"+string(source.ID)+"/fork", strings.NewReader(`{"title":"fork"}`)))
+	if w.Code != http.StatusCreated {
+		t.Fatalf("fork legacy session = %d %s", w.Code, w.Body.String())
+	}
+	var fork appbackend.Session
+	if err := json.Unmarshal(w.Body.Bytes(), &fork); err != nil {
+		t.Fatal(err)
+	}
+	boundSource, err := a.sessions.Get(context.Background(), source.ID)
+	if err != nil || boundSource.Workspace != a.defaultWorkspace || fork.Workspace != a.defaultWorkspace {
+		t.Fatalf("source = %#v, fork = %#v, err = %v", boundSource, fork, err)
+	}
+}
+
+func TestWorkspacePickerReturnsSelectionAndCancellation(t *testing.T) {
+	a := testApplication(t)
+	selected := t.TempDir()
+	picker := &stubWorkspacePicker{path: selected}
+	a.workspacePicker = picker
+	w := httptest.NewRecorder()
+	a.routes().ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/workspace/select", strings.NewReader(`{}`)))
+	if w.Code != http.StatusOK {
+		t.Fatalf("select = %d %s", w.Code, w.Body.String())
+	}
+	var result appbackend.WorkspaceSelection
 	if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil {
 		t.Fatal(err)
 	}
-	if result.Path != root {
-		t.Fatalf("path = %q want %q", result.Path, root)
+	if result.Path == nil || *result.Path != selected || picker.initial != a.defaultWorkspace {
+		t.Fatalf("selection = %#v, picker = %#v", result, picker)
 	}
-	if len(result.Directories) != 1 || result.Directories[0].Name != "project-a" || result.Directories[0].Path != sub {
-		t.Fatalf("directories = %#v", result.Directories)
-	}
-	// A relative path must be rejected.
+	picker.path, picker.canceled = "", true
 	w = httptest.NewRecorder()
-	a.routes().ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/workspace/browse?path=relative", nil))
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("relative browse = %d", w.Code)
+	a.routes().ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/workspace/select", strings.NewReader(`{"initialPath":`+strconv.Quote(selected)+`}`)))
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"path":null`) {
+		t.Fatalf("cancel = %d %s", w.Code, w.Body.String())
+	}
+}
+
+func TestWorkspacePickerRejectsInvalidInitialPathAndConcurrentDialog(t *testing.T) {
+	a := testApplication(t)
+	picker := &stubWorkspacePicker{canceled: true}
+	a.workspacePicker = picker
+	w := httptest.NewRecorder()
+	a.routes().ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/workspace/select", strings.NewReader(`{"initialPath":"relative"}`)))
+	if w.Code != http.StatusBadRequest || picker.callCount != 0 {
+		t.Fatalf("relative initial path = %d %s", w.Code, w.Body.String())
+	}
+	a.workspacePickerMu.Lock()
+	defer a.workspacePickerMu.Unlock()
+	w = httptest.NewRecorder()
+	a.routes().ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/workspace/select", strings.NewReader(`{}`)))
+	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "workspace_picker_busy") {
+		t.Fatalf("busy picker = %d %s", w.Code, w.Body.String())
+	}
+}
+
+func TestWorkspacePickerReportsNativeFailures(t *testing.T) {
+	a := testApplication(t)
+	a.workspacePicker = &stubWorkspacePicker{err: errors.New("dialog crashed")}
+	w := httptest.NewRecorder()
+	a.routes().ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/workspace/select", strings.NewReader(`{}`)))
+	if w.Code != http.StatusInternalServerError || !strings.Contains(w.Body.String(), `"workspace_picker_failed"`) {
+		t.Fatalf("failed picker = %d %s", w.Code, w.Body.String())
+	}
+
+	a.workspacePicker = &stubWorkspacePicker{err: errWorkspacePickerUnavailable}
+	w = httptest.NewRecorder()
+	a.routes().ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/workspace/select", strings.NewReader(`{}`)))
+	if w.Code != http.StatusServiceUnavailable || !strings.Contains(w.Body.String(), `"workspace_picker_unavailable"`) {
+		t.Fatalf("unavailable picker = %d %s", w.Code, w.Body.String())
 	}
 }

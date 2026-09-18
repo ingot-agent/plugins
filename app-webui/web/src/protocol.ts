@@ -7,6 +7,7 @@ export interface Session {
   updatedAt: string
   archivedAt?: string
 }
+export interface WorkspaceSelection { path: string | null }
 export interface Part {
   kind: string
   text?: string
@@ -125,6 +126,7 @@ export interface Snapshot {
   cursor: number
   agent: { capabilities: { run: boolean; stream: boolean } }
   assets?: { available: boolean; maxBytes: number }
+  workspace?: { defaultPath: string }
   sessions: Session[]
   turns: Turn[]
   interactions: Interaction[]

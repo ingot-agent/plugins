@@ -17,6 +17,7 @@ function deferred<T>() {
 const session = (title: string): Session => ({ id: 's', title, createdAt: '2026-01-01', updatedAt: '2026-01-01' })
 const snapshot = (): Snapshot => ({
   cursor: 4, agent: { capabilities: { run: true, stream: true } },
+  workspace: { defaultPath: '/state/workspace' },
   sessions: [session('Initial')], turns: [], interactions: [], interactionStates: [], operations: [], operationInvocations: [],
 })
 
@@ -82,6 +83,15 @@ describe('runtime request and event ordering', () => {
     await runtime.assignWorkspace('s', '/repo/project')
     expect(command).toHaveBeenCalledWith('/sessions/s/workspace', 'POST', { workspace: '/repo/project' })
     expect(runtime.sessions).toEqual([bound])
+  })
+
+  it('loads the default workspace and requests the native picker', async () => {
+    const runtime = useRuntime()
+    runtime.bootstrap(snapshot())
+    vi.mocked(command).mockResolvedValueOnce({ path: '/repo/project' })
+    await expect(runtime.pickWorkspace(runtime.defaultWorkspace)).resolves.toEqual({ path: '/repo/project' })
+    expect(runtime.defaultWorkspace).toBe('/state/workspace')
+    expect(command).toHaveBeenCalledWith('/workspace/select', 'POST', { initialPath: '/state/workspace' })
   })
 
   it('retains ordered tool cards after detailed trace retention rolls over', () => {

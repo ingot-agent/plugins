@@ -28,9 +28,20 @@ go build -o ingot ./cmd/ingot
 
 ## 工作区能力
 
-- 新建会话时通过目录选择器绑定一个已存在的本地目录；Binding 在 Session 生命周期
-  内不可修改。由旧 schema 升级而来的未绑定 Session 会在发送消息前引导用户完成
-  一次性绑定。
+- 应用正常启动时在插件 state 目录下创建 `workspace/` 作为默认工作区，并通过
+  `GET /api/state` 的 `workspace.defaultPath` 暴露其规范绝对路径。新会话没有显式选择
+  目录时绑定此默认工作区；显式选择只影响当前待创建的会话，不会成为后续会话的默认值。
+- Workspace Binding 在 Session 生命周期内不可修改。由旧 schema 升级而来的未绑定
+  Session 在首次创建 Turn、发起带 Session scope 的 Operation 或 Fork 时自动绑定默认工作区；
+  用户也可以在这些动作发生前显式选择并完成一次性绑定。
+- Web 前端通过 `POST /api/workspace/select` 请求宿主打开系统目录选择器，不提供网页内目录
+  浏览回退。macOS 使用 `/usr/bin/osascript` 执行 AppleScript `choose folder`；Linux 优先执行
+  `zenity --file-selection --directory`，仅在找不到 Zenity 时回退到 KDialog；Windows 使用纯
+  Go 代码调用 COM `IFileOpenDialog`，并限制为真实文件系统目录。用户取消统一返回
+  `{ "path": null }`。
+- Linux Host 必须运行在设置了 `DISPLAY` 或 `WAYLAND_DISPLAY` 的桌面会话中，并安装
+  `zenity` 或 `kdialog`。SSH 和无界面服务器不会打开选择器，接口返回
+  `workspace_picker_unavailable`；默认工作区仍可直接使用。
 - 会话搜索、新建、重命名、归档/恢复、分叉与确认删除；正在执行时禁用生命周期变更。
 - Markdown、代码高亮/复制、折叠推理、工具调用卡片和独立执行详情；Turn、Round、Model、Tool 与用量信息来自公开 SDK 能力。
 - 流式输出及 Run-only 降级、停止执行、内联审批/自由输入、跨会话待处理请求抽屉。
@@ -62,6 +73,7 @@ M6 后端提供以下接口：
 | Turn | `POST /api/turns`、`DELETE /api/turns/{id}` |
 | Session | `GET/POST /api/sessions`、`GET/PATCH/DELETE /api/sessions/{id}`、`POST /api/sessions/{id}/workspace` |
 | Session 生命周期 | `POST /api/sessions/{id}/archive`、`/restore`、`/fork` |
+| Workspace 目录选择 | `POST /api/workspace/select` |
 | 历史消息 | `GET /api/sessions/{id}/history` |
 | Asset | `POST /api/assets`、`GET /api/assets/{id}` |
 | Operation | `GET /api/operations`、`POST /api/operations/{internal-id}`、`DELETE /api/operation-invocations/{id}` |
@@ -77,7 +89,7 @@ Turn 完成后会从运行中注册表移除，完整历史仍以 `agent.History
 
 十种 `agent.turn/round/model/tool.*` 事件仅来自 Observation，并保留 SDK correlation、sequence 和物化时间。需要将 `host` 导出的 Observer 接入 Observation Consumer 才会收到这些事件；后端本身不会创建 Consumer，也不会合成执行事实。Web invocation ID 与 SDK turn ID 始终是两个独立标识。
 
-历史消息和规范结果使用有序内容数组、字符串形式的 `kind`，以及显式的媒体来源。内联输出字节在 JSON 中编码为 base64；URI 和 Asset 输出来源会原样保留，不会被后端读取。Turn 输入仅接受基于 Asset 的附件。空文本和仅含附件的 Turn 会交由 Agent 的领域校验处理。未绑定 Workspace 的历史 Session 创建 Turn 时返回 `409 workspace_not_assigned`。
+历史消息和规范结果使用有序内容数组、字符串形式的 `kind`，以及显式的媒体来源。内联输出字节在 JSON 中编码为 base64；URI 和 Asset 输出来源会原样保留，不会被后端读取。Turn 输入仅接受基于 Asset 的附件。空文本和仅含附件的 Turn 会交由 Agent 的领域校验处理。未绑定 Workspace 的历史 Session 会在创建 Turn 前自动绑定默认工作区。
 
 ## Asset 上传与读取
 

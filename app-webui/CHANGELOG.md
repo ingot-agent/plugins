@@ -12,6 +12,9 @@
 - Route duplicate and ungrouped Operations by internal identity, and render
   deeply nested fields without changing their Interaction semantics.
 - Suppress compound Defaults that contain sensitive descendants.
+- Open the host platform's native directory picker for Workspace selection and
+  bind new or legacy unbound Sessions to a server-owned default Workspace when
+  no directory is explicitly selected.
 
 - Moved the Vue frontend source, build tooling, and browser tests into the plugin module so the complete Web UI shares one release lifecycle.
 
