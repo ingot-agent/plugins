@@ -14,6 +14,7 @@ import (
 	appbackend "github.com/ingot-agent/plugins/app-webui"
 	"github.com/ingot-agent/sdk/interaction"
 	"github.com/ingot-agent/sdk/operation"
+	"github.com/ingot-agent/sdk/session"
 )
 
 type testOperation struct {
@@ -250,6 +251,11 @@ func waitOperation(t *testing.T, a *application, id string, terminal bool) appba
 
 func TestOperationHTTPInteractionAndRefreshRetention(t *testing.T) {
 	a := testApplication(t)
+	controller := a.sessions.(*defaultSessionController)
+	metadata, err := controller.store.Create(context.Background(), session.CreateRequest{Title: "legacy operation"})
+	if err != nil || metadata.ID != "session-1" {
+		t.Fatalf("create legacy operation session = %#v, %v", metadata, err)
+	}
 	o := operationFixture("confirm")
 	observedSession := make(chan string, 1)
 	o.invoke = func(ctx context.Context, request operation.Request) (operation.Result, error) {
@@ -275,6 +281,10 @@ func TestOperationHTTPInteractionAndRefreshRetention(t *testing.T) {
 	}
 	if got := <-observedSession; got != "session-1" {
 		t.Fatalf("session scope = %q", got)
+	}
+	bound, err := a.sessions.Get(context.Background(), metadata.ID)
+	if err != nil || bound.Workspace != a.defaultWorkspace {
+		t.Fatalf("operation session workspace = %#v, %v", bound, err)
 	}
 	var pending appbackend.PendingInteraction
 	deadline := time.Now().Add(time.Second)
@@ -315,6 +325,24 @@ func TestOperationHTTPInteractionAndRefreshRetention(t *testing.T) {
 	a.routes().ServeHTTP(w, httptest.NewRequest(http.MethodDelete, "/api/operation-invocations/"+accepted.ID, nil))
 	if w.Code != http.StatusConflict {
 		t.Fatalf("cancel terminal operation = %d", w.Code)
+	}
+}
+
+func TestInvalidOperationDoesNotBindLegacySession(t *testing.T) {
+	a := testApplication(t)
+	controller := a.sessions.(*defaultSessionController)
+	metadata, err := controller.store.Create(context.Background(), session.CreateRequest{Title: "legacy"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := httptest.NewRecorder()
+	a.routes().ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/operations/missing", strings.NewReader(`{"sessionId":"session-1","input":{}}`)))
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("invalid operation = %d %s", w.Code, w.Body.String())
+	}
+	item, err := a.sessions.Get(context.Background(), metadata.ID)
+	if err != nil || item.Workspace != "" {
+		t.Fatalf("invalid operation mutated session = %#v, %v", item, err)
 	}
 }
 

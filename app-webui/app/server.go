@@ -60,6 +60,9 @@ type application struct {
 	serveDone            chan struct{}
 	serveErr             error
 	sessionMu            sync.Mutex
+	workspacePickerMu    sync.Mutex
+	defaultWorkspace     string
+	workspacePicker      workspacePicker
 }
 
 // New loads this Plugin's own configuration from its state scope, validates
@@ -104,6 +107,10 @@ func New(ctx context.Context, deps Dependencies) (Exports, ingotabi.Cleanup, err
 	if deps.Invocation.Mode() == invocation.ModeCheck {
 		return Exports{}, nil, nil
 	}
+	defaultWorkspace, err := prepareDefaultWorkspace(deps.State.Dir())
+	if err != nil {
+		return Exports{}, nil, fmt.Errorf("prepare default workspace: %w", err)
+	}
 	listener, err := net.Listen("tcp", normalized.Address)
 	if err != nil {
 		return Exports{}, nil, fmt.Errorf("listen on %s: %w", normalized.Address, err)
@@ -111,8 +118,11 @@ func New(ctx context.Context, deps Dependencies) (Exports, ingotabi.Cleanup, err
 	runCtx, cancel := context.WithCancel(ctx)
 	instance := &application{
 		config: normalized, backend: deps.Backend, agent: agentController, sessions: sessionController,
-		operations: operations,
-		listener:   listener, serveDone: make(chan struct{}),
+		operations:       operations,
+		listener:         listener,
+		serveDone:        make(chan struct{}),
+		defaultWorkspace: defaultWorkspace,
+		workspacePicker:  nativeWorkspacePicker{},
 	}
 	instance.turns = newTurnRegistry(runCtx, agentController, deps.Backend.Events())
 	instance.operationInvocations = newOperationRegistry(runCtx, operations, deps.Backend.Interactions(), deps.Backend.Events(), normalized.OperationRetention)

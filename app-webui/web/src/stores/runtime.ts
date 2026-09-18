@@ -3,12 +3,13 @@ import { defineStore } from 'pinia'
 import { APIError, command, errorMessage, isAbort, request, segment } from '../api'
 import { subscribe } from '../sse'
 import { bootstrapTurns, indexById, reduceOperation, reduceTurn } from '../state'
-import type { Attachment, Interaction, InteractionState, LiveTurn, Message, Notice, Operation, OperationInvocation, Session, Snapshot, TraceEvent, WebEvent } from '../protocol'
+import type { Attachment, Interaction, InteractionState, LiveTurn, Message, Notice, Operation, OperationInvocation, Session, Snapshot, TraceEvent, WebEvent, WorkspaceSelection } from '../protocol'
 
 export const useRuntime = defineStore('runtime', () => {
   const sessions = ref<Session[]>([])
   const capabilities = ref({ run: false, stream: false })
   const assets = ref({ available: false, maxBytes: 0 })
+  const defaultWorkspace = ref('')
   const turns = ref<Record<string, LiveTurn>>({})
   const interactions = ref<Record<string, Interaction>>({})
   const interactionStates = ref<Record<string, InteractionState>>({})
@@ -87,6 +88,7 @@ export const useRuntime = defineStore('runtime', () => {
     sessions.value = snapshot.sessions || []
     capabilities.value = snapshot.agent.capabilities
     assets.value = snapshot.assets || { available: false, maxBytes: 0 }
+    defaultWorkspace.value = snapshot.workspace?.defaultPath || ''
     turns.value = bootstrapTurns(snapshot)
     interactions.value = indexById(snapshot.interactions)
     interactionStates.value = indexById(snapshot.interactionStates)
@@ -189,6 +191,7 @@ export const useRuntime = defineStore('runtime', () => {
     sessions.value = [...sessions.value.filter(item => item.id !== session.id), session]
     return session
   }
+  const pickWorkspace = (initialPath: string) => command<WorkspaceSelection>('/workspace/select', 'POST', { initialPath })
   async function mutateSession(id: string, action: 'rename' | 'archive' | 'restore' | 'delete' | 'fork', title?: string) {
     const path = '/sessions/' + segment(id)
     const item = await command<Session | undefined>(
@@ -243,10 +246,10 @@ export const useRuntime = defineStore('runtime', () => {
   }
   const cancelOperation = (id: string) => command('/operation-invocations/' + segment(id), 'DELETE')
   return {
-    sessions, orderedSessions, capabilities, assets, turns, interactions, interactionStates,
+    sessions, orderedSessions, capabilities, assets, defaultWorkspace, turns, interactions, interactionStates,
     operations, operationInvocations, histories, historyLoading, historyErrors, optimistic,
     traces, notices, connection, connectionError, activeSession, cursor, pendingCount,
     notify, running, loadHistory, refreshSessions, bootstrap, receive, connect, disconnect,
-    createSession, assignWorkspace, mutateSession, send, stop, respond, invoke, cancelOperation,
+    createSession, assignWorkspace, pickWorkspace, mutateSession, send, stop, respond, invoke, cancelOperation,
   }
 })

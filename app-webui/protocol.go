@@ -20,24 +20,15 @@ type ErrorResponse struct {
 	Error ErrorDetail `json:"error"`
 }
 
-// WorkspaceBrowseEntry is one selectable subdirectory inside a Workspace
-// directory picker. Path is the full absolute host path, so the browser never
-// has to join OS-specific path separators itself.
-type WorkspaceBrowseEntry struct {
-	Name string `json:"name"`
-	Path string `json:"path"`
+// WorkspaceState describes the server-owned fallback Workspace.
+type WorkspaceState struct {
+	DefaultPath string `json:"defaultPath"`
 }
 
-// WorkspaceBrowse is the response of the host directory picker. Path is the
-// absolute directory being listed; Parent is its parent directory (empty at a
-// filesystem root); Roots contains other selectable filesystem roots when the
-// current directory is a root; Directories holds the selectable subdirectories
-// in sorted order.
-type WorkspaceBrowse struct {
-	Path        string                 `json:"path"`
-	Parent      string                 `json:"parent,omitempty"`
-	Roots       []WorkspaceBrowseEntry `json:"roots,omitempty"`
-	Directories []WorkspaceBrowseEntry `json:"directories"`
+// WorkspaceSelection is returned by the native host directory picker. A nil
+// Path means the user canceled the system dialog.
+type WorkspaceSelection struct {
+	Path *string `json:"path"`
 }
 
 // ErrorDetail describes one HTTP API error.
@@ -91,6 +82,7 @@ type StateSnapshot struct {
 	Cursor               uint64                `json:"cursor"`
 	Agent                AgentState            `json:"agent"`
 	Assets               AssetState            `json:"assets"`
+	Workspace            WorkspaceState        `json:"workspace"`
 	Sessions             []Session             `json:"sessions"`
 	Operations           []OperationDefinition `json:"operations"`
 	Turns                []TurnSnapshot        `json:"turns"`

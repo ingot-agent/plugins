@@ -7,6 +7,8 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -49,9 +51,13 @@ func TestCheckModeDoesNotOpenListener(t *testing.T) {
 	cfg := appbackend.Config{Backend: appbackend.BackendConfig{Address: listener.Addr().String()}}
 	deps := testDependencies(t, &testAgent{}, &testStore{})
 	deps.Invocation = &testProcess{check: true}
-	_, cleanup, err := New(ctx, withState(t, cfg, deps))
+	deps = withState(t, cfg, deps)
+	_, cleanup, err := New(ctx, deps)
 	if err != nil || cleanup != nil {
 		t.Fatalf("check mode started server or failed on occupied port: cleanup = %v, err = %v", cleanup != nil, err)
+	}
+	if _, err := os.Stat(filepath.Join(deps.State.Dir(), defaultWorkspaceDirectory)); !os.IsNotExist(err) {
+		t.Fatalf("check mode created default workspace: %v", err)
 	}
 }
 

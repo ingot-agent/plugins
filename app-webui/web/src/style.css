@@ -187,14 +187,7 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
 .workspace-picker { display: flex; align-items: center; gap: 10px; margin: 4px 0 10px; }
 .workspace-browse { display: inline-flex; align-items: center; gap: 7px; flex-shrink: 0; background: var(--subtle); border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px; font-size: 13px; }
 .workspace-browse:hover { border-color: color-mix(in srgb, var(--ink) 25%, var(--line)); }
-.workspace-chosen { min-width: 0; font-size: 12px; }
-.directory-picker { display: flex; flex-direction: column; gap: 10px; min-height: 220px; }
-.directory-picker-path { display: flex; align-items: center; gap: 7px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--subtle); font-size: 12px; }
-.directory-picker-list { list-style: none; margin: 0; padding: 0; overflow-y: auto; border: 1px solid var(--line); border-radius: 10px; max-height: 300px; }
-.directory-picker-row { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; padding: 8px 11px; font-size: 13px; background: transparent; border: 0; border-bottom: 1px solid var(--line); color: var(--ink); }
-.directory-picker-row:last-child { border-bottom: 0; }
-.directory-picker-row:hover { background: var(--subtle); }
-.directory-picker-empty { display: grid; place-items: center; min-height: 120px; padding: 14px; text-align: center; }
+.workspace-chosen { flex: 1; min-width: 0; font-size: 12px; }
 .composer-wrap { position: relative; }
 .composer { position: relative; background: var(--surface); border: 1px solid var(--line); box-shadow: var(--shadow); border-radius: 16px; padding: 16px 14px 10px; }
 .composer:focus-within { border-color: color-mix(in srgb, var(--ink) 25%, var(--line)); box-shadow: 0 6px 26px -15px #0003; }
@@ -226,7 +219,7 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
 .archive-banner { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 14px; font-size: 12px; color: var(--muted); }
 .workspace-assignment-banner { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 14px; padding: 12px 14px; border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--line)); border-radius: 10px; background: color-mix(in srgb, var(--accent) 5%, var(--surface)); font-size: 12px; }
 .workspace-assignment-banner strong { display: block; margin-bottom: 3px; color: var(--ink); font-size: 13px; }
-.workspace-assignment-banner p { margin: 0; color: var(--muted); }
+.workspace-assignment-banner p { margin: 0; color: var(--muted); overflow-wrap: anywhere; }
 .workspace-assignment-banner .btn { display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0; }
 .history-loading { display: flex; align-items: flex-start; gap: 10px; color: var(--muted); font-size: 13px; padding: 15px 0 30px; }
 .error-banner { padding: 12px; border-radius: 8px; border: 1px solid color-mix(in srgb, var(--danger) 20%, var(--line)); background: color-mix(in srgb, var(--danger) 4%, var(--surface)); color: var(--danger); font-size: 12px; margin-bottom: 16px; overflow-wrap: anywhere; }
@@ -406,6 +399,7 @@ details[open] > summary > .disclosure-chevron { transform: rotate(90deg); }
   .workspace-header { padding: 8px 13px; min-height: 50px; gap: 8px; }.workspace-header-actions { gap: 2px; }.workspace-header-actions .connection-label { margin-right: 4px; }
   .connection-label { font-size: 10px; }.transcript { padding: 17px 18px 20px; }.composer-dock { padding: 8px 14px 12px; }
   .welcome { padding: clamp(35px, 10vh, 10px) 20px 30px; }.welcome h2 { font-size: 27px; }.welcome-composer { padding-bottom: 10px; }
+  .workspace-picker { flex-wrap: wrap; }.workspace-chosen { order: 2; flex-basis: 100%; }
   .composer { border-radius: 13px; padding: 13px 10px 8px; }.composer-input { font-size: 16px; }.composer-hint { font-size: 9px; }
   .workspace-assignment-banner { align-items: stretch; flex-direction: column; }.workspace-assignment-banner .btn { align-self: flex-start; }
   .message-user .message-content { max-width: 94%; }.message, .markdown { font-size: 14px; }.message-byline { font-size: 11px; }
