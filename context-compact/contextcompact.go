@@ -63,10 +63,10 @@ type Config struct {
 
 // Dependencies contains the model chokepoint and append-oriented Session store.
 type Dependencies struct {
-	Model     model.Runtime
-	Providers []ingotabi.Named[model.Provider]
-	Store     session.Store
-	State     state.Scope
+	Model           model.Runtime
+	ProviderSources []model.ProviderSource
+	Store           session.Store
+	State           state.Scope
 }
 
 // Exports contains the context compactor capability.
@@ -107,23 +107,21 @@ func New(ctx context.Context, deps Dependencies) (Exports, ingotabi.Cleanup, err
 	if isNil(deps.Model) || isNil(deps.Store) || isNil(deps.State) {
 		return Exports{}, nil, fmt.Errorf("model, store, and state dependencies are required: %w", ErrInvalidConfig)
 	}
-	if err := ingotabi.CheckUniqueNames(deps.Providers); err != nil {
-		return Exports{}, nil, fmt.Errorf("providers: %w: %w", ErrInvalidConfig, err)
-	}
-	providerNames := make([]string, 0, len(deps.Providers))
-	for _, provider := range deps.Providers {
-		providerNames = append(providerNames, provider.Name)
+	for i, source := range deps.ProviderSources {
+		if isNil(source) {
+			return Exports{}, nil, fmt.Errorf("provider_sources[%d] is nil: %w", i, ErrInvalidConfig)
+		}
 	}
 	cfg, err := loadConfig(deps.State.Dir())
 	if err != nil {
 		return Exports{}, nil, fmt.Errorf("construct context.compact: %w: %w", err, ErrInvalidConfig)
 	}
-	normalized, err := normalizeConfigForProviders(cfg, providerNames)
+	normalized, err := normalizeConfig(cfg)
 	if err != nil {
 		return Exports{}, nil, err
 	}
 	instance := &compactor{model: deps.Model, store: deps.Store, cfg: normalized, gates: newGateManager()}
-	return Exports{Compactor: instance, Operations: []operation.Operation{&setupOperation{scope: deps.State, providerNames: providerNames, active: normalized}}}, nil, nil
+	return Exports{Compactor: instance, Operations: []operation.Operation{&setupOperation{scope: deps.State, providerSources: append([]model.ProviderSource(nil), deps.ProviderSources...), active: normalized}}}, nil, nil
 }
 
 func normalizeConfig(cfg Config) (normalizedConfig, error) {
@@ -134,7 +132,7 @@ func normalizeConfigForProviders(cfg Config, providerNames []string) (normalized
 	if !utf8.ValidString(cfg.Provider) || !utf8.ValidString(cfg.Model) {
 		return normalizedConfig{}, fmt.Errorf("provider or model is invalid UTF-8: %w", ErrInvalidConfig)
 	}
-	if cfg.Provider != "" && len(providerNames) > 0 {
+	if cfg.Provider != "" && providerNames != nil {
 		available := false
 		for _, name := range providerNames {
 			if cfg.Provider == name {

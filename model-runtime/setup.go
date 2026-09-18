@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"slices"
+	"unicode/utf8"
 
 	"github.com/ingot-agent/ingot-abi/state"
 	"github.com/ingot-agent/sdk/interaction"
@@ -26,9 +28,8 @@ var ErrConfigConflict = errors.New("model.runtime configuration changed during i
 // scope. The Plugin owns validation and persistence; the Host never decodes
 // plugin configuration.
 type setupOperation struct {
-	scope         state.Scope
-	providerNames []string
-	active        Config
+	scope   state.Scope
+	runtime *runtime
 }
 
 var _ operation.Operation = (*setupOperation)(nil)
@@ -54,17 +55,22 @@ func (o *setupOperation) Invoke(ctx context.Context, request operation.Request) 
 	if err != nil {
 		return operation.Result{}, err
 	}
-	if len(o.providerNames) == 0 {
+	selection, err := o.runtime.snapshot(ctx)
+	if err != nil {
+		return operation.Result{}, err
+	}
+	providerNames := selection.names
+	if len(providerNames) == 0 {
 		return operation.Result{}, fmt.Errorf("model.runtime.config: no providers are available: %w", operation.ErrUnavailable)
 	}
 	providerField := interaction.Field{
 		Name: "default_provider", Label: "Default Provider", Kind: interaction.FieldChoice, Required: true,
-		Options: providerOptions(o.providerNames),
+		Options: providerOptions(providerNames),
 	}
-	if len(o.providerNames) == 1 {
+	if len(providerNames) == 1 {
 		providerField.Options = append([]interaction.Option{{Value: "", Label: "Automatic", Description: "Use the only available provider."}}, providerField.Options...)
-		providerField.Default = valuePointer(interaction.StringValue(current.DefaultProvider))
-	} else if current.DefaultProvider != "" {
+	}
+	if slices.Contains(providerNames, current.DefaultProvider) || (current.DefaultProvider == "" && len(providerNames) == 1) {
 		providerField.Default = valuePointer(interaction.StringValue(current.DefaultProvider))
 	}
 	response, err := request.Interaction.Request(ctx, interaction.Request{
@@ -86,14 +92,10 @@ func (o *setupOperation) Invoke(ctx context.Context, request operation.Request) 
 	} else {
 		return operation.Result{}, fmt.Errorf("default_provider is required: %w", ErrInvalidConfig)
 	}
-	if updated.DefaultProvider == "" && len(o.providerNames) > 1 {
-		return operation.Result{}, fmt.Errorf("default_provider must select one of the available providers: %w", ErrInvalidConfig)
-	}
 	if v, ok := answerString(response, "default_model"); ok {
 		updated.DefaultModel = v
 	}
-	effective, err := effectiveConfig(updated, o.providerNames)
-	if err != nil {
+	if err := validateConfig(updated); err != nil {
 		return operation.Result{}, err
 	}
 	if err := ctx.Err(); err != nil {
@@ -108,17 +110,34 @@ func (o *setupOperation) Invoke(ctx context.Context, request operation.Request) 
 	if !reflect.DeepEqual(latest, current) {
 		return operation.Result{}, ErrConfigConflict
 	}
+	selection, err = o.runtime.snapshot(ctx)
+	if err != nil {
+		return operation.Result{}, err
+	}
+	if len(selection.names) == 0 {
+		return operation.Result{}, fmt.Errorf("model.runtime.config: no providers are available: %w", operation.ErrUnavailable)
+	}
+	if updated.DefaultProvider == "" && len(selection.names) > 1 {
+		return operation.Result{}, fmt.Errorf("default_provider must select one of the available providers: %w", ErrInvalidConfig)
+	}
+	if _, err := effectiveConfig(updated, selection.names); err != nil {
+		return operation.Result{}, err
+	}
 	if err := ctx.Err(); err != nil {
 		return operation.Result{}, err
 	}
 	if err := saveConfig(o.scope.Dir(), updated); err != nil {
 		return operation.Result{}, err
 	}
-	output, err := json.Marshal(map[string]any{"restart_required": effective != o.active})
-	if err != nil {
-		return operation.Result{}, err
+	o.runtime.config.Store(&updated)
+	return operation.Result{Output: json.RawMessage(`{"restart_required":false}`)}, nil
+}
+
+func validateConfig(config Config) error {
+	if !utf8.ValidString(config.DefaultProvider) || !utf8.ValidString(config.DefaultModel) {
+		return fmt.Errorf("provider or model contains invalid UTF-8: %w", ErrInvalidConfig)
 	}
-	return operation.Result{Output: output}, nil
+	return nil
 }
 
 func providerOptions(names []string) []interaction.Option {

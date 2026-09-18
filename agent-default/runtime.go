@@ -63,7 +63,7 @@ type Config struct {
 type Dependencies struct {
 	State             state.Scope
 	Model             model.Runtime
-	Providers         []ingotabi.Named[model.Provider]
+	ProviderSources   []model.ProviderSource
 	Streaming         ingotabi.Optional[model.StreamingRuntime]
 	Tools             tool.Runtime
 	Store             session.Store
@@ -119,12 +119,10 @@ func New(ctx context.Context, deps Dependencies) (Exports, ingotabi.Cleanup, err
 	if err != nil {
 		return Exports{}, nil, fmt.Errorf("construct agent.default: %w: %w", err, ErrInvalidConfig)
 	}
-	if err := ingotabi.CheckUniqueNames(deps.Providers); err != nil {
-		return Exports{}, nil, fmt.Errorf("providers: %w: %w", ErrInvalidConfig, err)
-	}
-	providerNames := make([]string, 0, len(deps.Providers))
-	for _, provider := range deps.Providers {
-		providerNames = append(providerNames, provider.Name)
+	for i, source := range deps.ProviderSources {
+		if isNil(source) {
+			return Exports{}, nil, fmt.Errorf("provider_sources[%d] is nil: %w", i, ErrInvalidConfig)
+		}
 	}
 	if deps.Streaming.Valid && isNil(deps.Streaming.Value) {
 		return Exports{}, nil, fmt.Errorf("streaming dependency is typed nil: %w", ErrInvalidConfig)
@@ -132,7 +130,7 @@ func New(ctx context.Context, deps Dependencies) (Exports, ingotabi.Cleanup, err
 	if deps.Compactor.Valid && isNil(deps.Compactor.Value) {
 		return Exports{}, nil, fmt.Errorf("compactor dependency is typed nil: %w", ErrInvalidConfig)
 	}
-	normalized, err := normalizeConfig(cfg, providerNames)
+	normalized, err := normalizeConfig(cfg, nil)
 	if err != nil {
 		return Exports{}, nil, err
 	}
@@ -162,7 +160,7 @@ func New(ctx context.Context, deps Dependencies) (Exports, ingotabi.Cleanup, err
 		temperature: copyFloat(normalized.Temperature), maxTokens: copyInt(normalized.MaxTokens),
 		maxRounds: normalized.MaxRounds,
 	}
-	return Exports{Runtime: instance, Streaming: instance, History: instance, Operations: []operation.Operation{&setupOperation{scope: deps.State, providerNames: providerNames, active: normalized}}}, nil, nil
+	return Exports{Runtime: instance, Streaming: instance, History: instance, Operations: []operation.Operation{&setupOperation{scope: deps.State, providerSources: append([]model.ProviderSource(nil), deps.ProviderSources...), active: normalized}}}, nil, nil
 }
 
 // Load returns a validated, caller-owned snapshot of one session's persisted

@@ -2,18 +2,24 @@ package usagedefault
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/ingot-agent/sdk/interaction"
+	"github.com/ingot-agent/sdk/model"
 	"github.com/ingot-agent/sdk/operation"
 )
 
 type setupChannel struct {
-	request interaction.Request
+	request   interaction.Request
+	onRequest func(interaction.Request)
 }
 
 func (c *setupChannel) Request(_ context.Context, request interaction.Request) (interaction.Response, error) {
 	c.request = request
+	if c.onRequest != nil {
+		c.onRequest(request)
+	}
 	answers := make([]interaction.Answer, 0, len(request.Fields))
 	for _, field := range request.Fields {
 		if field.Default != nil {
@@ -33,7 +39,7 @@ func TestSetupSuggestsInjectedProvidersWithoutClosingFutureRoutes(t *testing.T) 
 	active := cloneConfig(current)
 	active.CacheEntries = defaultCacheEntries
 	channel := &setupChannel{}
-	op := &setupOperation{scope: scope, providerNames: []string{"first", "second"}, active: active}
+	op := &setupOperation{scope: scope, providerSources: []model.ProviderSource{&setupProviderSource{names: []string{"first", "second"}}}, active: active}
 	if _, err := op.Invoke(context.Background(), operation.Request{Interaction: channel}); err != nil {
 		t.Fatal(err)
 	}
@@ -41,6 +47,45 @@ func TestSetupSuggestsInjectedProvidersWithoutClosingFutureRoutes(t *testing.T) 
 	provider := findSetupField(t, routes.Element.Fields, "provider")
 	if provider.Kind != interaction.FieldString || len(provider.Options) != 2 || provider.Options[0].Value != "first" || provider.Options[1].Value != "second" {
 		t.Fatalf("provider field = %#v", provider)
+	}
+}
+
+func TestSetupRefreshesProviderSuggestions(t *testing.T) {
+	current := validConfig()
+	scope := testStateScope{dir: writeTestConfig(t, current)}
+	source := &setupProviderSource{}
+	op := &setupOperation{scope: scope, providerSources: []model.ProviderSource{source}}
+	for _, names := range [][]string{nil, {"new", "second"}, {"renamed"}} {
+		source.names = names
+		channel := &setupChannel{}
+		if _, err := op.Invoke(context.Background(), operation.Request{Interaction: channel}); err != nil {
+			t.Fatal(err)
+		}
+		routes := findSetupField(t, channel.request.Fields, "routes")
+		provider := findSetupField(t, routes.Element.Fields, "provider")
+		if provider.Kind != interaction.FieldString || len(provider.Options) != len(names) {
+			t.Fatalf("provider field = %#v", provider)
+		}
+		for i, name := range names {
+			if provider.Options[i].Value != name {
+				t.Fatalf("provider options = %#v", provider.Options)
+			}
+		}
+		stored, err := loadConfig(scope.Dir())
+		if err != nil || stored.Routes[0].Provider != current.Routes[0].Provider {
+			t.Fatalf("future route was not preserved: %#v, error = %v", stored, err)
+		}
+	}
+}
+
+func TestSetupRereadsProviderSourcesBeforeSaving(t *testing.T) {
+	scope := testStateScope{dir: writeTestConfig(t, validConfig())}
+	source := &setupProviderSource{names: []string{"available"}}
+	sourceErr := errors.New("source unavailable")
+	channel := &setupChannel{onRequest: func(interaction.Request) { source.err = sourceErr }}
+	op := &setupOperation{scope: scope, providerSources: []model.ProviderSource{source}}
+	if _, err := op.Invoke(context.Background(), operation.Request{Interaction: channel}); !errors.Is(err, sourceErr) {
+		t.Fatalf("error = %v, want source error", err)
 	}
 }
 

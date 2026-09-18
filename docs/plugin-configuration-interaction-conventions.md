@@ -142,6 +142,12 @@ contract for official plugins.
   they differ materially.
 - A restart requirement MUST be calculated relative to the running component,
   not merely by comparing the new file with the file read at invocation start.
+- A configuration Operation that applies changes immediately MUST publish the
+  new runtime state after persistence succeeds and before returning success.
+  Failed validation, stale-write detection, or persistence MUST leave the
+  active state unchanged. Successful live model configuration returns
+  `restart_required:false`; see
+  [live model provider configuration](live-model-provider-configuration.md).
 - Plugins that can start usefully while unconfigured SHOULD remain constructible
   and expose the capability needed to complete initial configuration. This is
   not a requirement for plugins with no configuration or no meaningful
@@ -185,8 +191,13 @@ protocol semantics:
   Request with the current contract.
 - Business validation failures do not have a structured field-error protocol.
   A plugin can explain the error and issue another Request.
-- `model.Provider` currently exposes invocation, not model enumeration. Missing
+- `model.ProviderEntry` exposes invocation callbacks, not model enumeration. Missing
   model discovery is a model capability issue, not an Interaction issue.
+- `model.ProviderSource` supplies current provider names and invocation
+  capabilities. Configuration Operations read a fresh snapshot when building
+  their choices; a displayed Request remains immutable, and submissions must
+  be revalidated against the current directory. Provider discovery does not
+  imply model enumeration or automatic refresh of an already-open form.
 - The current Web Host recursively inspects compound Defaults and suppresses the
   complete Default when any supplied descendant is sensitive. Consequently,
   non-sensitive siblings in that same compound value are not prefilled. This is

@@ -4,6 +4,14 @@ Date: 2026-09-16
 
 Status: Remediated and verified
 
+Follow-up (2026-09-18): This report records the state of the September 16 audit.
+Its static named-provider injection and model restart descriptions have been
+superseded by [live model provider configuration](live-model-provider-configuration.md).
+Provider consumers now use `model.ProviderSource` snapshots with invocation
+functions in each `ProviderEntry`; the two built-in model provider Operations
+and `model-runtime` configuration publish saved changes
+immediately. The historical findings and verification below are retained.
+
 This audit applies
 [`plugin-configuration-interaction-conventions.md`](plugin-configuration-interaction-conventions.md)
 to every first-level official plugin in this repository. It reviews source

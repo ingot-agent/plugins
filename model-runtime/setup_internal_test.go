@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/ingot-agent/ingot-abi"
 	"github.com/ingot-agent/sdk/interaction"
 	"github.com/ingot-agent/sdk/model"
 	"github.com/ingot-agent/sdk/operation"
@@ -18,6 +17,12 @@ type setupTestScope struct{ dir string }
 func (s setupTestScope) Dir() string { return s.dir }
 
 type setupTestProvider struct{}
+
+type fixedProviderSource model.ProviderEntry
+
+func (s fixedProviderSource) Snapshot(context.Context) ([]model.ProviderEntry, error) {
+	return []model.ProviderEntry{model.ProviderEntry(s)}, nil
+}
 
 func (setupTestProvider) Complete(context.Context, model.Request) (model.Response, error) {
 	return model.Response{}, nil
@@ -41,9 +46,9 @@ func TestSetupUsesClosedProviderOptionsAndRejectsUnknownProvider(t *testing.T) {
 	scope := setupTestScope{dir: filepath.Join(t.TempDir(), "state")}
 	exports, _, err := New(context.Background(), Dependencies{
 		State: scope,
-		Providers: []ingotabi.Named[model.Provider]{
-			{Name: "first", Value: setupTestProvider{}},
-			{Name: "second", Value: setupTestProvider{}},
+		ProviderSources: []model.ProviderSource{
+			fixedProviderSource{Name: "first", Complete: setupTestProvider{}.Complete},
+			fixedProviderSource{Name: "second", Complete: setupTestProvider{}.Complete},
 		},
 	})
 	if err != nil {
@@ -76,9 +81,9 @@ func TestSetupRejectsEmptyProviderWithMultipleOptions(t *testing.T) {
 	scope := setupTestScope{dir: filepath.Join(t.TempDir(), "state")}
 	exports, _, err := New(context.Background(), Dependencies{
 		State: scope,
-		Providers: []ingotabi.Named[model.Provider]{
-			{Name: "first", Value: setupTestProvider{}},
-			{Name: "second", Value: setupTestProvider{}},
+		ProviderSources: []model.ProviderSource{
+			fixedProviderSource{Name: "first", Complete: setupTestProvider{}.Complete},
+			fixedProviderSource{Name: "second", Complete: setupTestProvider{}.Complete},
 		},
 	})
 	if err != nil {
@@ -103,8 +108,8 @@ func TestSetupRejectsEmptyProviderWithMultipleOptions(t *testing.T) {
 func TestSetupSingleProviderAutomaticIsNotAChange(t *testing.T) {
 	scope := setupTestScope{dir: filepath.Join(t.TempDir(), "state")}
 	exports, _, err := New(context.Background(), Dependencies{
-		State:     scope,
-		Providers: []ingotabi.Named[model.Provider]{{Name: "only", Value: setupTestProvider{}}},
+		State:           scope,
+		ProviderSources: []model.ProviderSource{fixedProviderSource{Name: "only", Complete: setupTestProvider{}.Complete}},
 	})
 	if err != nil {
 		t.Fatal(err)

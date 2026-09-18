@@ -39,7 +39,7 @@ var ErrConfigConflict = errors.New("model.openai-responses configuration changed
 // receives stored secrets back as defaults.
 type setupOperation struct {
 	scope  state.Scope
-	active []normalizedProviderConfig
+	source *providerSource
 }
 
 var _ operation.Operation = (*setupOperation)(nil)
@@ -212,6 +212,7 @@ func (o *setupOperation) Invoke(ctx context.Context, request operation.Request) 
 	if err != nil {
 		return operation.Result{}, err
 	}
+	snapshot := o.source.prepare(normalized)
 	if err := ctx.Err(); err != nil {
 		return operation.Result{}, err
 	}
@@ -230,7 +231,9 @@ func (o *setupOperation) Invoke(ctx context.Context, request operation.Request) 
 	if err := saveConfig(o.scope.Dir(), updated); err != nil {
 		return operation.Result{}, err
 	}
-	output, err := json.Marshal(map[string]any{"providers": len(updated.Providers), "restart_required": !reflect.DeepEqual(normalized, o.active)})
+	// Publishing cannot fail or be canceled after the configuration is saved.
+	o.source.current.Store(snapshot)
+	output, err := json.Marshal(map[string]any{"providers": len(updated.Providers), "restart_required": false})
 	if err != nil {
 		return operation.Result{}, err
 	}
