@@ -21,6 +21,7 @@ import (
 
 type responseRequest struct {
 	Model           string              `json:"model"`
+	Instructions    string              `json:"instructions,omitempty"`
 	Input           []responseInputItem `json:"input"`
 	Tools           []responseTool      `json:"tools,omitempty"`
 	Temperature     *float64            `json:"temperature,omitempty"`
@@ -104,8 +105,25 @@ type responseFunctionCallOutput struct {
 }
 
 func (p *provider) encodeResponseRequest(ctx context.Context, request model.Request, stream bool) ([]byte, error) {
-	input := make([]responseInputItem, 0, len(request.Messages))
-	for i, message := range request.Messages {
+	instructions := ""
+	messageStart := 0
+	if len(request.Messages) > 0 && request.Messages[0].Role == model.RoleSystem {
+		var ok bool
+		instructions, ok = content.TextOnly(request.Messages[0].Content)
+		if !ok {
+			for partIndex, part := range request.Messages[0].Content {
+				if part.Kind != content.KindText {
+					return nil, fmt.Errorf("messages[0]: %w", unsupported(0, partIndex, part, "instructions only support text content"))
+				}
+			}
+			return nil, fmt.Errorf("messages[0] instructions content is invalid: %w", ErrInvalidRequest)
+		}
+		messageStart = 1
+	}
+
+	input := make([]responseInputItem, 0, len(request.Messages)-messageStart)
+	for i := messageStart; i < len(request.Messages); i++ {
+		message := request.Messages[i]
 		mapped, err := p.encodeInputMessage(ctx, i, message)
 		if err != nil {
 			return nil, fmt.Errorf("messages[%d]: %w", i, err)
@@ -125,7 +143,7 @@ func (p *provider) encodeResponseRequest(ctx context.Context, request model.Requ
 		}
 	}
 	payload := responseRequest{
-		Model: request.Model, Input: input, Tools: tools,
+		Model: request.Model, Instructions: instructions, Input: input, Tools: tools,
 		Temperature: request.Temperature, MaxOutputTokens: request.MaxTokens,
 		Stream: stream, Store: false,
 	}
