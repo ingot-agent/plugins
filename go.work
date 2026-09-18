@@ -33,6 +33,7 @@ use (
 	./agent-default
 	./context-compact
 	./model-openai-compatible
+	./model-openai-responses
 	./tool-edit
 	./tool-runtime
 	./tool-shell
