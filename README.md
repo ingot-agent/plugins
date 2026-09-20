@@ -2,9 +2,8 @@
 
 Official plugins for the Ingot agent runtime.
 
-This repository is currently bootstrapped with no plugin modules. It is the
-home for independently maintained, first-level plugin modules that can be
-validated and tested without checking out or building Ingot Core.
+This repository contains independently maintained, first-level plugin modules
+that can be validated and tested without checking out or building Ingot Core.
 
 ## Repository boundary
 
@@ -41,6 +40,17 @@ The explicitly allowed infrastructure directories are `.github/`, `scripts/`,
 `tools/`, and `docs/`. A different first-level directory is recognized as a
 plugin only when it contains both `go.mod` and `ingot.plugin.toml`; otherwise
 repository validation rejects it as an unknown top-level directory.
+
+## Plugin inventory
+
+- Agent and application: `agent-default`, `app-webui`.
+- Runtime services: `asset-local`, `context-compact`, `http-default`,
+  `prompt-default`, `session-sqlite`, `usage-default`.
+- Models: `model-runtime`, `model-openai-compatible`,
+  `model-openai-responses`.
+- Interceptors: `interceptor-approval`, `interceptor-script`.
+- Tools: `tool-ask`, `tool-edit`, `tool-runtime`, `tool-shell`, and
+  `tool-subagent` for single-Turn child-agent discovery and management.
 
 ## Adding a plugin
 

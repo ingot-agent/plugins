@@ -1,43 +1,30 @@
 go 1.24.2
 
-use (
-	./http-default
-)
+use ./http-default
+
+use ./interceptor-approval
+
+use ./interceptor-script
+
+use ./tool-ask
+
+use ./prompt-default
+
+use ./asset-local
+
+use ./session-sqlite
 
 use (
-	./interceptor-approval
-)
-
-use (
-	./interceptor-script
-)
-
-use (
-	./tool-ask
-)
-
-use (
-	./prompt-default
-)
-
-use (
-	./asset-local
-)
-
-use (
-	./session-sqlite
-)
-
-use (
-	./app-webui
 	./agent-default
+	./app-webui
 	./context-compact
 	./model-openai-compatible
 	./model-openai-responses
+	./model-runtime
 	./skill-runtime
 	./tool-edit
 	./tool-runtime
 	./tool-shell
+	./tool-subagent
 	./usage-default
-	./model-runtime
 )

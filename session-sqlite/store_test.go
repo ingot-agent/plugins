@@ -30,7 +30,7 @@ func TestPersistenceLifecycleForkAndDelete(t *testing.T) {
 	now := base
 	created.now = func() time.Time { return now }
 	ids := []session.ID{"source", "target", "second"}
-	created.generateID = func() (session.ID, error) {
+	created.generateID = func(uint32) (session.ID, error) {
 		id := ids[0]
 		ids = ids[1:]
 		return id, nil
@@ -147,7 +147,7 @@ func TestListOrdersBothLifecycleStatesDeterministically(t *testing.T) {
 	now := base
 	created.now = func() time.Time { return now }
 	ids := []session.ID{"first", "second"}
-	created.generateID = func() (session.ID, error) {
+	created.generateID = func(uint32) (session.ID, error) {
 		id := ids[0]
 		ids = ids[1:]
 		return id, nil
@@ -312,7 +312,7 @@ func TestWorkspaceAssignResolveAndDuplicate(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = created.close() })
-	created.generateID = func() (session.ID, error) { return "s", nil }
+	created.generateID = func(uint32) (session.ID, error) { return "s", nil }
 
 	metadata, err := created.Create(ctx, session.CreateRequest{Title: "Session A"})
 	if err != nil {
@@ -346,7 +346,7 @@ func TestWorkspaceAssignValidationAndUnknownSession(t *testing.T) {
 	if err := created.Assign(ctx, "missing", workspace.Binding{Root: validRoot}); !errors.Is(err, session.ErrNotFound) {
 		t.Fatalf("unknown session assign error=%v", err)
 	}
-	created.generateID = func() (session.ID, error) { return "s", nil }
+	created.generateID = func(uint32) (session.ID, error) { return "s", nil }
 	if _, err := created.Create(ctx, session.CreateRequest{Title: "x"}); err != nil {
 		t.Fatal(err)
 	}
@@ -383,7 +383,7 @@ func TestWorkspaceDeleteCascadesAndForkInherits(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = created.close() })
 	ids := []session.ID{"source", "fork"}
-	created.generateID = func() (session.ID, error) {
+	created.generateID = func(uint32) (session.ID, error) {
 		id := ids[0]
 		ids = ids[1:]
 		return id, nil
@@ -425,7 +425,7 @@ func TestWorkspacePersistsAcrossOpen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	created.generateID = func() (session.ID, error) { return "s", nil }
+	created.generateID = func(uint32) (session.ID, error) { return "s", nil }
 	if _, err := created.Create(ctx, session.CreateRequest{Title: "A"}); err != nil {
 		t.Fatal(err)
 	}
@@ -456,7 +456,7 @@ func TestConcurrentSessionsHaveIndependentWorkspaces(t *testing.T) {
 	t.Cleanup(func() { _ = created.close() })
 	var mu sync.Mutex
 	next := 0
-	created.generateID = func() (session.ID, error) {
+	created.generateID = func(uint32) (session.ID, error) {
 		mu.Lock()
 		defer mu.Unlock()
 		next++

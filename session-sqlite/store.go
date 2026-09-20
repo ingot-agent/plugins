@@ -13,13 +13,14 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ingot-agent/sdk/agent"
 	"github.com/ingot-agent/sdk/execution"
 	"github.com/ingot-agent/sdk/session"
 	"github.com/ingot-agent/sdk/workspace"
 	_ "modernc.org/sqlite"
 )
 
-const schemaVersion = 2
+const schemaVersion = 3
 
 const schema = `
 CREATE TABLE IF NOT EXISTS sessions (
@@ -27,7 +28,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     title       TEXT NOT NULL,
     created_at  INTEGER NOT NULL,
     updated_at  INTEGER NOT NULL,
-    archived_at INTEGER
+    archived_at INTEGER,
+    meta        TEXT NOT NULL DEFAULT '{}'
 );
 
 CREATE TABLE IF NOT EXISTS entries (
@@ -53,10 +55,19 @@ CREATE TABLE IF NOT EXISTS session_workspaces (
 );
 `
 
+const metaIndexes = `
+CREATE INDEX IF NOT EXISTS sessions_agent_parent
+ON sessions (json_extract(meta, '$.agent.parent_session_id'), created_at, id);
+CREATE INDEX IF NOT EXISTS sessions_agent_root_state
+ON sessions (json_extract(meta, '$.agent.root_session_id'), json_extract(meta, '$.agent.state'));
+CREATE INDEX IF NOT EXISTS sessions_agent_state
+ON sessions (json_extract(meta, '$.agent.state'));
+`
+
 type store struct {
 	db         *sql.DB
 	now        func() time.Time
-	generateID func() (session.ID, error)
+	generateID func(uint32) (session.ID, error)
 }
 
 func openStore(ctx context.Context, databasePath string) (*store, error) {
@@ -130,6 +141,18 @@ func (s *store) initialize(ctx context.Context) error {
 	if _, err := tx.ExecContext(ctx, schema); err != nil {
 		return fmt.Errorf("initialize session schema: %w", err)
 	}
+	hasMeta, err := tableHasColumn(ctx, tx, "sessions", "meta")
+	if err != nil {
+		return fmt.Errorf("inspect session meta migration: %w", err)
+	}
+	if !hasMeta {
+		if _, err := tx.ExecContext(ctx, "ALTER TABLE sessions ADD COLUMN meta TEXT NOT NULL DEFAULT '{}'"); err != nil {
+			return fmt.Errorf("add session meta column: %w", err)
+		}
+	}
+	if _, err := tx.ExecContext(ctx, metaIndexes); err != nil {
+		return fmt.Errorf("create session meta indexes: %w", err)
+	}
 	if _, err := tx.ExecContext(ctx, fmt.Sprintf("PRAGMA user_version = %d", schemaVersion)); err != nil {
 		return fmt.Errorf("record session schema version: %w", err)
 	}
@@ -149,15 +172,19 @@ func (s *store) Create(ctx context.Context, request session.CreateRequest) (sess
 		return session.Metadata{}, err
 	}
 	defer tx.Rollback()
-	id, err := s.generateID()
+	encodedMeta, err := encodeMeta(request.Meta)
+	if err != nil {
+		return session.Metadata{}, fmt.Errorf("create session metadata: %w", err)
+	}
+	id, err := s.generateID(request.Depth)
 	if err != nil {
 		return session.Metadata{}, fmt.Errorf("generate session ID: %w", err)
 	}
 	now := s.now().UTC()
-	metadata := session.Metadata{ID: id, Title: request.Title, CreatedAt: now, UpdatedAt: now}
+	metadata := session.Metadata{ID: id, Title: request.Title, CreatedAt: now, UpdatedAt: now, Meta: cloneMeta(request.Meta)}
 	if _, err := tx.ExecContext(ctx,
-		"INSERT INTO sessions (id, title, created_at, updated_at, archived_at) VALUES (?, ?, ?, ?, NULL)",
-		string(id), request.Title, encodeTime(now), encodeTime(now),
+		"INSERT INTO sessions (id, title, created_at, updated_at, archived_at, meta) VALUES (?, ?, ?, ?, NULL, ?)",
+		string(id), request.Title, encodeTime(now), encodeTime(now), encodedMeta,
 	); err != nil {
 		return session.Metadata{}, fmt.Errorf("create session: %w", err)
 	}
@@ -405,6 +432,43 @@ func (s *store) Delete(ctx context.Context, id session.ID) error {
 		return err
 	}
 	defer tx.Rollback()
+	metadata, err := metadataByID(ctx, tx, id)
+	if err != nil {
+		return err
+	}
+	var childCount int
+	if err := tx.QueryRowContext(ctx, `
+SELECT COUNT(*) FROM sessions
+WHERE json_extract(meta, '$.agent.parent_session_id') = ?`, string(id)).Scan(&childCount); err != nil {
+		return fmt.Errorf("inspect children of session %q: %w", id, err)
+	}
+	if childCount != 0 {
+		return fmt.Errorf("delete session %q: %w", id, ErrSessionHasChildren)
+	}
+	childMeta, err := childMetaFromMetadata(metadata)
+	if err != nil {
+		return err
+	}
+	if childMeta.Kind == agent.ChildSessionKind {
+		if childMeta.State == agent.ChildQueued || childMeta.State == agent.ChildWorking || childMeta.ExecutionStopped == nil || !*childMeta.ExecutionStopped {
+			return fmt.Errorf("delete active child session %q: %w", id, agent.ErrChildInvalidState)
+		}
+		parent, err := metadataByID(ctx, tx, childMeta.ParentSessionID)
+		if err != nil {
+			return fmt.Errorf("load parent of child session %q: %w", id, err)
+		}
+		updatedParentMeta, err := removeParentChild(parent.Meta, id)
+		if err != nil {
+			return err
+		}
+		encodedParentMeta, err := encodeMeta(updatedParentMeta)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, "UPDATE sessions SET meta = ? WHERE id = ?", encodedParentMeta, string(parent.ID)); err != nil {
+			return fmt.Errorf("remove child %q from parent %q: %w", id, parent.ID, err)
+		}
+	}
 	result, err := tx.ExecContext(ctx, "DELETE FROM sessions WHERE id = ?", string(id))
 	if err != nil {
 		return fmt.Errorf("delete session %q: %w", id, err)
@@ -432,7 +496,7 @@ func (s *store) Fork(ctx context.Context, source session.ID, request session.For
 	if err != nil {
 		return session.Metadata{}, err
 	}
-	targetID, err := s.generateID()
+	targetID, err := s.generateID(0)
 	if err != nil {
 		return session.Metadata{}, fmt.Errorf("generate fork target ID: %w", err)
 	}
@@ -441,9 +505,9 @@ func (s *store) Fork(ctx context.Context, source session.ID, request session.For
 		title = sourceMetadata.Title
 	}
 	now := s.now().UTC()
-	target := session.Metadata{ID: targetID, Title: title, CreatedAt: now, UpdatedAt: now}
+	target := session.Metadata{ID: targetID, Title: title, CreatedAt: now, UpdatedAt: now, Meta: session.Meta{}}
 	if _, err := tx.ExecContext(ctx,
-		"INSERT INTO sessions (id, title, created_at, updated_at, archived_at) VALUES (?, ?, ?, ?, NULL)",
+		"INSERT INTO sessions (id, title, created_at, updated_at, archived_at, meta) VALUES (?, ?, ?, ?, NULL, '{}')",
 		string(targetID), title, encodeTime(now), encodeTime(now),
 	); err != nil {
 		return session.Metadata{}, fmt.Errorf("create fork target for session %q: %w", source, err)
@@ -478,9 +542,12 @@ func (s *store) List(ctx context.Context) ([]session.Metadata, error) {
 		return nil, context.Canceled
 	}
 	rows, err := s.db.QueryContext(ctx, `
-SELECT id, title, created_at, updated_at, archived_at
+SELECT id, title, created_at, updated_at, archived_at, meta
 FROM sessions
-ORDER BY updated_at DESC, created_at DESC, id ASC`)
+WHERE COALESCE(json_extract(meta, '$.agent.kind'), '') <> ?
+ORDER BY updated_at DESC, created_at DESC, id ASC`, agent.ChildSessionKind)
+	// Child Sessions are managed through agent.Children and remain hidden from
+	// the ordinary Session discovery surface used by applications.
 	if err != nil {
 		return nil, fmt.Errorf("list sessions: %w", err)
 	}
@@ -528,7 +595,7 @@ type rowQueryer interface {
 
 func metadataByID(ctx context.Context, queryer rowQueryer, id session.ID) (session.Metadata, error) {
 	metadata, err := scanMetadata(queryer.QueryRowContext(ctx, `
-SELECT id, title, created_at, updated_at, archived_at
+SELECT id, title, created_at, updated_at, archived_at, meta
 FROM sessions
 WHERE id = ?`, string(id)))
 	if errors.Is(err, sql.ErrNoRows) {
@@ -546,10 +613,16 @@ func scanMetadata(scanner metadataScanner) (session.Metadata, error) {
 		createdAt  int64
 		updatedAt  int64
 		archivedAt sql.NullInt64
+		metaText   string
 	)
-	if err := scanner.Scan(&metadata.ID, &metadata.Title, &createdAt, &updatedAt, &archivedAt); err != nil {
+	if err := scanner.Scan(&metadata.ID, &metadata.Title, &createdAt, &updatedAt, &archivedAt, &metaText); err != nil {
 		return session.Metadata{}, err
 	}
+	decodedMeta, err := decodeMeta([]byte(metaText))
+	if err != nil {
+		return session.Metadata{}, fmt.Errorf("decode session %q metadata: %w", metadata.ID, err)
+	}
+	metadata.Meta = decodedMeta
 	metadata.CreatedAt = decodeTime(createdAt)
 	metadata.UpdatedAt = decodeTime(updatedAt)
 	if archivedAt.Valid {
@@ -563,12 +636,12 @@ func encodeTime(value time.Time) int64 { return value.UTC().UnixNano() }
 
 func decodeTime(value int64) time.Time { return time.Unix(0, value).UTC() }
 
-func randomID() (session.ID, error) {
+func randomID(depth uint32) (session.ID, error) {
 	raw := make([]byte, 16)
 	if _, err := rand.Read(raw); err != nil {
 		return "", err
 	}
-	return session.ID(hex.EncodeToString(raw)), nil
+	return session.ID(fmt.Sprintf("c%d_%s", depth, hex.EncodeToString(raw))), nil
 }
 
 func notFound(id session.ID) error {

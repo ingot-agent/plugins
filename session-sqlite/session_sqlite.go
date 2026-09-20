@@ -11,6 +11,7 @@ import (
 
 	ingotabi "github.com/ingot-agent/ingot-abi"
 	"github.com/ingot-agent/ingot-abi/state"
+	"github.com/ingot-agent/sdk/agent"
 	"github.com/ingot-agent/sdk/session"
 	"github.com/ingot-agent/sdk/workspace"
 )
@@ -22,6 +23,9 @@ var (
 	// ErrUnsupportedSchema indicates that the database uses an unsupported
 	// application schema version.
 	ErrUnsupportedSchema = errors.New("unsupported session.sqlite schema")
+	// ErrSessionHasChildren indicates that physical deletion would break a
+	// persisted Session relationship chain.
+	ErrSessionHasChildren = errors.New("session has child sessions")
 )
 
 // Config is reserved for future persistence policy. It has no configurable
@@ -39,9 +43,10 @@ type Dependencies struct {
 // not one Plugin per interface. Session and workspace remain independent
 // capabilities.
 type Exports struct {
-	Store   session.Store
-	Manager session.Manager
-	Query   session.Query
+	Store         session.Store
+	Manager       session.Manager
+	Query         session.Query
+	ChildSessions agent.ChildSessionRepository
 
 	WorkspaceResolver workspace.Resolver
 	WorkspaceManager  workspace.Manager
@@ -71,7 +76,7 @@ func New(ctx context.Context, deps Dependencies) (Exports, ingotabi.Cleanup, err
 		}
 		return errors.Join(cleanupCtx.Err(), closeErr)
 	})
-	return Exports{Store: created, Manager: created, Query: created, WorkspaceResolver: created, WorkspaceManager: created}, cleanup, nil
+	return Exports{Store: created, Manager: created, Query: created, ChildSessions: created, WorkspaceResolver: created, WorkspaceManager: created}, cleanup, nil
 }
 
 func isNil(value any) bool {

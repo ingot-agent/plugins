@@ -6,8 +6,8 @@ import (
 	"io"
 	"testing"
 
-	agentdefault "github.com/ingot-agent/plugins/agent-default"
 	"github.com/ingot-agent/ingot-abi"
+	agentdefault "github.com/ingot-agent/plugins/agent-default"
 	"github.com/ingot-agent/sdk/agent"
 	"github.com/ingot-agent/sdk/asset"
 	"github.com/ingot-agent/sdk/contextwindow"
