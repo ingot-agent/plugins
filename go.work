@@ -34,6 +34,7 @@ use (
 	./context-compact
 	./model-openai-compatible
 	./model-openai-responses
+	./skill-runtime
 	./tool-edit
 	./tool-runtime
 	./tool-shell
