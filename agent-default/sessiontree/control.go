@@ -288,6 +288,8 @@ func (t *tree) Shutdown(ctx context.Context) error {
 	var resultErr error
 	if t.config.enabled {
 		for rootID := range roots {
+			gate := t.gate(rootID)
+			gate.Lock()
 			settleCtx, cancel := independentContext(ctx)
 			changed, err := t.repository.UpdateChildBranch(settleCtx, rootID, agent.ChildBranchRequest{
 				Mode:            agent.BranchInterrupt,
@@ -296,10 +298,12 @@ func (t *tree) Shutdown(ctx context.Context) error {
 			})
 			cancel()
 			if err != nil {
+				gate.Unlock()
 				resultErr = errors.Join(resultErr, err)
 				continue
 			}
 			t.applyChangedExecutions(changed)
+			gate.Unlock()
 		}
 	}
 	t.mu.Lock()

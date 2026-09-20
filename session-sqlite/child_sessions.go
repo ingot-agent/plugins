@@ -190,6 +190,9 @@ func (s *store) UpdateChildSession(ctx context.Context, id session.ID, update ag
 	if update.ExpectedReady != nil && childMeta.Ready != *update.ExpectedReady {
 		return agent.ChildSessionRecord{Session: metadata, Agent: childMeta}, false, nil
 	}
+	if update.State.Set && !validChildTransition(childMeta.State, update.State.Value) {
+		return agent.ChildSessionRecord{}, false, fmt.Errorf("transition child session %q from %q to %q: %w", id, childMeta.State, update.State.Value, agent.ErrChildInvalidState)
+	}
 	applyChildUpdate(&childMeta, update)
 	childMeta.UpdatedAt = s.now().UTC()
 	if err := validateChildMeta(childMeta); err != nil {
@@ -466,6 +469,22 @@ func validateChildMeta(value agent.ChildSessionMeta) error {
 
 func validChildState(state agent.ChildState) bool {
 	return state == agent.ChildQueued || state == agent.ChildWorking || state == agent.ChildInterrupted || state == agent.ChildCanceled || state == agent.ChildFailed || state == agent.ChildCompleted
+}
+
+func validChildTransition(previous, next agent.ChildState) bool {
+	if previous == next {
+		return validChildState(next)
+	}
+	switch previous {
+	case agent.ChildQueued:
+		return next == agent.ChildWorking || next == agent.ChildInterrupted || next == agent.ChildCanceled || next == agent.ChildFailed
+	case agent.ChildWorking:
+		return next == agent.ChildInterrupted || next == agent.ChildCanceled || next == agent.ChildFailed || next == agent.ChildCompleted
+	case agent.ChildFailed, agent.ChildCanceled:
+		return next == agent.ChildInterrupted
+	default:
+		return false
+	}
 }
 
 func applyChildUpdate(meta *agent.ChildSessionMeta, update agent.ChildSessionUpdate) {

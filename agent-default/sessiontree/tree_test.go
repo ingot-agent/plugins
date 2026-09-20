@@ -176,6 +176,23 @@ func (w *memoryWorkspace) Assign(_ context.Context, id session.ID, binding works
 	return nil
 }
 
+type blockingCreateRepository struct {
+	*memoryRepository
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (r *blockingCreateRepository) CreateChild(ctx context.Context, request agent.ChildSessionCreateRequest) (agent.ChildSessionRecord, error) {
+	r.once.Do(func() { close(r.entered) })
+	select {
+	case <-ctx.Done():
+		return agent.ChildSessionRecord{}, ctx.Err()
+	case <-r.release:
+		return r.memoryRepository.CreateChild(ctx, request)
+	}
+}
+
 func TestSingleTurnChildLifecycleAndPrompt(t *testing.T) {
 	root := t.TempDir()
 	config := `subagents_config_version = 1
@@ -313,6 +330,82 @@ func TestCreateChildWaitReleasesRootGateBeforeSettlement(t *testing.T) {
 	}
 }
 
+func TestShutdownSerializesWithChildCreation(t *testing.T) {
+	repository := &blockingCreateRepository{
+		memoryRepository: newMemoryRepository(),
+		entered:          make(chan struct{}),
+		release:          make(chan struct{}),
+	}
+	workspaces := &memoryWorkspace{assigned: map[session.ID]workspace.Binding{}}
+	tree, _ := newTestTreeWithDependencies(t, repository, workspaces)
+	type createResult struct {
+		snapshot agent.ChildSnapshot
+		err      error
+	}
+	created := make(chan createResult, 1)
+	workspaceRoot := t.TempDir()
+	go func() {
+		snapshot, err := tree.CreateChild(context.Background(), execution.Scope{SessionID: "c0_root"}, agent.ChildRequest{
+			AgentType: "coder", Task: "implement", Workspace: &workspace.Binding{Root: workspaceRoot}, Wait: false,
+		})
+		created <- createResult{snapshot: snapshot, err: err}
+	}()
+	select {
+	case <-repository.entered:
+	case <-time.After(time.Second):
+		t.Fatal("child creation did not reach persistent creation")
+	}
+
+	shutdown := make(chan error, 1)
+	go func() { shutdown <- tree.Shutdown(context.Background()) }()
+	deadline := time.Now().Add(time.Second)
+	for {
+		tree.mu.Lock()
+		closed := tree.closed
+		tree.mu.Unlock()
+		if closed {
+			break
+		}
+		if time.Now().After(deadline) {
+			close(repository.release)
+			t.Fatal("shutdown did not close the scheduler")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	select {
+	case err := <-shutdown:
+		close(repository.release)
+		t.Fatalf("shutdown completed before in-flight child creation: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(repository.release)
+
+	var create createResult
+	select {
+	case create = <-created:
+	case <-time.After(time.Second):
+		t.Fatal("child creation did not finish")
+	}
+	if !errors.Is(create.err, agent.ErrChildUnauthorized) || create.snapshot.SessionID == "" {
+		t.Fatalf("create snapshot=%#v err=%v", create.snapshot, create.err)
+	}
+	select {
+	case err := <-shutdown:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("shutdown did not finish after child creation released the root gate")
+	}
+	persisted, err := repository.GetChildSession(context.Background(), create.snapshot.SessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if persisted.Agent.State != agent.ChildInterrupted || !persisted.Agent.Ready || persisted.Agent.ExecutionStopped == nil || !*persisted.Agent.ExecutionStopped {
+		t.Fatalf("persisted child after shutdown=%#v", persisted.Agent)
+	}
+}
+
 func TestCancelKeepsStateSeparateFromPhysicalStop(t *testing.T) {
 	tree, rootHandle := newTestTree(t)
 	snapshot, err := tree.CreateChild(context.Background(), execution.Scope{SessionID: "c0_root"}, agent.ChildRequest{
@@ -390,6 +483,13 @@ func TestWaitExecutionReturnsMetaQueryFailure(t *testing.T) {
 
 func newTestTree(t *testing.T) (*tree, sessioncontrol.Handle) {
 	t.Helper()
+	repository := newMemoryRepository()
+	workspaces := &memoryWorkspace{assigned: map[session.ID]workspace.Binding{}}
+	return newTestTreeWithDependencies(t, repository, workspaces)
+}
+
+func newTestTreeWithDependencies(t *testing.T, repository agent.ChildSessionRepository, workspaces workspace.Manager) (*tree, sessioncontrol.Handle) {
+	t.Helper()
 	root := t.TempDir()
 	config := `subagents_config_version = 1
 root_allowed_types = ["coder"]
@@ -403,8 +503,6 @@ allowed_child_types = []
 	if err := os.WriteFile(filepath.Join(root, configFileName), []byte(config), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	repository := newMemoryRepository()
-	workspaces := &memoryWorkspace{assigned: map[session.ID]workspace.Binding{}}
 	exports, cleanup, err := New(context.Background(), Dependencies{
 		State: stateScope(root), Repository: ingotabi.Some[agent.ChildSessionRepository](repository), Workspace: ingotabi.Some[workspace.Manager](workspaces),
 	})

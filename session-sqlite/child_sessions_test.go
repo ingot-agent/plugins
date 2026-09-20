@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"reflect"
 	"testing"
@@ -175,7 +176,7 @@ func TestDeleteMaintainsParentRelationshipAndRejectsBrokenChains(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = created.close() })
-	ids := []session.ID{"root", "child"}
+	ids := []session.ID{"root", "child", "canceled-child"}
 	created.generateID = func(uint32) (session.ID, error) {
 		id := ids[0]
 		ids = ids[1:]
@@ -194,9 +195,31 @@ func TestDeleteMaintainsParentRelationshipAndRejectsBrokenChains(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := created.Delete(ctx, child.Session.ID); !errors.Is(err, agent.ErrChildInvalidState) {
+		t.Fatalf("delete queued child error=%v", err)
+	}
+	running := false
 	child, updated, err := created.UpdateChildSession(ctx, child.Session.ID, agent.ChildSessionUpdate{
 		ExpectedStates: []agent.ChildState{agent.ChildQueued},
+		State:          agent.UpdateValue[agent.ChildState]{Set: true, Value: agent.ChildWorking},
+		ExecutionStopped: agent.UpdateNullable[bool]{
+			Set:   true,
+			Value: &running,
+		},
+	})
+	if err != nil || !updated {
+		t.Fatalf("start child updated=%v err=%v", updated, err)
+	}
+	if err := created.Delete(ctx, child.Session.ID); !errors.Is(err, agent.ErrChildInvalidState) {
+		t.Fatalf("delete working child error=%v", err)
+	}
+	child, updated, err = created.UpdateChildSession(ctx, child.Session.ID, agent.ChildSessionUpdate{
+		ExpectedStates: []agent.ChildState{agent.ChildWorking},
 		State:          agent.UpdateValue[agent.ChildState]{Set: true, Value: agent.ChildFailed},
+		ExecutionStopped: agent.UpdateNullable[bool]{
+			Set:   true,
+			Value: &stopped,
+		},
 	})
 	if err != nil || !updated {
 		t.Fatalf("fail child updated=%v err=%v", updated, err)
@@ -213,6 +236,136 @@ func TestDeleteMaintainsParentRelationshipAndRejectsBrokenChains(t *testing.T) {
 	}
 	if len(parent.Agent.ChildSessionIDs) != 0 {
 		t.Fatalf("deleted child retained in parent: %v", parent.Agent.ChildSessionIDs)
+	}
+
+	canceledChild, err := created.CreateChild(ctx, agent.ChildSessionCreateRequest{
+		ParentSessionID: root.ID,
+		Depth:           1,
+		Agent:           agent.ChildSessionMeta{RootSessionID: root.ID, AgentType: "reviewer", DefinitionDigest: "d", Definition: agent.ChildDefinition{Tools: []string{"submit_agent_result"}}, State: agent.ChildQueued, ExecutionStopped: &stopped},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	canceledChild, updated, err = created.UpdateChildSession(ctx, canceledChild.Session.ID, agent.ChildSessionUpdate{
+		ExpectedStates:   []agent.ChildState{agent.ChildQueued},
+		State:            agent.UpdateValue[agent.ChildState]{Set: true, Value: agent.ChildWorking},
+		ExecutionStopped: agent.UpdateNullable[bool]{Set: true, Value: &running},
+	})
+	if err != nil || !updated {
+		t.Fatalf("start canceled child updated=%v err=%v", updated, err)
+	}
+	changed, err := created.UpdateChildBranch(ctx, canceledChild.Session.ID, agent.ChildBranchRequest{Mode: agent.BranchCancel})
+	if err != nil || len(changed) != 1 || changed[0].Agent.State != agent.ChildCanceled {
+		t.Fatalf("cancel child changed=%#v err=%v", changed, err)
+	}
+	if err := created.Delete(ctx, canceledChild.Session.ID); !errors.Is(err, agent.ErrChildInvalidState) {
+		t.Fatalf("delete child before execution stopped error=%v", err)
+	}
+	_, updated, err = created.UpdateChildSession(ctx, canceledChild.Session.ID, agent.ChildSessionUpdate{
+		ExpectedStates:   []agent.ChildState{agent.ChildCanceled},
+		ExecutionStopped: agent.UpdateNullable[bool]{Set: true, Value: &stopped},
+	})
+	if err != nil || !updated {
+		t.Fatalf("stop canceled child updated=%v err=%v", updated, err)
+	}
+	if err := created.Delete(ctx, canceledChild.Session.ID); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestUpdateChildSessionRejectsTerminalReactivation(t *testing.T) {
+	ctx := context.Background()
+	created, err := openStore(ctx, filepath.Join(t.TempDir(), "sessions.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = created.close() })
+	nextID := 0
+	created.generateID = func(uint32) (session.ID, error) {
+		nextID++
+		return session.ID(fmt.Sprintf("session-%d", nextID)), nil
+	}
+	root, err := created.Create(ctx, session.CreateRequest{Title: "root"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stopped := true
+	running := false
+	createTerminal := func(state agent.ChildState) agent.ChildSessionRecord {
+		t.Helper()
+		record, err := created.CreateChild(ctx, agent.ChildSessionCreateRequest{
+			ParentSessionID: root.ID,
+			Depth:           1,
+			Agent: agent.ChildSessionMeta{
+				RootSessionID: root.ID, AgentType: "coder", DefinitionDigest: "digest",
+				Definition: agent.ChildDefinition{Tools: []string{"submit_agent_result"}},
+				State:      agent.ChildQueued, ExecutionStopped: &stopped,
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		switch state {
+		case agent.ChildFailed:
+			record, _, err = created.UpdateChildSession(ctx, record.Session.ID, agent.ChildSessionUpdate{
+				ExpectedStates: []agent.ChildState{agent.ChildQueued},
+				State:          agent.UpdateValue[agent.ChildState]{Set: true, Value: state},
+			})
+		case agent.ChildCanceled, agent.ChildInterrupted:
+			mode := agent.BranchCancel
+			if state == agent.ChildInterrupted {
+				mode = agent.BranchInterrupt
+			}
+			var changed []agent.ChildSessionRecord
+			changed, err = created.UpdateChildBranch(ctx, record.Session.ID, agent.ChildBranchRequest{Mode: mode})
+			if len(changed) == 1 {
+				record = changed[0]
+			}
+		case agent.ChildCompleted:
+			record, _, err = created.UpdateChildSession(ctx, record.Session.ID, agent.ChildSessionUpdate{
+				ExpectedStates:   []agent.ChildState{agent.ChildQueued},
+				State:            agent.UpdateValue[agent.ChildState]{Set: true, Value: agent.ChildWorking},
+				ExecutionStopped: agent.UpdateNullable[bool]{Set: true, Value: &running},
+			})
+			if err == nil {
+				result := "done"
+				record, _, err = created.UpdateChildSession(ctx, record.Session.ID, agent.ChildSessionUpdate{
+					ExpectedStates:   []agent.ChildState{agent.ChildWorking},
+					State:            agent.UpdateValue[agent.ChildState]{Set: true, Value: state},
+					Result:           agent.UpdateNullable[string]{Set: true, Value: &result},
+					ExecutionStopped: agent.UpdateNullable[bool]{Set: true, Value: &stopped},
+				})
+			}
+		default:
+			t.Fatalf("unsupported terminal state %q", state)
+		}
+		if err != nil || record.Agent.State != state {
+			t.Fatalf("create terminal state %q record=%#v err=%v", state, record, err)
+		}
+		return record
+	}
+
+	for _, terminal := range []agent.ChildState{agent.ChildFailed, agent.ChildCanceled, agent.ChildInterrupted, agent.ChildCompleted} {
+		record := createTerminal(terminal)
+		for _, target := range []agent.ChildState{agent.ChildQueued, agent.ChildWorking} {
+			executionStopped := stopped
+			if target == agent.ChildWorking {
+				executionStopped = running
+			}
+			_, updated, err := created.UpdateChildSession(ctx, record.Session.ID, agent.ChildSessionUpdate{
+				ExpectedStates:   []agent.ChildState{terminal},
+				State:            agent.UpdateValue[agent.ChildState]{Set: true, Value: target},
+				Result:           agent.UpdateNullable[string]{Set: true},
+				ExecutionStopped: agent.UpdateNullable[bool]{Set: true, Value: &executionStopped},
+			})
+			if !errors.Is(err, agent.ErrChildInvalidState) || updated {
+				t.Fatalf("transition %s -> %s updated=%v err=%v", terminal, target, updated, err)
+			}
+			persisted, getErr := created.GetChildSession(ctx, record.Session.ID)
+			if getErr != nil || persisted.Agent.State != terminal {
+				t.Fatalf("persisted after %s -> %s: state=%s err=%v", terminal, target, persisted.Agent.State, getErr)
+			}
+		}
 	}
 }
 

@@ -450,6 +450,9 @@ WHERE json_extract(meta, '$.agent.parent_session_id') = ?`, string(id)).Scan(&ch
 		return err
 	}
 	if childMeta.Kind == agent.ChildSessionKind {
+		if childMeta.State == agent.ChildQueued || childMeta.State == agent.ChildWorking || childMeta.ExecutionStopped == nil || !*childMeta.ExecutionStopped {
+			return fmt.Errorf("delete active child session %q: %w", id, agent.ErrChildInvalidState)
+		}
 		parent, err := metadataByID(ctx, tx, childMeta.ParentSessionID)
 		if err != nil {
 			return fmt.Errorf("load parent of child session %q: %w", id, err)
