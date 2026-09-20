@@ -21,6 +21,7 @@ use (
 	./model-openai-compatible
 	./model-openai-responses
 	./model-runtime
+	./skill-runtime
 	./tool-edit
 	./tool-runtime
 	./tool-shell
