@@ -56,8 +56,9 @@ func (r *runtime) invokeRoundModel(
 // executeRound applies round policy and performs canonical durable execution.
 // Interceptors that call next may inspect, but must not rewrite, its committed
 // result after next returns.
-func (r *runtime) executeRound(ctx context.Context, round agent.Round, lastAllowed bool) (agent.RoundResult, error) {
+func (r *runtime) executeRound(ctx context.Context, round agent.Round, lastAllowed bool, frame *turnFrame) (agent.RoundResult, error) {
 	recorder := executionRecorderFrom(ctx)
+
 	if err := ctx.Err(); err != nil {
 		recorder.recordFailure(err, agent.FailureRoundControl, &round.Index, "")
 		return agent.RoundResult{}, err
@@ -101,8 +102,8 @@ func (r *runtime) executeRound(ctx context.Context, round agent.Round, lastAllow
 			recorder.recordFailure(err, agent.FailureRoundControl, &round.Index, "")
 			return agent.RoundResult{}, err
 		}
-		if lastAllowed && len(selected.Decision.ToolCalls) != 0 {
-			terminalErr = ErrMaxRounds
+		if err := validateFrameToolCalls(frame, selected.Decision.ToolCalls, lastAllowed); err != nil {
+			terminalErr = err
 			recorder.recordFailure(terminalErr, agent.FailureRoundControl, &round.Index, "")
 			return agent.RoundResult{}, terminalErr
 		}
@@ -112,7 +113,7 @@ func (r *runtime) executeRound(ctx context.Context, round agent.Round, lastAllow
 			recorder.recordFailure(terminalErr, agent.FailureAssistantPersistence, &round.Index, "")
 			return agent.RoundResult{}, terminalErr
 		}
-		toolMessages, err := r.executeToolCalls(callCtx, selected.SessionID, assistant.ToolCalls)
+		toolMessages, err := r.executeToolCalls(callCtx, selected.SessionID, assistant.ToolCalls, frame)
 		if err != nil {
 			terminalErr = err
 			return agent.RoundResult{}, err
@@ -154,7 +155,7 @@ func (r *runtime) executeRound(ctx context.Context, round agent.Round, lastAllow
 	return agent.RoundResult{Decision: decision}, nil
 }
 
-func (r *runtime) executeToolCalls(ctx context.Context, sessionID session.ID, calls []tool.Call) ([]model.Message, error) {
+func (r *runtime) executeToolCalls(ctx context.Context, sessionID session.ID, calls []tool.Call, frame *turnFrame) ([]model.Message, error) {
 	messages := make([]model.Message, 0, len(calls))
 	for _, call := range calls {
 		if err := ctx.Err(); err != nil {
@@ -189,8 +190,52 @@ func (r *runtime) executeToolCalls(ctx context.Context, sessionID session.ID, ca
 			return nil, persistErr
 		}
 		messages = append(messages, message)
+		if frame != nil && call.Name == frame.submitTool {
+			intent, ok, err := r.control.FinishIntent(frame.handle, call.ID)
+			if err != nil {
+				controlErr := fmt.Errorf("confirm child result submission %q: %w", call.ID, err)
+				executionRecorderFrom(ctx).recordFailure(controlErr, agent.FailureRoundControl, roundIndexFrom(ctx), call.ID)
+				return nil, controlErr
+			}
+			if !ok {
+				controlErr := fmt.Errorf("submit tool %q did not register a matching result: %w", call.ID, agent.ErrChildSubmission)
+				executionRecorderFrom(ctx).recordFailure(controlErr, agent.FailureRoundControl, roundIndexFrom(ctx), call.ID)
+				return nil, controlErr
+			}
+			frame.confirmed = &intent
+		}
 	}
 	return messages, nil
+}
+
+func validateFrameToolCalls(frame *turnFrame, calls []tool.Call, lastAllowed bool) error {
+	if frame == nil {
+		for _, call := range calls {
+			if call.Name == childSubmitToolName {
+				return fmt.Errorf("%s is unavailable to root Sessions: %w", childSubmitToolName, ErrToolNotAllowed)
+			}
+		}
+		if lastAllowed && len(calls) != 0 {
+			return ErrMaxRounds
+		}
+		return nil
+	}
+	submissions := 0
+	for _, call := range calls {
+		if _, allowed := frame.toolNames[call.Name]; !allowed {
+			return fmt.Errorf("tool %q: %w", call.Name, ErrToolNotAllowed)
+		}
+		if call.Name == frame.submitTool {
+			submissions++
+		}
+	}
+	if submissions != 0 && (submissions != 1 || len(calls) != 1) {
+		return ErrInvalidSubmissionRound
+	}
+	if lastAllowed && len(calls) != 0 && submissions != 1 {
+		return ErrMaxRounds
+	}
+	return nil
 }
 
 func (r *runtime) executeTool(ctx context.Context, invocation tool.Invocation) (result tool.Result, resultErr error) {

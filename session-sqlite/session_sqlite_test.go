@@ -7,9 +7,10 @@ import (
 	"testing"
 
 	"github.com/ingot-agent/ingot-abi/state"
+	sessionsqlite "github.com/ingot-agent/plugins/session-sqlite"
+	"github.com/ingot-agent/sdk/agent"
 	"github.com/ingot-agent/sdk/session"
 	"github.com/ingot-agent/sdk/workspace"
-	sessionsqlite "github.com/ingot-agent/plugins/session-sqlite"
 )
 
 type stateScope string
@@ -24,11 +25,12 @@ func TestPublicComponentContract(t *testing.T) {
 		t.Fatal(err)
 	}
 	var (
-		_ session.Store      = exports.Store
-		_ session.Manager    = exports.Manager
-		_ session.Query      = exports.Query
-		_ workspace.Resolver = exports.WorkspaceResolver
-		_ workspace.Manager  = exports.WorkspaceManager
+		_ session.Store                = exports.Store
+		_ session.Manager              = exports.Manager
+		_ session.Query                = exports.Query
+		_ agent.ChildSessionRepository = exports.ChildSessions
+		_ workspace.Resolver           = exports.WorkspaceResolver
+		_ workspace.Manager            = exports.WorkspaceManager
 	)
 	if cleanup == nil {
 		t.Fatal("cleanup is nil")

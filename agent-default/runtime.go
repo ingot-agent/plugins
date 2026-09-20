@@ -8,10 +8,12 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"sync"
 	"unicode/utf8"
 
 	"github.com/ingot-agent/ingot-abi"
 	"github.com/ingot-agent/ingot-abi/state"
+	"github.com/ingot-agent/plugins/agent-default/sessioncontrol"
 	"github.com/ingot-agent/sdk/agent"
 	"github.com/ingot-agent/sdk/asset"
 	"github.com/ingot-agent/sdk/content"
@@ -45,6 +47,12 @@ var (
 	ErrUnsupportedEntryVersion = errors.New("unsupported agent entry version")
 	// ErrCorruptHistory indicates invalid agent-owned message ordering or payload data.
 	ErrCorruptHistory = errors.New("corrupt agent history")
+	// ErrToolNotAllowed indicates that a child requested a tool outside its
+	// frozen type configuration.
+	ErrToolNotAllowed = errors.New("tool is not allowed for child agent")
+	// ErrInvalidSubmissionRound indicates that submit_agent_result was mixed
+	// with another call or otherwise violated the child completion boundary.
+	ErrInvalidSubmissionRound = errors.New("invalid child result submission round")
 )
 
 // Config controls model selection and generation.
@@ -73,6 +81,7 @@ type Dependencies struct {
 	Interceptors      []agent.Interceptor
 	RoundInterceptors []agent.RoundInterceptor
 	Observation       observation.Consumer
+	Control           sessioncontrol.Control
 }
 
 // Exports contains independent turn, output streaming, and history capabilities.
@@ -100,6 +109,10 @@ type runtime struct {
 	temperature       *float64
 	maxTokens         *int
 	maxRounds         int
+	control           sessioncontrol.Control
+	dispatchCancel    context.CancelFunc
+	dispatchDone      chan struct{}
+	dispatchWG        sync.WaitGroup
 }
 
 // New loads this Plugin's own configuration from its state scope, validates
@@ -160,7 +173,18 @@ func New(ctx context.Context, deps Dependencies) (Exports, ingotabi.Cleanup, err
 		temperature: copyFloat(normalized.Temperature), maxTokens: copyInt(normalized.MaxTokens),
 		maxRounds: normalized.MaxRounds,
 	}
-	return Exports{Runtime: instance, Streaming: instance, History: instance, Operations: []operation.Operation{&setupOperation{scope: deps.State, providerSources: append([]model.ProviderSource(nil), deps.ProviderSources...), active: normalized}}}, nil, nil
+	var cleanup ingotabi.Cleanup
+	if !isNil(deps.Control) {
+		if err := deps.Control.ValidateTools(deps.Tools.Definitions()); err != nil {
+			return Exports{}, nil, fmt.Errorf("validate child agent tools: %w", err)
+		}
+		instance.control = deps.Control
+		dispatchCtx, cancel := context.WithCancel(context.Background())
+		instance.dispatchCancel = cancel
+		instance.startDispatcher(dispatchCtx)
+		cleanup = instance.cleanup
+	}
+	return Exports{Runtime: instance, Streaming: instance, History: instance, Operations: []operation.Operation{&setupOperation{scope: deps.State, providerSources: append([]model.ProviderSource(nil), deps.ProviderSources...), active: normalized}}}, cleanup, nil
 }
 
 // Load returns a validated, caller-owned snapshot of one session's persisted

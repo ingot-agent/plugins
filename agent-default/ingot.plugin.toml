@@ -8,5 +8,9 @@ name = "observation"
 package = "./observation"
 
 [[components]]
+name = "session-tree"
+package = "./sessiontree"
+
+[[components]]
 name = "default"
 package = "."

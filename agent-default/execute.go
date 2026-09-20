@@ -2,6 +2,7 @@ package agentdefault
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"unicode/utf8"
 
@@ -17,6 +18,10 @@ import (
 )
 
 func (r *runtime) execute(ctx context.Context, turn agent.Turn, handler agent.StreamHandler) (execution agent.Execution, err error) {
+	return r.executeFrame(ctx, turn, handler, nil)
+}
+
+func (r *runtime) executeFrame(ctx context.Context, turn agent.Turn, handler agent.StreamHandler, frame *turnFrame) (execution agent.Execution, err error) {
 	if ctx == nil {
 		return agent.Execution{}, fmt.Errorf("run agent: nil context: %w", ErrInvalidTurn)
 	}
@@ -66,6 +71,27 @@ func (r *runtime) execute(ctx context.Context, turn agent.Turn, handler agent.St
 		recorder.recordFailure(err, agent.FailureSessionGate, nil, "")
 		return agent.Execution{}, err
 	}
+	if frame != nil {
+		if !frame.handle.Child || frame.handle.SessionID != turn.SessionID {
+			controlErr := fmt.Errorf("child frame does not match Session %q: %w", turn.SessionID, ErrInvalidTurn)
+			recorder.recordFailure(controlErr, agent.FailureTurnControl, nil, "")
+			return agent.Execution{}, controlErr
+		}
+	} else if r.control != nil {
+		handle, beginErr := r.control.BeginRoot(ctx, turn.SessionID)
+		if beginErr != nil {
+			recorder.recordFailure(beginErr, agent.FailureSessionGate, nil, "")
+			return agent.Execution{}, beginErr
+		}
+		defer func() {
+			endErr := r.control.EndRoot(ctx, handle, ctx.Err() != nil)
+			if endErr == nil {
+				return
+			}
+			recorder.recordFailure(endErr, agent.FailureTurnControl, nil, "")
+			err = errors.Join(err, endErr)
+		}()
+	}
 
 	// Retain consumer failure even if a model or turn interceptor swallows it
 	// or attempts to invoke its terminal again.
@@ -99,7 +125,7 @@ func (r *runtime) execute(ctx context.Context, turn agent.Turn, handler agent.St
 			return agent.Result{}, controlErr
 		}
 		callCtx = restoreExecutionContext(callCtx, ctx, recorder)
-		return r.runTurn(callCtx, selected, handler)
+		return r.runTurn(callCtx, selected, handler, frame)
 	}
 	next := pipeline.Compose[agent.Turn, agent.Result](terminal, r.interceptors...)
 	owned := turn
@@ -122,7 +148,7 @@ func (r *runtime) execute(ctx context.Context, turn agent.Turn, handler agent.St
 	return agent.Execution{}, nil
 }
 
-func (r *runtime) runTurn(ctx context.Context, turn agent.Turn, handler agent.StreamHandler) (agent.Result, error) {
+func (r *runtime) runTurn(ctx context.Context, turn agent.Turn, handler agent.StreamHandler, frame *turnFrame) (agent.Result, error) {
 	if err := ctx.Err(); err != nil {
 		executionRecorderFrom(ctx).recordFailure(err, agent.FailureHistoryLoad, nil, "")
 		return agent.Result{}, err
@@ -171,12 +197,17 @@ func (r *runtime) runTurn(ctx context.Context, turn agent.Turn, handler agent.St
 	messages = cloneMessages(messages)
 	definitions := cloneDefinitions(r.tools.Definitions())
 	for roundIndex := 0; roundIndex < r.maxRounds; roundIndex++ {
-		result, err := r.observeRound(ctx, turn.SessionID, roundIndex, messages, definitions, handler, roundIndex == r.maxRounds-1)
+		lastAllowed := roundIndex == r.maxRounds-1
+		roundDefinitions := definitionsForFrame(definitions, frame, lastAllowed)
+		result, err := r.observeRound(ctx, turn.SessionID, roundIndex, messages, roundDefinitions, handler, lastAllowed, frame)
 		if err != nil {
 			return agent.Result{}, err
 		}
 		messages = append(messages, cloneMessage(result.Decision))
 		messages = append(messages, cloneMessages(result.ToolMessages)...)
+		if frame != nil && frame.confirmed != nil {
+			return agent.Result{Output: content.FromText(frame.confirmed.Result)}, nil
+		}
 		if len(result.Decision.ToolCalls) == 0 {
 			return agent.Result{Output: content.Clone(result.Decision.Content)}, nil
 		}
@@ -194,6 +225,7 @@ func (r *runtime) observeRound(
 	definitions []tool.Definition,
 	handler agent.StreamHandler,
 	lastAllowed bool,
+	frame *turnFrame,
 ) (result agent.RoundResult, resultErr error) {
 	correlation, _ := observation.CorrelationFromContext(ctx)
 	correlation.RoundIndex = index
@@ -218,7 +250,7 @@ func (r *runtime) observeRound(
 	if err != nil {
 		return agent.RoundResult{}, err
 	}
-	result, resultErr = r.executeRound(ctx, round, lastAllowed)
+	result, resultErr = r.executeRound(ctx, round, lastAllowed, frame)
 	return result, resultErr
 }
 
