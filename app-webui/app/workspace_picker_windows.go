@@ -18,13 +18,6 @@ type winGUID struct {
 	Data4 [8]byte
 }
 
-type winIUnknown struct{ vtable *winIUnknownVTable }
-type winIUnknownVTable struct {
-	queryInterface uintptr
-	addRef         uintptr
-	release        uintptr
-}
-
 type winFileDialog struct{ vtable *winFileDialogVTable }
 type winFileDialogVTable struct {
 	queryInterface      uintptr
@@ -71,31 +64,27 @@ type winShellItemVTable struct {
 }
 
 var (
-	ole32                          = syscall.NewLazyDLL("ole32.dll")
-	shell32                        = syscall.NewLazyDLL("shell32.dll")
-	user32                         = syscall.NewLazyDLL("user32.dll")
-	kernel32                       = syscall.NewLazyDLL("kernel32.dll")
-	procCoInitializeEx             = ole32.NewProc("CoInitializeEx")
-	procCoUninitialize             = ole32.NewProc("CoUninitialize")
-	procCoCreateInstance           = ole32.NewProc("CoCreateInstance")
-	procCoTaskMemFree              = ole32.NewProc("CoTaskMemFree")
-	procCoMarshalInterThreadStream = ole32.NewProc("CoMarshalInterThreadInterfaceInStream")
-	procCoGetInterfaceStream       = ole32.NewProc("CoGetInterfaceAndReleaseStream")
-	procSHCreateItemFromPath       = shell32.NewProc("SHCreateItemFromParsingName")
-	procEnumThreadWindows          = user32.NewProc("EnumThreadWindows")
-	procPostMessageW               = user32.NewProc("PostMessageW")
-	procGetCurrentThreadID         = kernel32.NewProc("GetCurrentThreadId")
+	ole32                    = syscall.NewLazyDLL("ole32.dll")
+	shell32                  = syscall.NewLazyDLL("shell32.dll")
+	user32                   = syscall.NewLazyDLL("user32.dll")
+	kernel32                 = syscall.NewLazyDLL("kernel32.dll")
+	procCoInitializeEx       = ole32.NewProc("CoInitializeEx")
+	procCoUninitialize       = ole32.NewProc("CoUninitialize")
+	procCoCreateInstance     = ole32.NewProc("CoCreateInstance")
+	procCoTaskMemFree        = ole32.NewProc("CoTaskMemFree")
+	procSHCreateItemFromPath = shell32.NewProc("SHCreateItemFromParsingName")
+	procEnumThreadWindows    = user32.NewProc("EnumThreadWindows")
+	procPostMessageW         = user32.NewProc("PostMessageW")
+	procGetCurrentThreadID   = kernel32.NewProc("GetCurrentThreadId")
 )
 
 var (
 	clsidFileOpenDialog = winGUID{0xdc1c5a9c, 0xe88a, 0x4dde, [8]byte{0xa5, 0xa1, 0x60, 0xf8, 0x2a, 0x20, 0xae, 0xf7}}
 	iidFileOpenDialog   = winGUID{0xd57c7288, 0xd4ad, 0x4768, [8]byte{0xbe, 0x02, 0x9d, 0x96, 0x95, 0x32, 0xd9, 0x60}}
-	iidFileDialog       = winGUID{0x42f85136, 0xdb7e, 0x439c, [8]byte{0x85, 0xf1, 0xe4, 0x07, 0x5d, 0x13, 0x5f, 0xc8}}
 	iidShellItem        = winGUID{0x43826d1e, 0xe718, 0x42ee, [8]byte{0xbc, 0x55, 0xa1, 0xe2, 0x61, 0xc3, 0x7b, 0xfe}}
 )
 
 const (
-	coinitMultithreaded     = 0x0
 	coinitApartmentThreaded = 0x2
 	clsctxInprocServer      = 0x1
 	fosPickFolders          = 0x20
@@ -173,13 +162,9 @@ func showWindowsWorkspacePicker(ctx context.Context, initialPath string) (string
 
 	showDone, cancelDone := make(chan struct{}), make(chan struct{})
 	threadID, _, _ := procGetCurrentThreadID.Call()
-	var stream *winIUnknown
-	hResult, _, _ = procCoMarshalInterThreadStream.Call(
-		uintptr(unsafe.Pointer(&iidFileDialog)), uintptr(unsafe.Pointer(dialog)), uintptr(unsafe.Pointer(&stream)))
-	if winHRESULTFailed(hResult) {
-		return "", false, winHRESULTError("marshal IFileDialog", hResult)
-	}
-	go cancelWindowsWorkspacePicker(ctx, stream, uint32(threadID), showDone, cancelDone)
+	// Keep cancellation outside COM: releasing a marshaled dialog proxy after
+	// Show returns can call back into this waiting STA and deadlock the request.
+	go cancelWindowsWorkspacePicker(ctx, uint32(threadID), showDone, cancelDone)
 
 	hResult, _, _ = syscall.SyscallN(dialog.vtable.show, uintptr(unsafe.Pointer(dialog)), 0)
 	close(showDone)
@@ -202,38 +187,17 @@ func showWindowsWorkspacePicker(ctx context.Context, initialPath string) (string
 	return item.fileSystemPath()
 }
 
-func cancelWindowsWorkspacePicker(ctx context.Context, stream *winIUnknown, threadID uint32, showDone <-chan struct{}, done chan<- struct{}) {
+func cancelWindowsWorkspacePicker(ctx context.Context, threadID uint32, showDone <-chan struct{}, done chan<- struct{}) {
 	defer close(done)
-	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
-	hResult, _, _ := procCoInitializeEx.Call(0, coinitMultithreaded)
-	if winHRESULTFailed(hResult) {
-		stream.release()
-		select {
-		case <-ctx.Done():
-			closeWindowsPickerThread(threadID, showDone)
-		case <-showDone:
-		}
-		return
-	}
-	defer procCoUninitialize.Call()
-	var proxy *winFileDialog
-	hResult, _, _ = procCoGetInterfaceStream.Call(
-		uintptr(unsafe.Pointer(stream)), uintptr(unsafe.Pointer(&iidFileDialog)), uintptr(unsafe.Pointer(&proxy)))
-	if winHRESULTFailed(hResult) {
-		select {
-		case <-ctx.Done():
-			closeWindowsPickerThread(threadID, showDone)
-		case <-showDone:
-		}
-		return
-	}
-	defer proxy.release()
+	waitForWindowsWorkspacePicker(ctx, showDone, func() {
+		closeWindowsPickerThread(threadID, showDone)
+	})
+}
+
+func waitForWindowsWorkspacePicker(ctx context.Context, showDone <-chan struct{}, closePicker func()) {
 	select {
 	case <-ctx.Done():
-		if err := proxy.close(hresultCanceled); err != nil {
-			closeWindowsPickerThread(threadID, showDone)
-		}
+		closePicker()
 	case <-showDone:
 	}
 }
@@ -310,14 +274,6 @@ func (dialog *winFileDialog) setFolder(item *winShellItem) error {
 	return nil
 }
 
-func (dialog *winFileDialog) close(hResult uint32) error {
-	result, _, _ := syscall.SyscallN(dialog.vtable.close, uintptr(unsafe.Pointer(dialog)), uintptr(hResult))
-	if winHRESULTFailed(result) {
-		return winHRESULTError("close IFileOpenDialog", result)
-	}
-	return nil
-}
-
 func (dialog *winFileDialog) result() (*winShellItem, error) {
 	var item *winShellItem
 	hResult, _, _ := syscall.SyscallN(dialog.vtable.getResult, uintptr(unsafe.Pointer(dialog)), uintptr(unsafe.Pointer(&item)))
@@ -343,12 +299,6 @@ func (item *winShellItem) fileSystemPath() (string, bool, error) {
 	defer procCoTaskMemFree.Call(uintptr(unsafe.Pointer(pointer)))
 	path := winUTF16PointerToString(pointer)
 	return path, path == "", nil
-}
-
-func (value *winIUnknown) release() {
-	if value != nil {
-		syscall.SyscallN(value.vtable.release, uintptr(unsafe.Pointer(value)))
-	}
 }
 
 func winUTF16PointerToString(pointer *uint16) string {
