@@ -11,6 +11,7 @@ import (
 
 	"github.com/ingot-agent/ingot-abi/state"
 	"github.com/ingot-agent/sdk/interaction"
+	"github.com/ingot-agent/sdk/model"
 	"github.com/ingot-agent/sdk/operation"
 )
 
@@ -73,28 +74,80 @@ func (o *setupOperation) Invoke(ctx context.Context, request operation.Request) 
 	if slices.Contains(providerNames, current.DefaultProvider) || (current.DefaultProvider == "" && len(providerNames) == 1) {
 		providerField.Default = valuePointer(interaction.StringValue(current.DefaultProvider))
 	}
-	response, err := request.Interaction.Request(ctx, interaction.Request{
+	providerResponse, err := request.Interaction.Request(ctx, interaction.Request{
 		Name:        setupOperationName,
-		Description: "Default provider and model used when a request leaves them empty.",
-		Fields: []interaction.Field{
-			providerField,
-			{Name: "default_model", Label: "Default Model", Kind: interaction.FieldString, Required: false, Default: &interaction.Value{Kind: interaction.ValueString, String: current.DefaultModel}},
-		},
+		Description: "Select the default model provider.",
+		Fields:      []interaction.Field{providerField},
 	})
 	if err != nil {
 		return operation.Result{}, err
 	}
-	// Start from the persisted configuration and overlay only the answers the
-	// Host supplied, so an untouched field keeps its current value.
-	updated := current
-	if v, ok := answerString(response, "default_provider"); ok {
-		updated.DefaultProvider = v
-	} else {
+	selectedProvider, ok := answerString(providerResponse, "default_provider")
+	if !ok {
 		return operation.Result{}, fmt.Errorf("default_provider is required: %w", ErrInvalidConfig)
 	}
-	if v, ok := answerString(response, "default_model"); ok {
-		updated.DefaultModel = v
+	configuredProvider := selectedProvider
+	if selectedProvider == "" && len(providerNames) == 1 {
+		selectedProvider = providerNames[0]
 	}
+	provider, ok := selection.providers[selectedProvider]
+	if !ok {
+		return operation.Result{}, fmt.Errorf("default provider %q is unavailable: %w", selectedProvider, ErrInvalidConfig)
+	}
+
+	modelField := interaction.Field{Name: "default_model", Label: "Default Model", Required: len(provider.Models) != 0}
+	if len(provider.Models) == 0 {
+		modelField.Kind = interaction.FieldString
+	} else {
+		modelField.Kind = interaction.FieldChoice
+		for _, candidate := range provider.Models {
+			modelField.Options = append(modelField.Options, interaction.Option{Value: candidate.Name, Label: candidate.Name})
+		}
+	}
+	if _, exists := findProviderModel(provider.Models, current.DefaultModel); exists || (len(provider.Models) == 0 && current.DefaultModel != "") {
+		modelField.Default = valuePointer(interaction.StringValue(current.DefaultModel))
+	}
+	modelResponse, err := request.Interaction.Request(ctx, interaction.Request{
+		Name: setupOperationName, Description: "Select the default model.", Fields: []interaction.Field{modelField},
+	})
+	if err != nil {
+		return operation.Result{}, err
+	}
+	selectedModel, ok := answerString(modelResponse, "default_model")
+	if !ok {
+		selectedModel = current.DefaultModel
+	}
+	if len(provider.Models) != 0 && selectedModel == "" {
+		return operation.Result{}, fmt.Errorf("default_model is required: %w", ErrInvalidConfig)
+	}
+	selectedModelEntry, modelDeclared := findProviderModel(provider.Models, selectedModel)
+	if len(provider.Models) != 0 && !modelDeclared {
+		return operation.Result{}, fmt.Errorf("default model %q is unavailable from provider %q: %w", selectedModel, selectedProvider, ErrInvalidConfig)
+	}
+
+	effortField := interaction.Field{
+		Name: "default_reasoning_effort", Label: "Default Reasoning Effort", Kind: interaction.FieldChoice, Required: true,
+		Options: []interaction.Option{{Value: "", Label: "Provider default"}},
+	}
+	if modelDeclared {
+		for _, effort := range selectedModelEntry.ReasoningEfforts {
+			effortField.Options = append(effortField.Options, interaction.Option{Value: string(effort), Label: string(effort)})
+		}
+	}
+	if current.DefaultReasoningEffort == "" || slices.Contains(selectedModelEntry.ReasoningEfforts, current.DefaultReasoningEffort) {
+		effortField.Default = valuePointer(interaction.StringValue(string(current.DefaultReasoningEffort)))
+	}
+	effortResponse, err := request.Interaction.Request(ctx, interaction.Request{
+		Name: setupOperationName, Description: "Select the default reasoning effort.", Fields: []interaction.Field{effortField},
+	})
+	if err != nil {
+		return operation.Result{}, err
+	}
+	selectedEffort, ok := answerString(effortResponse, "default_reasoning_effort")
+	if !ok {
+		selectedEffort = string(current.DefaultReasoningEffort)
+	}
+	updated := Config{DefaultProvider: configuredProvider, DefaultModel: selectedModel, DefaultReasoningEffort: model.ReasoningEffort(selectedEffort)}
 	if err := validateConfig(updated); err != nil {
 		return operation.Result{}, err
 	}
@@ -120,8 +173,16 @@ func (o *setupOperation) Invoke(ctx context.Context, request operation.Request) 
 	if updated.DefaultProvider == "" && len(selection.names) > 1 {
 		return operation.Result{}, fmt.Errorf("default_provider must select one of the available providers: %w", ErrInvalidConfig)
 	}
-	if _, err := effectiveConfig(updated, selection.names); err != nil {
+	effective, err := effectiveConfig(updated, selection.names)
+	if err != nil {
 		return operation.Result{}, err
+	}
+	if effective.DefaultModel != "" {
+		selection.defaults = effective
+		probe := model.Request{Provider: effective.DefaultProvider, Model: effective.DefaultModel, ReasoningEffort: effective.DefaultReasoningEffort}
+		if _, err := selection.selectProvider(probe); err != nil {
+			return operation.Result{}, fmt.Errorf("invalid model runtime defaults: %w: %w", err, ErrInvalidConfig)
+		}
 	}
 	if err := ctx.Err(); err != nil {
 		return operation.Result{}, err
@@ -134,7 +195,7 @@ func (o *setupOperation) Invoke(ctx context.Context, request operation.Request) 
 }
 
 func validateConfig(config Config) error {
-	if !utf8.ValidString(config.DefaultProvider) || !utf8.ValidString(config.DefaultModel) {
+	if !utf8.ValidString(config.DefaultProvider) || !utf8.ValidString(config.DefaultModel) || !utf8.ValidString(string(config.DefaultReasoningEffort)) {
 		return fmt.Errorf("provider or model contains invalid UTF-8: %w", ErrInvalidConfig)
 	}
 	return nil

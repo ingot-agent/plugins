@@ -183,13 +183,14 @@ func validRawJSON(raw json.RawMessage) bool {
 }
 
 type requestProjection struct {
-	Provider    string              `json:"provider"`
-	Model       string              `json:"model"`
-	Messages    []messageProjection `json:"messages"`
-	Tools       []toolProjection    `json:"tools"`
-	Temperature *float64            `json:"temperature"`
-	MaxTokens   *int                `json:"max_tokens"`
-	Stop        []string            `json:"stop"`
+	Provider        string                `json:"provider"`
+	Model           string                `json:"model"`
+	Messages        []messageProjection   `json:"messages"`
+	Tools           []toolProjection      `json:"tools"`
+	Temperature     *float64              `json:"temperature"`
+	MaxTokens       *int                  `json:"max_tokens"`
+	Stop            []string              `json:"stop"`
+	ReasoningEffort model.ReasoningEffort `json:"reasoning_effort"`
 }
 
 type messageProjection struct {
@@ -217,6 +218,7 @@ func canonicalRequestBytes(request model.Request) ([]byte, error) {
 		Provider: request.Provider, Model: request.Model, Messages: projectMessages(request.Messages),
 		Tools: make([]toolProjection, len(request.Tools)), Temperature: copyFloat(request.Temperature),
 		MaxTokens: copyInt(request.MaxTokens), Stop: append([]string(nil), request.Stop...),
+		ReasoningEffort: request.ReasoningEffort,
 	}
 	for i, definition := range request.Tools {
 		projection.Tools[i] = toolProjection{Name: definition.Name, Description: definition.Description, InputSchema: cloneRaw(definition.InputSchema)}

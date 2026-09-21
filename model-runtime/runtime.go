@@ -31,8 +31,9 @@ var (
 
 // Config selects defaults used when a request leaves a field empty.
 type Config struct {
-	DefaultProvider string `toml:"default_provider"`
-	DefaultModel    string `toml:"default_model"`
+	DefaultProvider        string                `toml:"default_provider"`
+	DefaultModel           string                `toml:"default_model"`
+	DefaultReasoningEffort model.ReasoningEffort `toml:"default_reasoning_effort"`
 }
 
 // Dependencies contains providers and the independent complete/stream chains.
@@ -271,6 +272,9 @@ func (r *runtime) snapshot(ctx context.Context) (providerSnapshot, error) {
 			if entry.Name == "" || !utf8.ValidString(entry.Name) || entry.Complete == nil {
 				return providerSnapshot{}, fmt.Errorf("provider_sources[%d] contains an invalid provider: %w", i, ErrInvalidConfig)
 			}
+			if err := validateProviderModels(entry.Models); err != nil {
+				return providerSnapshot{}, fmt.Errorf("provider %q: %w", entry.Name, err)
+			}
 			if _, exists := selection.providers[entry.Name]; exists {
 				return providerSnapshot{}, fmt.Errorf("duplicate provider %q: %w", entry.Name, ErrInvalidConfig)
 			}
@@ -291,6 +295,9 @@ func (s providerSnapshot) applyDefaults(request *model.Request) {
 	if request.Model == "" {
 		request.Model = s.defaults.DefaultModel
 	}
+	if request.ReasoningEffort == "" {
+		request.ReasoningEffort = s.defaults.DefaultReasoningEffort
+	}
 }
 
 func (s providerSnapshot) selectProvider(request model.Request) (model.ProviderEntry, error) {
@@ -304,7 +311,51 @@ func (s providerSnapshot) selectProvider(request model.Request) (model.ProviderE
 	if request.Model == "" {
 		return model.ProviderEntry{}, fmt.Errorf("empty model for provider %q: set default_model in [plugins.model.runtime] or model in [plugins.agent.default]: %w", request.Provider, model.ErrModelNotFound)
 	}
+	if len(provider.Models) != 0 {
+		selected, ok := findProviderModel(provider.Models, request.Model)
+		if !ok {
+			return model.ProviderEntry{}, fmt.Errorf("model %q is unavailable from provider %q: %w", request.Model, request.Provider, model.ErrModelNotFound)
+		}
+		if request.ReasoningEffort != "" && !slices.Contains(selected.ReasoningEfforts, request.ReasoningEffort) {
+			return model.ProviderEntry{}, fmt.Errorf("model %q does not support reasoning effort %q: %w", request.Model, request.ReasoningEffort, model.ErrReasoningEffortUnsupported)
+		}
+	} else if request.ReasoningEffort != "" {
+		return model.ProviderEntry{}, fmt.Errorf("provider %q does not declare reasoning effort support: %w", request.Provider, model.ErrReasoningEffortUnsupported)
+	}
 	return provider, nil
+}
+
+func findProviderModel(models []model.ModelEntry, name string) (model.ModelEntry, bool) {
+	for _, candidate := range models {
+		if candidate.Name == name {
+			return candidate, true
+		}
+	}
+	return model.ModelEntry{}, false
+}
+
+func validateProviderModels(models []model.ModelEntry) error {
+	seenModels := make(map[string]struct{}, len(models))
+	for i, candidate := range models {
+		if candidate.Name == "" || !utf8.ValidString(candidate.Name) {
+			return fmt.Errorf("models[%d] has an invalid name: %w", i, ErrInvalidConfig)
+		}
+		if _, exists := seenModels[candidate.Name]; exists {
+			return fmt.Errorf("models[%d] duplicates model %q: %w", i, candidate.Name, ErrInvalidConfig)
+		}
+		seenModels[candidate.Name] = struct{}{}
+		seenEfforts := make(map[model.ReasoningEffort]struct{}, len(candidate.ReasoningEfforts))
+		for j, effort := range candidate.ReasoningEfforts {
+			if !effort.Valid() {
+				return fmt.Errorf("models[%d].reasoning_efforts[%d] is invalid: %w", i, j, ErrInvalidConfig)
+			}
+			if _, exists := seenEfforts[effort]; exists {
+				return fmt.Errorf("models[%d].reasoning_efforts[%d] duplicates %q: %w", i, j, effort, ErrInvalidConfig)
+			}
+			seenEfforts[effort] = struct{}{}
+		}
+	}
+	return nil
 }
 
 func validateResponse(response model.Response) error {
@@ -338,7 +389,7 @@ func validateResponse(response model.Response) error {
 }
 
 func validateRequest(request model.Request) error {
-	if !utf8.ValidString(request.Provider) || !utf8.ValidString(request.Model) {
+	if !utf8.ValidString(request.Provider) || !utf8.ValidString(request.Model) || !utf8.ValidString(string(request.ReasoningEffort)) {
 		return fmt.Errorf("request provider or model contains invalid UTF-8: %w", ErrInvalidResponse)
 	}
 	for i, message := range request.Messages {

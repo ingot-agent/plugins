@@ -706,3 +706,54 @@ func TestConcurrentProviderSelection(t *testing.T) {
 		t.Fatalf("provider calls = (%d, %d), want (%d, %d)", first.calls.Load(), second.calls.Load(), callsPerProvider, callsPerProvider)
 	}
 }
+
+func TestResolverValidatesModelCapabilitiesAndReasoningEffort(t *testing.T) {
+	provider := &fakeProvider{}
+	entry := fixedProviderSource{
+		Name: "p",
+		Models: []model.ModelEntry{{
+			Name:             "reasoning-model",
+			ReasoningEfforts: []model.ReasoningEffort{model.ReasoningEffortLow, model.ReasoningEffortHigh},
+		}},
+		Complete: provider.Complete,
+	}
+	exports, _, err := modelruntime.New(context.Background(), withState(t, modelruntime.Config{
+		DefaultProvider: "p", DefaultModel: "reasoning-model", DefaultReasoningEffort: model.ReasoningEffortHigh,
+	}, modelruntime.Dependencies{ProviderSources: []model.ProviderSource{entry}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := exports.Resolver.ResolveRequest(context.Background(), model.Request{})
+	if err != nil || resolved.Provider != "p" || resolved.Model != "reasoning-model" || resolved.ReasoningEffort != model.ReasoningEffortHigh {
+		t.Fatalf("resolved = %#v, error = %v", resolved, err)
+	}
+	resolved, err = exports.Resolver.ResolveRequest(context.Background(), model.Request{ReasoningEffort: model.ReasoningEffortLow})
+	if err != nil || resolved.ReasoningEffort != model.ReasoningEffortLow {
+		t.Fatalf("explicit effort = %#v, error = %v", resolved, err)
+	}
+	if _, err := exports.Resolver.ResolveRequest(context.Background(), model.Request{Model: "missing"}); !errors.Is(err, model.ErrModelNotFound) {
+		t.Fatalf("missing model error = %v", err)
+	}
+	if _, err := exports.Resolver.ResolveRequest(context.Background(), model.Request{ReasoningEffort: model.ReasoningEffortMedium}); !errors.Is(err, model.ErrReasoningEffortUnsupported) {
+		t.Fatalf("unsupported effort error = %v", err)
+	}
+}
+
+func TestSnapshotRejectsInvalidModelCapabilities(t *testing.T) {
+	provider := &fakeProvider{}
+	tests := []model.ProviderEntry{
+		{Name: "p", Models: []model.ModelEntry{{Name: ""}}, Complete: provider.Complete},
+		{Name: "p", Models: []model.ModelEntry{{Name: "m"}, {Name: "m"}}, Complete: provider.Complete},
+		{Name: "p", Models: []model.ModelEntry{{Name: "m", ReasoningEfforts: []model.ReasoningEffort{""}}}, Complete: provider.Complete},
+		{Name: "p", Models: []model.ModelEntry{{Name: "m", ReasoningEfforts: []model.ReasoningEffort{model.ReasoningEffortHigh, model.ReasoningEffortHigh}}}, Complete: provider.Complete},
+	}
+	for i, entry := range tests {
+		exports, _, err := modelruntime.New(context.Background(), withState(t, modelruntime.Config{}, modelruntime.Dependencies{ProviderSources: []model.ProviderSource{fixedProviderSource(entry)}}))
+		if err != nil {
+			t.Fatalf("case %d construct: %v", i, err)
+		}
+		if _, err := exports.Resolver.ResolveRequest(context.Background(), model.Request{Provider: "p", Model: "m"}); !errors.Is(err, modelruntime.ErrInvalidConfig) {
+			t.Fatalf("case %d error = %v", i, err)
+		}
+	}
+}

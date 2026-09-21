@@ -120,13 +120,13 @@ func TestCompleteMapsRequestHeadersAndResponse(t *testing.T) {
 	headers := map[string]string{"X-Tenant": "one"}
 	exports, _, err := openaicompat.New(context.Background(), withState(t, openaicompat.Config{Providers: []openaicompat.ProviderConfig{{
 		Name: "primary", BaseURL: "https://example.test/v1/", APIKey: "secret", Organization: "org", Project: "project",
-		Models: []string{"requested-model"}, DefaultHeaders: headers,
+		Models: []string{"requested-model"}, DefaultHeaders: headers, ReasoningEfforts: []string{"low", "high"},
 	}}}, dependencies(httpx.Client(client))))
 	if err != nil {
 		t.Fatal(err)
 	}
 	headers["X-Tenant"] = "mutated"
-	result, err := providerEntries(t, exports)[0].Complete(context.Background(), model.Request{Model: "requested-model", Messages: []model.Message{{Role: model.RoleUser, Content: content.FromText("hi")}}})
+	result, err := providerEntries(t, exports)[0].Complete(context.Background(), model.Request{Model: "requested-model", ReasoningEffort: model.ReasoningEffortHigh, Messages: []model.Message{{Role: model.RoleUser, Content: content.FromText("hi")}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,7 +141,7 @@ func TestCompleteMapsRequestHeadersAndResponse(t *testing.T) {
 		t.Fatalf("headers=%v", captured.Header)
 	}
 	var payload map[string]any
-	if err := json.Unmarshal(body, &payload); err != nil || payload["stream"] != false || payload["model"] != "requested-model" {
+	if err := json.Unmarshal(body, &payload); err != nil || payload["stream"] != false || payload["model"] != "requested-model" || payload["reasoning_effort"] != "high" {
 		t.Fatalf("payload=%s err=%v", body, err)
 	}
 }
@@ -191,6 +191,9 @@ func TestCompleteMapsMessagesToolsAndOptionalFields(t *testing.T) {
 		if !strings.Contains(requestBody, fragment) {
 			t.Fatalf("request body %s does not contain %s", requestBody, fragment)
 		}
+	}
+	if strings.Contains(requestBody, "reasoning_effort") {
+		t.Fatalf("unset reasoning effort was encoded: %s", requestBody)
 	}
 }
 
@@ -474,6 +477,7 @@ func TestConfigRejectsUnsafeProviderIdentityURLAndHeaders(t *testing.T) {
 		{name: "provider name", cfg: openaicompat.ProviderConfig{Name: "Bad Name", BaseURL: "https://example.test"}},
 		{name: "provider name length", cfg: openaicompat.ProviderConfig{Name: "a" + strings.Repeat("b", 64), BaseURL: "https://example.test"}},
 		{name: "URL userinfo", cfg: openaicompat.ProviderConfig{Name: "p", BaseURL: "https://user:secret@example.test/v1"}},
+		{name: "reasoning effort", cfg: openaicompat.ProviderConfig{Name: "p", BaseURL: "https://example.test", ReasoningEfforts: []string{"extreme"}}},
 		{name: "API key newline", cfg: openaicompat.ProviderConfig{Name: "p", BaseURL: "https://example.test", APIKey: "secret\nX-Evil: yes"}},
 		{name: "header name", cfg: openaicompat.ProviderConfig{Name: "p", BaseURL: "https://example.test", DefaultHeaders: map[string]string{"Bad Header": "x"}}},
 		{name: "header value", cfg: openaicompat.ProviderConfig{Name: "p", BaseURL: "https://example.test", DefaultHeaders: map[string]string{"X-Test": "x\r\ny"}}},

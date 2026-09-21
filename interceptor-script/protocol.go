@@ -73,13 +73,14 @@ type messageProjection struct {
 }
 
 type modelRequestProjection struct {
-	Provider    string                 `json:"provider"`
-	Model       string                 `json:"model"`
-	Messages    []messageProjection    `json:"messages"`
-	Tools       []definitionProjection `json:"tools"`
-	Temperature *float64               `json:"temperature"`
-	MaxTokens   *int                   `json:"max_tokens"`
-	Stop        []string               `json:"stop"`
+	Provider        string                 `json:"provider"`
+	Model           string                 `json:"model"`
+	Messages        []messageProjection    `json:"messages"`
+	Tools           []definitionProjection `json:"tools"`
+	Temperature     *float64               `json:"temperature"`
+	MaxTokens       *int                   `json:"max_tokens"`
+	Stop            []string               `json:"stop"`
+	ReasoningEffort string                 `json:"reasoning_effort"`
 }
 
 type usageProjection struct {
@@ -310,6 +311,9 @@ func projectModelRequest(request model.Request) (modelRequestProjection, error) 
 	if err := validateUTF8("model", request.Model); err != nil {
 		return modelRequestProjection{}, err
 	}
+	if err := validateUTF8("reasoning effort", string(request.ReasoningEffort)); err != nil {
+		return modelRequestProjection{}, err
+	}
 	if request.Temperature != nil && (math.IsNaN(*request.Temperature) || math.IsInf(*request.Temperature, 0)) {
 		return modelRequestProjection{}, errors.New("temperature must be finite")
 	}
@@ -342,6 +346,7 @@ func projectModelRequest(request model.Request) (modelRequestProjection, error) 
 	return modelRequestProjection{
 		Provider: request.Provider, Model: request.Model, Messages: messages, Tools: tools,
 		Temperature: copyFloat(request.Temperature), MaxTokens: copyInt(request.MaxTokens), Stop: append([]string{}, request.Stop...),
+		ReasoningEffort: string(request.ReasoningEffort),
 	}, nil
 }
 
