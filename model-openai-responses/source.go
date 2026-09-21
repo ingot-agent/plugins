@@ -26,14 +26,30 @@ func (s *providerSource) Snapshot(ctx context.Context) ([]model.ProviderEntry, e
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	return slices.Clone(s.current.Load().entries), nil
+	return cloneProviderEntries(s.current.Load().entries), nil
 }
 
 func (s *providerSource) prepare(configs []normalizedProviderConfig) *providerSnapshot {
 	entries := make([]model.ProviderEntry, 0, len(configs))
 	for _, config := range configs {
 		instance := newProviderFromNormalized(config, s.http, s.assets)
-		entries = append(entries, model.ProviderEntry{Name: instance.name, Complete: instance.Complete, Stream: instance.Stream})
+		entries = append(entries, model.ProviderEntry{Name: instance.name, Models: cloneModelEntries(instance.modelEntries), Complete: instance.Complete, Stream: instance.Stream})
 	}
 	return &providerSnapshot{entries: entries}
+}
+
+func cloneProviderEntries(entries []model.ProviderEntry) []model.ProviderEntry {
+	cloned := slices.Clone(entries)
+	for i := range cloned {
+		cloned[i].Models = cloneModelEntries(cloned[i].Models)
+	}
+	return cloned
+}
+
+func cloneModelEntries(entries []model.ModelEntry) []model.ModelEntry {
+	cloned := slices.Clone(entries)
+	for i := range cloned {
+		cloned[i].ReasoningEfforts = slices.Clone(cloned[i].ReasoningEfforts)
+	}
+	return cloned
 }

@@ -63,14 +63,14 @@ func TestCompleteMapsResponsesRequestAndResponse(t *testing.T) {
 	provider := newProvider(t, openairesponses.ProviderConfig{
 		Name: "primary", BaseURL: "https://example.test/v1/", APIKey: "secret",
 		Organization: "org", Project: "project", Models: []string{"requested-model"},
-		DefaultHeaders: headers,
+		DefaultHeaders: headers, ReasoningEfforts: []string{"low", "high"},
 	}, client, assetResolver{data: map[string][]byte{}})
 	headers["X-Tenant"] = "mutated"
 
 	temperature := 0.25
 	maxTokens := 128
 	result, err := provider.Complete(context.Background(), model.Request{
-		Model: "requested-model",
+		Model: "requested-model", ReasoningEffort: model.ReasoningEffortHigh,
 		Messages: []model.Message{
 			{Role: model.RoleSystem, Content: content.FromText("system")},
 			{Role: model.RoleUser, Content: content.Content{
@@ -114,7 +114,10 @@ func TestCompleteMapsResponsesRequestAndResponse(t *testing.T) {
 		Store           bool    `json:"store"`
 		Temperature     float64 `json:"temperature"`
 		MaxOutputTokens int     `json:"max_output_tokens"`
-		Input           []struct {
+		Reasoning       struct {
+			Effort string `json:"effort"`
+		} `json:"reasoning"`
+		Input []struct {
 			Type      string          `json:"type"`
 			Role      string          `json:"role"`
 			Content   json.RawMessage `json:"content"`
@@ -132,7 +135,7 @@ func TestCompleteMapsResponsesRequestAndResponse(t *testing.T) {
 	if err := json.Unmarshal(requestBody, &payload); err != nil {
 		t.Fatal(err)
 	}
-	if payload.Model != "requested-model" || payload.Instructions != "system" || payload.Stream || payload.Store || payload.Temperature != 0.25 || payload.MaxOutputTokens != 128 {
+	if payload.Model != "requested-model" || payload.Instructions != "system" || payload.Stream || payload.Store || payload.Temperature != 0.25 || payload.MaxOutputTokens != 128 || payload.Reasoning.Effort != "high" {
 		t.Fatalf("payload = %s", requestBody)
 	}
 	wantTypes := []string{"message", "message", "function_call", "function_call_output"}
@@ -200,6 +203,9 @@ func TestCompleteOnlyPromotesLeadingSystemMessage(t *testing.T) {
 	}
 	if len(payload.Input) != 2 || payload.Input[0].Role != "user" || payload.Input[1].Role != "system" || payload.Input[1].Content != "historical system message" {
 		t.Fatalf("input = %#v; payload = %s", payload.Input, requestBody)
+	}
+	if strings.Contains(string(requestBody), `"reasoning"`) {
+		t.Fatalf("unset reasoning effort was encoded: %s", requestBody)
 	}
 }
 
@@ -430,6 +436,12 @@ func TestConfigAndHTTPErrorBoundaries(t *testing.T) {
 	}}}, dependencies(staticClient(`{}`))))
 	if !errors.Is(err, openairesponses.ErrInvalidConfig) {
 		t.Fatalf("owned header error = %v", err)
+	}
+	_, _, err = openairesponses.New(context.Background(), withState(t, openairesponses.Config{Providers: []openairesponses.ProviderConfig{{
+		Name: "p", BaseURL: "https://example.test", ReasoningEfforts: []string{"extreme"},
+	}}}, dependencies(staticClient(`{}`))))
+	if !errors.Is(err, openairesponses.ErrInvalidConfig) {
+		t.Fatalf("reasoning effort error = %v", err)
 	}
 
 	client := clientFunc(func(context.Context, *http.Request) (*http.Response, error) {

@@ -162,9 +162,10 @@ func TestLiveMissingDefaultCanBeRepairedAfterRestart(t *testing.T) {
 		t.Fatalf("explicit provider was blocked by unused default: %v", err)
 	}
 	channel := &setupTestChannel{respond: func(request interaction.Request) (interaction.Response, error) {
-		field := findSetupField(t, request, "default_provider")
-		if field.Default != nil || len(field.Options) != 2 || field.Options[1].Value != "new" {
-			t.Fatalf("repair field = %#v", field)
+		for _, field := range request.Fields {
+			if field.Name == "default_provider" && (field.Default != nil || len(field.Options) != 2 || field.Options[1].Value != "new") {
+				t.Fatalf("repair field = %#v", field)
+			}
 		}
 		return liveAnswer("new", "new-model"), nil
 	}}

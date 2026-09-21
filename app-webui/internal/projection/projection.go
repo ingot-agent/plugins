@@ -112,7 +112,8 @@ func ModelRequest(request model.Request) map[string]any {
 		definitions[i] = map[string]any{"name": definition.Name, "description": definition.Description, "inputSchema": json.RawMessage(bytes.Clone(definition.InputSchema))}
 	}
 	return map[string]any{"provider": request.Provider, "model": request.Model, "messages": Messages(request.Messages), "tools": definitions,
-		"temperature": request.Temperature, "maxTokens": request.MaxTokens, "stop": append([]string{}, request.Stop...)}
+		"temperature": request.Temperature, "maxTokens": request.MaxTokens, "stop": append([]string{}, request.Stop...),
+		"reasoningEffort": request.ReasoningEffort}
 }
 
 // ModelResponse includes provider-reported usage without estimating missing data.

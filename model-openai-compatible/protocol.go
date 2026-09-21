@@ -20,14 +20,15 @@ import (
 )
 
 type chatRequest struct {
-	Model         string        `json:"model"`
-	Messages      []chatMessage `json:"messages"`
-	Tools         []chatTool    `json:"tools,omitempty"`
-	Temperature   *float64      `json:"temperature,omitempty"`
-	MaxTokens     *int          `json:"max_tokens,omitempty"`
-	Stop          *[]string     `json:"stop,omitempty"`
-	Stream        bool          `json:"stream"`
-	StreamOptions *streamOption `json:"stream_options,omitempty"`
+	Model           string                `json:"model"`
+	ReasoningEffort model.ReasoningEffort `json:"reasoning_effort,omitempty"`
+	Messages        []chatMessage         `json:"messages"`
+	Tools           []chatTool            `json:"tools,omitempty"`
+	Temperature     *float64              `json:"temperature,omitempty"`
+	MaxTokens       *int                  `json:"max_tokens,omitempty"`
+	Stop            *[]string             `json:"stop,omitempty"`
+	Stream          bool                  `json:"stream"`
+	StreamOptions   *streamOption         `json:"stream_options,omitempty"`
 }
 
 type streamOption struct {
@@ -113,7 +114,8 @@ func (p *provider) encodeChatRequest(ctx context.Context, request model.Request,
 	}
 	payload := chatRequest{
 		Model: request.Model, Messages: messages, Tools: tools,
-		Temperature: request.Temperature, MaxTokens: request.MaxTokens, Stream: stream,
+		ReasoningEffort: request.ReasoningEffort,
+		Temperature:     request.Temperature, MaxTokens: request.MaxTokens, Stream: stream,
 	}
 	if request.Stop != nil {
 		stops := append([]string(nil), request.Stop...)

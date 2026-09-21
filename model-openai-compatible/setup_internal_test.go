@@ -54,7 +54,7 @@ func (*setupTestChannel) Clear(context.Context, string) error           { return
 func TestSetupRenamePreservesSecretAndHiddenProviderFields(t *testing.T) {
 	scope := setupTestScope{dir: filepath.Join(t.TempDir(), "state")}
 	current := Config{Providers: []ProviderConfig{{
-		Name: "old", BaseURL: "https://example.test/v1", APIKey: "secret",
+		Name: "old", BaseURL: "https://example.test/v1", APIKey: "secret", ReasoningEfforts: []string{"low", "high"},
 		Organization: "org", Project: "project", Models: []string{"m"},
 		DefaultHeaders:   map[string]string{"X-Tenant": "one"},
 		MaxResponseBytes: 123, MaxErrorBodyBytes: 124, MaxAssetBytes: 125, AssetConcurrency: 2,

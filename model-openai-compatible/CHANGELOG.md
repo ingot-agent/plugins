@@ -4,6 +4,12 @@ All notable changes to this plugin are documented in this file.
 
 ## Unreleased
 
+### Added
+
+- Publish configured models and their supported reasoning-effort values through
+  `model.ProviderEntry`, and map the request-selected value to
+  `reasoning_effort` on Chat Completions requests.
+
 ### Changed
 
 - Replace static provider exports with a live `model.ProviderSource`; saved

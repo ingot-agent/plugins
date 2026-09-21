@@ -34,7 +34,12 @@ type setupTestChannel struct {
 }
 
 func (c *setupTestChannel) Request(_ context.Context, request interaction.Request) (interaction.Response, error) {
-	c.request = request
+	for _, field := range request.Fields {
+		if field.Name == "default_provider" {
+			c.request = request
+			break
+		}
+	}
 	return c.respond(request)
 }
 
@@ -153,4 +158,62 @@ func findSetupField(t *testing.T, request interaction.Request, name string) inte
 	}
 	t.Fatalf("field %q not found", name)
 	return interaction.Field{}
+}
+
+func TestSetupUsesProviderModelAndReasoningCapabilityChoices(t *testing.T) {
+	scope := setupTestScope{dir: filepath.Join(t.TempDir(), "state")}
+	entry := fixedProviderSource{
+		Name: "provider",
+		Models: []model.ModelEntry{
+			{Name: "plain"},
+			{Name: "reasoning", ReasoningEfforts: []model.ReasoningEffort{model.ReasoningEffortLow, model.ReasoningEffortHigh}},
+		},
+		Complete: setupTestProvider{}.Complete,
+	}
+	exports, _, err := New(context.Background(), Dependencies{State: scope, ProviderSources: []model.ProviderSource{entry}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	phase := 0
+	channel := &setupTestChannel{respond: func(request interaction.Request) (interaction.Response, error) {
+		phase++
+		switch phase {
+		case 1:
+			provider := findSetupField(t, request, "default_provider")
+			if len(provider.Options) != 2 || provider.Options[1].Value != "provider" {
+				t.Fatalf("provider options = %#v", provider.Options)
+			}
+			return interaction.Response{Values: []interaction.Answer{{Name: "default_provider", Value: interaction.StringValue("")}}}, nil
+		case 2:
+			field := findSetupField(t, request, "default_model")
+			if field.Kind != interaction.FieldChoice || len(field.Options) != 2 || field.Options[0].Value != "plain" || field.Options[1].Value != "reasoning" {
+				t.Fatalf("model field = %#v", field)
+			}
+			return interaction.Response{Values: []interaction.Answer{{Name: "default_model", Value: interaction.StringValue("reasoning")}}}, nil
+		case 3:
+			field := findSetupField(t, request, "default_reasoning_effort")
+			if field.Kind != interaction.FieldChoice || len(field.Options) != 3 || field.Options[0].Value != "" || field.Options[1].Value != "low" || field.Options[2].Value != "high" {
+				t.Fatalf("reasoning field = %#v", field)
+			}
+			return interaction.Response{Values: []interaction.Answer{{Name: "default_reasoning_effort", Value: interaction.StringValue("high")}}}, nil
+		default:
+			t.Fatalf("unexpected interaction phase %d", phase)
+			return interaction.Response{}, nil
+		}
+	}}
+	if _, err := exports.Operations[0].Invoke(context.Background(), operation.Request{Interaction: channel}); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := loadConfig(scope.Dir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := Config{DefaultModel: "reasoning", DefaultReasoningEffort: model.ReasoningEffortHigh}
+	if stored != want {
+		t.Fatalf("stored = %#v, want %#v", stored, want)
+	}
+	resolved, err := exports.Resolver.ResolveRequest(context.Background(), model.Request{})
+	if err != nil || resolved.Provider != "provider" || resolved.Model != "reasoning" || resolved.ReasoningEffort != model.ReasoningEffortHigh {
+		t.Fatalf("resolved = %#v, error = %v", resolved, err)
+	}
 }

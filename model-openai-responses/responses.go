@@ -108,6 +108,7 @@ type Config struct {
 type ProviderConfig struct {
 	Name              string            `toml:"name"`
 	BaseURL           string            `toml:"base_url"`
+	ReasoningEfforts  []string          `toml:"reasoning_efforts"`
 	APIKey            string            `toml:"api_key"`
 	Organization      string            `toml:"organization"`
 	Project           string            `toml:"project"`
@@ -136,6 +137,8 @@ type Exports struct {
 type provider struct {
 	name             string
 	endpoint         string
+	reasoningEfforts map[model.ReasoningEffort]struct{}
+	modelEntries     []model.ModelEntry
 	apiKey           string
 	organization     string
 	project          string
@@ -152,6 +155,8 @@ type provider struct {
 type normalizedProviderConfig struct {
 	name             string
 	endpoint         string
+	reasoningEfforts []model.ReasoningEffort
+	modelEntries     []model.ModelEntry
 	apiKey           string
 	organization     string
 	project          string
@@ -213,6 +218,13 @@ func normalizeProviderConfig(cfg ProviderConfig) (normalizedProviderConfig, erro
 	parsed.Path = strings.TrimRight(parsed.Path, "/")
 	parsed.RawPath = strings.TrimRight(parsed.RawPath, "/")
 	endpoint := parsed.String() + "/responses"
+	reasoningEfforts, err := normalizeReasoningEfforts(cfg.ReasoningEfforts)
+	if err != nil {
+		return normalizedProviderConfig{}, err
+	}
+	if len(reasoningEfforts) != 0 && len(cfg.Models) == 0 {
+		return normalizedProviderConfig{}, configError("reasoning_efforts", "require at least one configured model")
+	}
 
 	maxResponse, err := positiveDefault(cfg.MaxResponseBytes, defaultMaxResponseBytes, "max_response_bytes")
 	if err != nil {
@@ -260,9 +272,17 @@ func normalizeProviderConfig(cfg ProviderConfig) (normalizedProviderConfig, erro
 		headers.Set(canonical, value)
 	}
 
+	modelEntries := make([]model.ModelEntry, 0, len(cfg.Models))
+	for _, name := range cfg.Models {
+		modelEntries = append(modelEntries, model.ModelEntry{
+			Name: name, ReasoningEfforts: append([]model.ReasoningEffort(nil), reasoningEfforts...),
+		})
+	}
 	return normalizedProviderConfig{
 		name:             cfg.Name,
 		endpoint:         endpoint,
+		reasoningEfforts: reasoningEfforts,
+		modelEntries:     modelEntries,
 		apiKey:           cfg.APIKey,
 		organization:     cfg.Organization,
 		project:          cfg.Project,
@@ -276,13 +296,35 @@ func normalizeProviderConfig(cfg ProviderConfig) (normalizedProviderConfig, erro
 }
 
 func newProviderFromNormalized(cfg normalizedProviderConfig, client httpx.Client, assets asset.Resolver) *provider {
+	reasoningEfforts := make(map[model.ReasoningEffort]struct{}, len(cfg.reasoningEfforts))
+	for _, effort := range cfg.reasoningEfforts {
+		reasoningEfforts[effort] = struct{}{}
+	}
 	return &provider{
 		name: cfg.name, endpoint: cfg.endpoint, apiKey: cfg.apiKey,
+		reasoningEfforts: reasoningEfforts, modelEntries: cloneModelEntries(cfg.modelEntries),
 		organization: cfg.organization, project: cfg.project, models: cfg.models,
 		headers: cfg.headers, maxResponseBytes: cfg.maxResponseBytes,
 		maxErrorBytes: cfg.maxErrorBytes, maxAssetBytes: cfg.maxAssetBytes,
 		assetSlots: make(chan struct{}, cfg.assetConcurrency), http: client, assets: assets,
 	}
+}
+
+func normalizeReasoningEfforts(values []string) ([]model.ReasoningEffort, error) {
+	result := make([]model.ReasoningEffort, 0, len(values))
+	seen := make(map[model.ReasoningEffort]struct{}, len(values))
+	for i, value := range values {
+		effort := model.ReasoningEffort(value)
+		if !effort.Valid() {
+			return nil, configError(fmt.Sprintf("reasoning_efforts[%d]", i), "must be one of none, minimal, low, medium, high, or xhigh")
+		}
+		if _, exists := seen[effort]; exists {
+			return nil, configError(fmt.Sprintf("reasoning_efforts[%d]", i), "duplicates an earlier effort")
+		}
+		seen[effort] = struct{}{}
+		result = append(result, effort)
+	}
+	return result, nil
 }
 
 func positiveDefault(value, fallback int, field string) (int, error) {
@@ -381,6 +423,11 @@ func (p *provider) validateRequest(ctx context.Context, request model.Request) e
 	if len(p.models) != 0 {
 		if _, ok := p.models[request.Model]; !ok {
 			return fmt.Errorf("model %q is not allowed by provider %q: %w", request.Model, p.name, model.ErrModelNotFound)
+		}
+	}
+	if request.ReasoningEffort != "" {
+		if _, ok := p.reasoningEfforts[request.ReasoningEffort]; !ok {
+			return fmt.Errorf("model %q does not support reasoning effort %q: %w", request.Model, request.ReasoningEffort, model.ErrReasoningEffortUnsupported)
 		}
 	}
 	if err := validateSDKRequest(request); err != nil {

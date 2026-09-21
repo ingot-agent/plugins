@@ -276,7 +276,7 @@ func TestModelStreamAndAgentProjectionGolden(t *testing.T) {
 			t.Fatal(err)
 		}
 		request := model.Request{
-			Provider: "p", Model: "m", Messages: []model.Message{{Role: model.RoleUser, Content: content.FromText("hello")}},
+			Provider: "p", Model: "m", ReasoningEffort: model.ReasoningEffortHigh, Messages: []model.Message{{Role: model.RoleUser, Content: content.FromText("hello")}},
 			Tools: []tool.Definition{{Name: "echo", Description: "Echo", InputSchema: json.RawMessage(`{"type":"object"}`)}}, Stop: []string{},
 		}
 		response := model.Response{Message: model.Message{Role: model.RoleAssistant, Content: content.FromText("hi")}, FinishReason: "stop", Usage: model.Usage{InputTokens: 1, OutputTokens: 2, TotalTokens: 3, Reported: true}, Provider: "p", Model: "m"}
@@ -285,8 +285,8 @@ func TestModelStreamAndAgentProjectionGolden(t *testing.T) {
 			t.Fatalf("response=%#v error=%v", got, err)
 		}
 		assertTraceJSON(t, trace, []string{
-			`{"protocol_version":2,"hook":"policy","target":"model","phase":"before","request":{"provider":"p","model":"m","messages":[{"role":"user","content":[{"kind":"text","text":"hello"}],"name":"","tool_call_id":"","tool_calls":[]}],"tools":[{"name":"echo","description":"Echo","input_schema":{"type":"object"}}],"temperature":null,"max_tokens":null,"stop":[]}}`,
-			`{"protocol_version":2,"hook":"policy","target":"model","phase":"after","request":{"provider":"p","model":"m","messages":[{"role":"user","content":[{"kind":"text","text":"hello"}],"name":"","tool_call_id":"","tool_calls":[]}],"tools":[{"name":"echo","description":"Echo","input_schema":{"type":"object"}}],"temperature":null,"max_tokens":null,"stop":[]},"outcome":{"response":{"message":{"role":"assistant","content":[{"kind":"text","text":"hi"}],"name":"","tool_call_id":"","tool_calls":[]},"finish_reason":"stop","usage":{"input_tokens":1,"output_tokens":2,"total_tokens":3},"provider":"p","model":"m"},"error":null}}`,
+			`{"protocol_version":2,"hook":"policy","target":"model","phase":"before","request":{"provider":"p","model":"m","messages":[{"role":"user","content":[{"kind":"text","text":"hello"}],"name":"","tool_call_id":"","tool_calls":[]}],"tools":[{"name":"echo","description":"Echo","input_schema":{"type":"object"}}],"temperature":null,"max_tokens":null,"stop":[],"reasoning_effort":"high"}}`,
+			`{"protocol_version":2,"hook":"policy","target":"model","phase":"after","request":{"provider":"p","model":"m","messages":[{"role":"user","content":[{"kind":"text","text":"hello"}],"name":"","tool_call_id":"","tool_calls":[]}],"tools":[{"name":"echo","description":"Echo","input_schema":{"type":"object"}}],"temperature":null,"max_tokens":null,"stop":[],"reasoning_effort":"high"},"outcome":{"response":{"message":{"role":"assistant","content":[{"kind":"text","text":"hi"}],"name":"","tool_call_id":"","tool_calls":[]},"finish_reason":"stop","usage":{"input_tokens":1,"output_tokens":2,"total_tokens":3},"provider":"p","model":"m"},"error":null}}`,
 		})
 	})
 
@@ -298,7 +298,7 @@ func TestModelStreamAndAgentProjectionGolden(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		request := model.Request{Provider: "p", Model: "m"}
+		request := model.Request{Provider: "p", Model: "m", ReasoningEffort: model.ReasoningEffortHigh}
 		response := model.Response{Message: model.Message{Role: model.RoleAssistant, Content: content.FromText("done")}}
 		got, err := exports.StreamInterceptors[0].InvokeStream(context.Background(), request, nil, func(context.Context, model.Request, model.StreamHandler) (model.Response, error) {
 			return response, nil
@@ -307,8 +307,8 @@ func TestModelStreamAndAgentProjectionGolden(t *testing.T) {
 			t.Fatalf("response=%#v error=%v", got, err)
 		}
 		assertTraceJSON(t, trace, []string{
-			`{"protocol_version":2,"hook":"policy","target":"model-stream","phase":"before","request":{"provider":"p","model":"m","messages":[],"tools":[],"temperature":null,"max_tokens":null,"stop":[]}}`,
-			`{"protocol_version":2,"hook":"policy","target":"model-stream","phase":"after","request":{"provider":"p","model":"m","messages":[],"tools":[],"temperature":null,"max_tokens":null,"stop":[]},"outcome":{"response":{"message":{"role":"assistant","content":[{"kind":"text","text":"done"}],"name":"","tool_call_id":"","tool_calls":[]},"finish_reason":"","usage":{"input_tokens":0,"output_tokens":0,"total_tokens":0},"provider":"","model":""},"error":null}}`,
+			`{"protocol_version":2,"hook":"policy","target":"model-stream","phase":"before","request":{"provider":"p","model":"m","messages":[],"tools":[],"temperature":null,"max_tokens":null,"stop":[],"reasoning_effort":"high"}}`,
+			`{"protocol_version":2,"hook":"policy","target":"model-stream","phase":"after","request":{"provider":"p","model":"m","messages":[],"tools":[],"temperature":null,"max_tokens":null,"stop":[],"reasoning_effort":"high"},"outcome":{"response":{"message":{"role":"assistant","content":[{"kind":"text","text":"done"}],"name":"","tool_call_id":"","tool_calls":[]},"finish_reason":"","usage":{"input_tokens":0,"output_tokens":0,"total_tokens":0},"provider":"","model":""},"error":null}}`,
 		})
 	})
 

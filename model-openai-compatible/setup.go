@@ -79,6 +79,7 @@ func (o *setupOperation) Invoke(ctx context.Context, request operation.Request) 
 				{Name: "source", Label: "Existing provider", Description: "Select the provider being edited, or New provider.", Kind: interaction.FieldChoice, Required: true, Options: sourceOptions},
 				{Name: "name", Label: "Name", Description: "Stable provider name referenced by model.runtime.", Kind: interaction.FieldString, Required: true},
 				{Name: "base_url", Label: "Base URL", Description: "Absolute http/https endpoint.", Kind: interaction.FieldString, Required: true},
+				{Name: "reasoning_efforts", Label: "Reasoning efforts", Description: "Reasoning intensities supported by these models.", Kind: interaction.FieldMultiChoice, Options: reasoningEffortOptions()},
 				{Name: "api_key_action", Label: "API key", Kind: interaction.FieldChoice, Required: true, Options: []interaction.Option{
 					{Value: apiKeyKeep, Label: "Keep"},
 					{Value: apiKeyReplace, Label: "Replace"},
@@ -149,6 +150,15 @@ func (o *setupOperation) Invoke(ctx context.Context, request operation.Request) 
 		candidate := cloneProviderConfig(previous)
 		candidate.Name = name
 		candidate.BaseURL = baseURL
+		if efforts, present := listEntry(entries, "reasoning_efforts"); present {
+			candidate.ReasoningEfforts = make([]string, 0, len(efforts))
+			for _, effort := range efforts {
+				if effort.Kind != interaction.ValueString {
+					return operation.Result{}, fmt.Errorf("providers[%d].reasoning_efforts must be strings: %w", i, ErrInvalidConfig)
+				}
+				candidate.ReasoningEfforts = append(candidate.ReasoningEfforts, effort.String)
+			}
+		}
 		apiKeyAction, ok := stringEntry(entries, "api_key_action")
 		if !ok {
 			return operation.Result{}, fmt.Errorf("providers[%d].api_key_action is required: %w", i, ErrInvalidConfig)
@@ -248,10 +258,15 @@ func providerListValue(providers []ProviderConfig) interaction.Value {
 			models = append(models, interaction.StringValue(model))
 		}
 		headers := defaultHeadersValue(provider.DefaultHeaders)
+		efforts := make([]interaction.Value, 0, len(provider.ReasoningEfforts))
+		for _, effort := range provider.ReasoningEfforts {
+			efforts = append(efforts, interaction.StringValue(effort))
+		}
 		items = append(items, interaction.ObjectValue([]interaction.Entry{
 			{Name: "source", Value: interaction.StringValue(provider.Name)},
 			{Name: "name", Value: interaction.StringValue(provider.Name)},
 			{Name: "base_url", Value: interaction.StringValue(provider.BaseURL)},
+			{Name: "reasoning_efforts", Value: interaction.ListValue(efforts)},
 			{Name: "api_key_action", Value: interaction.StringValue(apiKeyKeep)},
 			{Name: "models", Value: interaction.ListValue(models)},
 			{Name: "organization", Value: interaction.StringValue(provider.Organization)},
@@ -264,6 +279,17 @@ func providerListValue(providers []ProviderConfig) interaction.Value {
 		}))
 	}
 	return interaction.ListValue(items)
+}
+
+func reasoningEffortOptions() []interaction.Option {
+	return []interaction.Option{
+		{Value: "none", Label: "None"},
+		{Value: "minimal", Label: "Minimal"},
+		{Value: "low", Label: "Low"},
+		{Value: "medium", Label: "Medium"},
+		{Value: "high", Label: "High"},
+		{Value: "xhigh", Label: "Extra high"},
+	}
 }
 
 func defaultHeadersValue(headers map[string]string) interaction.Value {
