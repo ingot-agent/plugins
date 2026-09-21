@@ -125,6 +125,67 @@ func TestSetupRenamePreservesSecretAndHiddenProviderFields(t *testing.T) {
 	}
 }
 
+func TestSetupPersistsReasoningEffortMultiChoice(t *testing.T) {
+	scope := setupTestScope{dir: filepath.Join(t.TempDir(), "state")}
+	current := Config{Providers: []ProviderConfig{{
+		Name: "p", BaseURL: "https://example.test", Models: []string{"inherited", "disabled", "high-only"},
+	}}}
+	if err := saveConfig(scope.Dir(), current); err != nil {
+		t.Fatal(err)
+	}
+	exports, _, err := New(context.Background(), Dependencies{HTTP: setupTestHTTP{}, Assets: setupTestAssets{}, State: scope})
+	if err != nil {
+		t.Fatal(err)
+	}
+	channel := &setupTestChannel{respond: func(request interaction.Request) (interaction.Response, error) {
+		providers := findSetupField(t, request.Fields, "providers")
+		item := providers.Default.Items[0]
+		if efforts := findObjectEntry(t, item, "reasoning_efforts"); efforts.Kind != interaction.ValueStrings || len(efforts.Strings) != 0 {
+			t.Fatalf("reasoning effort default = %#v", efforts)
+		}
+		setObjectValue(t, &item, "reasoning_efforts", interaction.StringsValue([]string{"low", "high"}))
+		setObjectValue(t, &item, "reasoning_effort_overrides", interaction.ListValue([]interaction.Value{
+			interaction.ObjectValue([]interaction.Entry{
+				{Name: "model", Value: interaction.StringValue("disabled")},
+				{Name: "reasoning_efforts", Value: interaction.StringsValue([]string{})},
+			}),
+			interaction.ObjectValue([]interaction.Entry{
+				{Name: "model", Value: interaction.StringValue("high-only")},
+				{Name: "reasoning_efforts", Value: interaction.StringsValue([]string{"high"})},
+			}),
+		}))
+		return interaction.Response{Values: []interaction.Answer{{Name: "providers", Value: interaction.ListValue([]interaction.Value{item})}}}, nil
+	}}
+	if _, err := exports.Operations[0].Invoke(context.Background(), operation.Request{Interaction: channel}); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := loadConfig(scope.Dir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := stored.Providers[0].ReasoningEfforts; !reflect.DeepEqual(got, []string{"low", "high"}) {
+		t.Fatalf("stored reasoning efforts = %v", got)
+	}
+	wantOverrides := []ReasoningEffortOverride{
+		{Model: "disabled", ReasoningEfforts: []string{}},
+		{Model: "high-only", ReasoningEfforts: []string{"high"}},
+	}
+	if got := stored.Providers[0].ReasoningEffortOverrides; !reflect.DeepEqual(got, wantOverrides) {
+		t.Fatalf("stored reasoning effort overrides = %#v, want %#v", got, wantOverrides)
+	}
+	entries := liveEntries(t, exports)
+	wantEfforts := [][]model.ReasoningEffort{
+		{model.ReasoningEffortLow, model.ReasoningEffortHigh},
+		nil,
+		{model.ReasoningEffortHigh},
+	}
+	for i, want := range wantEfforts {
+		if got := entries[0].Models[i].ReasoningEfforts; !reflect.DeepEqual(got, want) {
+			t.Fatalf("published reasoning efforts for %q = %v, want %v", entries[0].Models[i].Name, got, want)
+		}
+	}
+}
+
 func TestSetupManagesDefaultHeadersAndProviderLimits(t *testing.T) {
 	scope := setupTestScope{dir: filepath.Join(t.TempDir(), "state")}
 	current := Config{Providers: []ProviderConfig{{

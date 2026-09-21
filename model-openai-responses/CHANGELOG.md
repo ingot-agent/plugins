@@ -9,6 +9,8 @@ All notable changes to this plugin are documented in this file.
 - Publish configured models and their supported reasoning-effort values through
   `model.ProviderEntry`, and map the request-selected value to
   `reasoning.effort` on Responses API requests.
+- Allow individual models to override the provider-level reasoning efforts;
+  an empty override disables explicit reasoning effort for that model.
 
 ### Changed
 
@@ -20,6 +22,8 @@ All notable changes to this plugin are documented in this file.
 
 ### Fixed
 
+- Persist reasoning-effort selections submitted by a host as a MultiChoice
+  value so `model-runtime` can expose the configured choices.
 - Map the leading SDK system message to the Responses API `instructions`
   field instead of including it in conversation `input`.
 
