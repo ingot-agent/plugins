@@ -3,6 +3,7 @@ package contextcompact
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 
 	"github.com/ingot-agent/sdk/interaction"
@@ -50,7 +51,7 @@ func TestSetupUsesClosedProviderOptionsAndRejectsUnknownProvider(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stored != (Config{}) {
+	if !reflect.ValueOf(stored).IsZero() {
 		t.Fatalf("stored = %#v, want empty", stored)
 	}
 }

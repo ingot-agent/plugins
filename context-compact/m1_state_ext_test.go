@@ -25,6 +25,9 @@ func (s testStateScope) Dir() string { return s.dir }
 // untouched.
 func withState(t *testing.T, cfg contextcompact.Config, deps contextcompact.Dependencies) contextcompact.Dependencies {
 	t.Helper()
+	if deps.Counter == nil {
+		deps.Counter = contractCounter{}
+	}
 	dir := writeTestConfig(t, cfg)
 	if deps.State != nil {
 		// A test supplied its own scope; persist cfg into it instead of

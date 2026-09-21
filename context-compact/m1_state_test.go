@@ -1,13 +1,39 @@
 package contextcompact
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"reflect"
 	"testing"
 
+	"github.com/ingot-agent/sdk/usage"
 	"github.com/pelletier/go-toml/v2"
 )
+
+// The serialization length is a deterministic test count, not a tokenizer.
+type canonicalTokenCounter struct{}
+
+func (*canonicalTokenCounter) CountInput(ctx context.Context, input usage.CountRequest) (usage.CountResult, error) {
+	if err := ctx.Err(); err != nil {
+		return usage.CountResult{}, err
+	}
+	raw, err := canonicalRequestBytes(input.Invocation)
+	if err != nil {
+		return usage.CountResult{}, err
+	}
+	provider, modelName := input.Invocation.Provider, input.Invocation.Model
+	if provider == "" {
+		provider = "main-provider"
+	}
+	if modelName == "" {
+		modelName = "main-model"
+	}
+	return usage.CountResult{
+		InputTokens: int64(len(raw)), Accuracy: usage.AccuracyExact,
+		Source: "test-canonical-tokens-v1", Provider: provider, Model: modelName,
+	}, nil
+}
 
 // testStateScope is a Plugin-owned Runtime state scope rooted at a test
 // directory. Tests persist this Plugin's own configuration there exactly as a
@@ -23,6 +49,9 @@ func (s testStateScope) Dir() string { return s.dir }
 // untouched.
 func withState(t *testing.T, cfg Config, deps Dependencies) Dependencies {
 	t.Helper()
+	if deps.Counter == nil {
+		deps.Counter = &canonicalTokenCounter{}
+	}
 	dir := writeTestConfig(t, cfg)
 	if deps.State != nil {
 		// A test supplied its own scope; persist cfg into it instead of

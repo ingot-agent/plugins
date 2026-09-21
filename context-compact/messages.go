@@ -13,7 +13,7 @@ import (
 	"github.com/ingot-agent/sdk/tool"
 )
 
-type turnRange struct {
+type roundRange struct {
 	start int
 	end   int
 }
@@ -21,12 +21,15 @@ type turnRange struct {
 type messageLayout struct {
 	system       []model.Message
 	conversation []model.Message
-	turns        []turnRange
-	anchorEnd    int
+	rounds       []roundRange
+	completeEnd  int
 	eligibleEnd  int
 }
 
-func inspectRequest(request model.Request, anchorTurns, recentTurns int) (messageLayout, error) {
+func inspectRequest(request model.Request, recentRounds int) (messageLayout, error) {
+	if recentRounds < 0 {
+		return messageLayout{}, fmt.Errorf("recent_rounds must not be negative: %w", ErrInvalidRequest)
+	}
 	if !utf8.ValidString(request.Provider) || !utf8.ValidString(request.Model) {
 		return messageLayout{}, fmt.Errorf("provider or model is invalid UTF-8: %w", ErrInvalidRequest)
 	}
@@ -53,38 +56,33 @@ func inspectRequest(request model.Request, anchorTurns, recentTurns int) (messag
 		systemEnd++
 	}
 	conversation := owned[systemEnd:]
-	turns, err := groupTurns(conversation)
+	rounds, err := groupRounds(conversation)
 	if err != nil {
 		return messageLayout{}, err
 	}
-	anchorCount := min(anchorTurns, len(turns))
-	anchorEnd := 0
-	if anchorCount > 0 {
-		anchorEnd = turns[anchorCount-1].end
+	completeEnd := 0
+	if len(rounds) > 0 {
+		completeEnd = rounds[len(rounds)-1].end
 	}
-	recentStart := len(turns) - recentTurns
-	if recentStart < anchorCount {
-		recentStart = anchorCount
-	}
-	eligibleEnd := len(conversation)
-	if recentStart < len(turns) {
-		eligibleEnd = turns[recentStart].start
+	eligibleEnd := 0
+	if eligibleRounds := len(rounds) - recentRounds; eligibleRounds > 0 {
+		eligibleEnd = rounds[eligibleRounds-1].end
 	}
 	return messageLayout{
-		system: cloneMessages(owned[:systemEnd]), conversation: cloneMessages(conversation), turns: turns,
-		anchorEnd: anchorEnd, eligibleEnd: eligibleEnd,
+		system: cloneMessages(owned[:systemEnd]), conversation: cloneMessages(conversation), rounds: rounds,
+		completeEnd: completeEnd, eligibleEnd: eligibleEnd,
 	}, nil
 }
 
-func groupTurns(messages []model.Message) ([]turnRange, error) {
+func groupRounds(messages []model.Message) ([]roundRange, error) {
 	if len(messages) == 0 {
-		return []turnRange{}, nil
+		return []roundRange{}, nil
 	}
 	if messages[0].Role != model.RoleUser {
 		return nil, fmt.Errorf("conversation must start with user: %w", ErrInvalidHistory)
 	}
-	turns := make([]turnRange, 0)
-	start := -1
+	rounds := make([]roundRange, 0)
+	start := 0
 	var pending []tool.Call
 	matched := 0
 	for i, message := range messages {
@@ -98,29 +96,42 @@ func groupTurns(messages []model.Message) ([]turnRange, error) {
 			if len(pending) != matched {
 				return nil, fmt.Errorf("user message follows incomplete tool round at %d: %w", i, ErrInvalidHistory)
 			}
-			if start >= 0 {
-				turns = append(turns, turnRange{start: start, end: i})
-			}
-			start = i
-			pending = nil
-			matched = 0
 		case model.RoleAssistant:
-			if start < 0 || len(pending) != matched {
-				return nil, fmt.Errorf("assistant message has no complete user turn at %d: %w", i, ErrInvalidHistory)
+			if len(pending) != matched {
+				return nil, fmt.Errorf("assistant message follows incomplete tool round at %d: %w", i, ErrInvalidHistory)
 			}
 			pending = cloneCalls(message.ToolCalls)
 			matched = 0
+			if len(pending) == 0 {
+				rounds = append(rounds, roundRange{start: start, end: i + 1})
+				start = i + 1
+			}
 		case model.RoleTool:
-			if start < 0 || matched >= len(pending) || message.ToolCallID != pending[matched].ID {
+			if matched >= len(pending) || message.ToolCallID != pending[matched].ID {
 				return nil, fmt.Errorf("tool result has no matching call at %d: %w", i, ErrInvalidHistory)
 			}
 			matched++
+			if matched == len(pending) {
+				rounds = append(rounds, roundRange{start: start, end: i + 1})
+				start = i + 1
+				pending = nil
+				matched = 0
+			}
 		}
 	}
-	if start >= 0 {
-		turns = append(turns, turnRange{start: start, end: len(messages)})
+	return rounds, nil
+}
+
+func isRoundBoundary(layout messageLayout, end int) bool {
+	if end == 0 {
+		return true
 	}
-	return turns, nil
+	for _, round := range layout.rounds {
+		if round.end == end {
+			return true
+		}
+	}
+	return false
 }
 
 func validateMessage(message model.Message) error {

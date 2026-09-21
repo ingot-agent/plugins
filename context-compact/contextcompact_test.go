@@ -15,6 +15,7 @@ import (
 	"github.com/ingot-agent/sdk/contextwindow"
 	"github.com/ingot-agent/sdk/model"
 	"github.com/ingot-agent/sdk/session"
+	"github.com/ingot-agent/sdk/usage"
 )
 
 type memoryStore struct {
@@ -108,7 +109,7 @@ func TestCompactNoOpReturnsOwnedMessages(t *testing.T) {
 	}
 	store := &memoryStore{entries: map[session.ID][]session.Entry{"s": {}}}
 	models := &fakeModel{}
-	exports, _, err := New(context.Background(), withState(t, Config{TriggerRequestBytes: len(raw) + 2, TargetRequestBytes: len(raw) + 1}, Dependencies{Model: models, Store: store}))
+	exports, _, err := New(context.Background(), withState(t, Config{TriggerInputTokens: int64(len(raw)) + 2, TargetInputTokens: int64(len(raw)) + 1}, Dependencies{Model: models, Store: store}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,7 +140,7 @@ func TestInspectRequestRejectsOpaqueInvalidUTF8(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			_, err := inspectRequest(model.Request{Messages: []model.Message{{Role: model.RoleUser, Content: test.content}}}, 0, 0)
+			_, err := inspectRequest(model.Request{Messages: []model.Message{{Role: model.RoleUser, Content: test.content}}}, 0)
 			if !errors.Is(err, ErrInvalidHistory) {
 				t.Fatalf("error=%v", err)
 			}
@@ -147,7 +148,7 @@ func TestInspectRequestRejectsOpaqueInvalidUTF8(t *testing.T) {
 	}
 }
 
-func TestCompactPreservesAnchorRecentAndPersistsDelta(t *testing.T) {
+func TestCompactPreservesRecentRoundsAndPersistsDelta(t *testing.T) {
 	t.Parallel()
 	request := longRequest()
 	raw, err := canonicalRequestBytes(request)
@@ -161,8 +162,8 @@ func TestCompactPreservesAnchorRecentAndPersistsDelta(t *testing.T) {
 	store := &memoryStore{entries: map[session.ID][]session.Entry{"s": {}}}
 	models := &fakeModel{responses: []model.Response{response}}
 	cfg := Config{
-		TriggerRequestBytes: len(raw) - 1, TargetRequestBytes: len(raw) - 500,
-		AnchorTurns: 1, RecentTurns: 1, SummaryChunkBytes: 1,
+		TriggerInputTokens: int64(len(raw)) - 1, TargetInputTokens: int64(len(raw)) - 500,
+		RecentRounds: 1, SummaryChunkTokens: 1000,
 	}
 	exports, _, err := New(context.Background(), withState(t, cfg, Dependencies{Model: models, Store: store}))
 	if err != nil {
@@ -175,14 +176,14 @@ func TestCompactPreservesAnchorRecentAndPersistsDelta(t *testing.T) {
 	if !result.Changed || len(models.requests) != 1 {
 		t.Fatalf("changed=%v summary calls=%d", result.Changed, len(models.requests))
 	}
-	if len(result.Messages) != 7 || result.Messages[0].Role != model.RoleSystem || messageText(result.Messages[1]) != "anchor user" || messageText(result.Messages[2]) != "anchor assistant" {
+	if len(result.Messages) != 5 || result.Messages[0].Role != model.RoleSystem || messageText(result.Messages[0]) != "system" {
 		t.Fatalf("preserved prefix=%#v", result.Messages)
 	}
-	if !strings.Contains(messageText(result.Messages[3]), "middle work was completed") || !strings.Contains(messageText(result.Messages[4]), `"/project/root"`) {
-		t.Fatalf("summary/delta=%#v", result.Messages[3:5])
+	if !strings.Contains(messageText(result.Messages[1]), "middle work was completed") || !strings.Contains(messageText(result.Messages[2]), `"/project/root"`) {
+		t.Fatalf("summary/delta=%#v", result.Messages[1:3])
 	}
-	if messageText(result.Messages[5]) != "recent user" || messageText(result.Messages[6]) != "recent assistant" {
-		t.Fatalf("recent suffix=%#v", result.Messages[5:])
+	if messageText(result.Messages[3]) != "recent user" || messageText(result.Messages[4]) != "recent assistant" {
+		t.Fatalf("recent suffix=%#v", result.Messages[3:])
 	}
 	if models.requests[0].Tools == nil || len(models.requests[0].Tools) != 0 || models.requests[0].Temperature == nil || *models.requests[0].Temperature != 0 {
 		t.Fatalf("summary request=%#v", models.requests[0])
@@ -225,7 +226,7 @@ func TestIncrementalSegmentsKeepFrozenPrefixAndUpdateState(t *testing.T) {
 	}
 	models := &fakeModel{responses: responses}
 	store := &memoryStore{entries: map[session.ID][]session.Entry{"s": {}}}
-	cfg := Config{TriggerRequestBytes: len(raw) - 1, TargetRequestBytes: len(raw) - 500, AnchorTurns: 1, RecentTurns: 1, SummaryChunkBytes: 1}
+	cfg := Config{TriggerInputTokens: int64(len(raw)) - 1, TargetInputTokens: int64(len(raw)) - 500, RecentRounds: 1, SummaryChunkTokens: 1000}
 	exports, _, err := New(context.Background(), withState(t, cfg, Dependencies{Model: models, Store: store}))
 	if err != nil {
 		t.Fatal(err)
@@ -250,14 +251,14 @@ func TestIncrementalSegmentsKeepFrozenPrefixAndUpdateState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(models.requests) != 2 || len(first.Messages) < 5 || len(second.Messages) < 7 {
+	if len(models.requests) != 2 || len(first.Messages) < 3 || len(second.Messages) < 5 {
 		t.Fatalf("calls=%d first=%#v second=%#v", len(models.requests), first.Messages, second.Messages)
 	}
-	if !reflect.DeepEqual(first.Messages[:5], second.Messages[:5]) {
-		t.Fatalf("frozen prefix changed\nfirst=%#v\nsecond=%#v", first.Messages[:5], second.Messages[:5])
+	if !reflect.DeepEqual(first.Messages[:3], second.Messages[:3]) {
+		t.Fatalf("frozen prefix changed\nfirst=%#v\nsecond=%#v", first.Messages[:3], second.Messages[:3])
 	}
-	if !strings.Contains(messageText(second.Messages[5]), "second frozen segment") || !strings.Contains(messageText(second.Messages[6]), `"D:\\new"`) {
-		t.Fatalf("incremental messages=%#v", second.Messages[5:7])
+	if !strings.Contains(messageText(second.Messages[3]), "second frozen segment") || !strings.Contains(messageText(second.Messages[4]), `"D:\\new"`) {
+		t.Fatalf("incremental messages=%#v", second.Messages[3:5])
 	}
 	store.mu.Lock()
 	entries := append([]session.Entry(nil), store.entries["s"]...)
@@ -274,21 +275,21 @@ func TestIncrementalSegmentsKeepFrozenPrefixAndUpdateState(t *testing.T) {
 	}
 }
 
-func TestRollupBoundsFrozenSummaryChunksWithoutChangingState(t *testing.T) {
+func TestRollupBoundsMemoryTokensWithoutChangingState(t *testing.T) {
 	t.Parallel()
 	request := manyMiddleTurnsRequest(3)
 	raw, _ := canonicalRequestBytes(request)
 	models := &fakeModel{responses: []model.Response{
 		summaryResponse(`{"summary":"segment one ` + strings.Repeat("a", 100) + `","operations":[{"op":"set","path":"/fact","value":1}]}`),
 		summaryResponse(`{"summary":"segment two ` + strings.Repeat("b", 100) + `","operations":[]}`),
-		summaryResponse(`{"summary":"rolled up one and two","operations":[]}`),
+		summaryResponse(`{"summary":"rolled up one and two","discard_paths":[]}`),
 		summaryResponse(`{"summary":"segment three","operations":[]}`),
 	}}
 	store := &memoryStore{entries: map[session.ID][]session.Entry{"s": {}}}
 	cfg := Config{
-		TriggerRequestBytes: len(raw) - 1, TargetRequestBytes: 2500,
-		AnchorTurns: 1, RecentTurns: 1, SummaryChunkBytes: 1,
-		MaxSummaryChunks: 2, MaxSummaryPasses: 4,
+		TriggerInputTokens: int64(len(raw)) - 1, TargetInputTokens: 2500,
+		RecentRounds: 1, SummaryChunkTokens: 1000,
+		MemoryTriggerTokens: 1200, MemoryTargetTokens: 1000, MaxSummaryPasses: 4,
 	}
 	exports, _, err := New(context.Background(), withState(t, cfg, Dependencies{Model: models, Store: store}))
 	if err != nil {
@@ -323,7 +324,7 @@ func TestCompactRejectsInvalidHistoryAndOwnedCheckpointVersion(t *testing.T) {
 	t.Parallel()
 	store := &memoryStore{entries: map[session.ID][]session.Entry{"s": {}}}
 	models := &fakeModel{}
-	exports, _, err := New(context.Background(), withState(t, Config{TriggerRequestBytes: 100, TargetRequestBytes: 50}, Dependencies{Model: models, Store: store}))
+	exports, _, err := New(context.Background(), withState(t, Config{TriggerInputTokens: 100, TargetInputTokens: 50}, Dependencies{Model: models, Store: store}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -338,7 +339,7 @@ func TestCompactRejectsInvalidHistoryAndOwnedCheckpointVersion(t *testing.T) {
 		t.Fatalf("invalid history error=%v", err)
 	}
 
-	store.entries["s"] = []session.Entry{{Kind: checkpointEntryKind, Version: 2, Payload: json.RawMessage(`{}`)}}
+	store.entries["s"] = []session.Entry{{Kind: checkpointEntryKind, Version: checkpointEntryVersion + 1, Payload: json.RawMessage(`{}`)}}
 	_, err = exports.Compactor.Compact(context.Background(), contextwindow.CompactionRequest{SessionID: "s", Invocation: model.Request{Messages: []model.Message{{Role: model.RoleUser, Content: textContent("u")}}}})
 	if !errors.Is(err, ErrUnsupportedCheckpointVersion) {
 		t.Fatalf("version error=%v", err)
@@ -351,7 +352,7 @@ func TestCompactPreservesModelAndStoreErrors(t *testing.T) {
 	raw, _ := canonicalRequestBytes(request)
 	modelErr := errors.New("model failed")
 	store := &memoryStore{entries: map[session.ID][]session.Entry{"s": {}}}
-	exports, _, err := New(context.Background(), withState(t, Config{TriggerRequestBytes: len(raw) - 1, TargetRequestBytes: len(raw) - 500, AnchorTurns: 1, RecentTurns: 1, SummaryChunkBytes: 1}, Dependencies{Model: &fakeModel{err: modelErr}, Store: store}))
+	exports, _, err := New(context.Background(), withState(t, Config{TriggerInputTokens: int64(len(raw)) - 1, TargetInputTokens: int64(len(raw)) - 500, RecentRounds: 1, SummaryChunkTokens: 1000}, Dependencies{Model: &fakeModel{err: modelErr}, Store: store}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -371,7 +372,7 @@ func TestCompactPreservesModelAndStoreErrors(t *testing.T) {
 	store.loadErr = nil
 	store.appendErr = appendErr
 	models := &fakeModel{responses: []model.Response{summaryResponse(`{"summary":"valid","operations":[]}`)}}
-	exports, _, err = New(context.Background(), withState(t, Config{TriggerRequestBytes: len(raw) - 1, TargetRequestBytes: len(raw) - 500, AnchorTurns: 1, RecentTurns: 1, SummaryChunkBytes: 1}, Dependencies{Model: models, Store: store}))
+	exports, _, err = New(context.Background(), withState(t, Config{TriggerInputTokens: int64(len(raw)) - 1, TargetInputTokens: int64(len(raw)) - 500, RecentRounds: 1, SummaryChunkTokens: 1000}, Dependencies{Model: models, Store: store}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -388,8 +389,8 @@ func TestCompactDoesNotPersistSummaryWithoutSizeBenefit(t *testing.T) {
 	models := &fakeModel{responses: []model.Response{summaryResponse(`{"summary":"` + strings.Repeat("z", 4000) + `","operations":[]}`)}}
 	store := &memoryStore{entries: map[session.ID][]session.Entry{"s": {}}}
 	exports, _, err := New(context.Background(), withState(t, Config{
-		TriggerRequestBytes: len(raw) - 1, TargetRequestBytes: len(raw) - 500,
-		AnchorTurns: 1, RecentTurns: 1, SummaryChunkBytes: 1,
+		TriggerInputTokens: int64(len(raw)) - 1, TargetInputTokens: int64(len(raw)) - 500,
+		RecentRounds: 1, SummaryChunkTokens: 1000, MaxSummaryPasses: 1,
 	}, Dependencies{Model: models, Store: store}))
 	if err != nil {
 		t.Fatal(err)
@@ -419,8 +420,8 @@ func TestCompactPreservesRecentMediaAndDoesNotSummarizeIt(t *testing.T) {
 	models := &fakeModel{responses: []model.Response{summaryResponse(`{"summary":"middle summarized","operations":[]}`)}}
 	store := &memoryStore{entries: map[session.ID][]session.Entry{"s": {}}}
 	exports, _, err := New(context.Background(), withState(t, Config{
-		TriggerRequestBytes: len(raw) - 1, TargetRequestBytes: len(raw) - 500,
-		AnchorTurns: 1, RecentTurns: 1, SummaryChunkBytes: 1,
+		TriggerInputTokens: int64(len(raw)) - 1, TargetInputTokens: int64(len(raw)) - 500,
+		RecentRounds: 1, SummaryChunkTokens: 1000,
 	}, Dependencies{Model: models, Store: store}))
 	if err != nil {
 		t.Fatal(err)
@@ -437,11 +438,9 @@ func TestCompactPreservesRecentMediaAndDoesNotSummarizeIt(t *testing.T) {
 	}
 }
 
-func TestCompactReturnsUncompactableWhenMiddleTurnContainsMedia(t *testing.T) {
+func TestCompactReturnsUncompactableWhenFirstRoundContainsMedia(t *testing.T) {
 	request := model.Request{Provider: "p", Model: "m", Messages: []model.Message{
 		{Role: model.RoleSystem, Content: textContent("system")},
-		{Role: model.RoleUser, Content: textContent("anchor user")},
-		{Role: model.RoleAssistant, Content: textContent("anchor assistant")},
 		{Role: model.RoleUser, Content: content.Content{
 			content.Text(strings.Repeat("middle", 300)),
 			content.AssetPart(content.KindImage, "image/png", "middle.png", asset.Reference{ID: "asset-middle"}),
@@ -457,8 +456,8 @@ func TestCompactReturnsUncompactableWhenMiddleTurnContainsMedia(t *testing.T) {
 	models := &fakeModel{}
 	store := &memoryStore{entries: map[session.ID][]session.Entry{"s": {}}}
 	exports, _, err := New(context.Background(), withState(t, Config{
-		TriggerRequestBytes: len(raw) - 1, TargetRequestBytes: len(raw) - 100,
-		AnchorTurns: 1, RecentTurns: 1, SummaryChunkBytes: 1,
+		TriggerInputTokens: int64(len(raw)) - 1, TargetInputTokens: int64(len(raw)) - 100,
+		RecentRounds: 1, SummaryChunkTokens: 1000,
 	}, Dependencies{Model: models, Store: store}))
 	if err != nil {
 		t.Fatal(err)
@@ -506,15 +505,24 @@ func TestConfigAndContextValidation(t *testing.T) {
 	if _, _, err := New(context.Background(), withState(t, Config{}, Dependencies{Model: models, Store: store})); err != nil {
 		t.Fatalf("unconfigured construction failed: %v", err)
 	}
+	for _, counter := range []usage.Counter{nil, (*canonicalTokenCounter)(nil)} {
+		_, _, err := New(context.Background(), Dependencies{
+			Model: models, Counter: counter, Store: store,
+			State: testStateScope{dir: writeTestConfig(t, Config{})},
+		})
+		if !errors.Is(err, ErrInvalidConfig) {
+			t.Fatalf("counter=%#v error=%v", counter, err)
+		}
+	}
 	for _, cfg := range []Config{
-		{TriggerRequestBytes: 10, TargetRequestBytes: 10},
-		{TriggerRequestBytes: 10, TargetRequestBytes: 5, RecentTurns: -1},
+		{TriggerInputTokens: 10, TargetInputTokens: 10},
+		{TriggerInputTokens: 10, TargetInputTokens: 5, RecentRounds: -1},
 	} {
 		if _, _, err := New(context.Background(), withState(t, cfg, Dependencies{Model: models, Store: store})); !errors.Is(err, ErrInvalidConfig) {
 			t.Fatalf("config=%#v error=%v", cfg, err)
 		}
 	}
-	exports, _, err := New(context.Background(), withState(t, Config{TriggerRequestBytes: 10, TargetRequestBytes: 5}, Dependencies{Model: models, Store: store}))
+	exports, _, err := New(context.Background(), withState(t, Config{TriggerInputTokens: 10, TargetInputTokens: 5}, Dependencies{Model: models, Store: store}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -533,8 +541,8 @@ func TestCompactSerializesSameSessionAndSecondCallReusesCheckpoint(t *testing.T)
 	models := &blockingSummaryModel{entered: make(chan struct{}), release: make(chan struct{})}
 	store := &memoryStore{entries: map[session.ID][]session.Entry{"s": {}}}
 	exports, _, err := New(context.Background(), withState(t, Config{
-		TriggerRequestBytes: len(raw) - 1, TargetRequestBytes: len(raw) - 500,
-		AnchorTurns: 1, RecentTurns: 1, SummaryChunkBytes: 1,
+		TriggerInputTokens: int64(len(raw)) - 1, TargetInputTokens: int64(len(raw)) - 500,
+		RecentRounds: 1, SummaryChunkTokens: 1000,
 	}, Dependencies{Model: models, Store: store}))
 	if err != nil {
 		t.Fatal(err)
@@ -589,8 +597,8 @@ func TestCheckpointReuseRequiresMatchingResolvedModelIdentity(t *testing.T) {
 	}}
 	store := &memoryStore{entries: map[session.ID][]session.Entry{"s": {}}}
 	cfg := Config{
-		TriggerRequestBytes: len(raw) - 1, TargetRequestBytes: len(raw) - 500,
-		AnchorTurns: 1, RecentTurns: 1, SummaryChunkBytes: 1,
+		TriggerInputTokens: int64(len(raw)) - 1, TargetInputTokens: int64(len(raw)) - 500,
+		RecentRounds: 1, SummaryChunkTokens: 1000,
 	}
 	exports, _, err := New(context.Background(), withState(t, cfg, Dependencies{Model: models, Store: store}))
 	if err != nil {
@@ -632,8 +640,8 @@ func TestCheckpointWithRuntimeDefaultSelectionIsNotReused(t *testing.T) {
 	}}
 	store := &memoryStore{entries: map[session.ID][]session.Entry{"s": {}}}
 	cfg := Config{
-		TriggerRequestBytes: len(raw) - 1, TargetRequestBytes: len(raw) - 500,
-		AnchorTurns: 1, RecentTurns: 1, SummaryChunkBytes: 1,
+		TriggerInputTokens: int64(len(raw)) - 1, TargetInputTokens: int64(len(raw)) - 500,
+		RecentRounds: 1, SummaryChunkTokens: 1000,
 	}
 	exports, _, err := New(context.Background(), withState(t, cfg, Dependencies{Model: models, Store: store}))
 	if err != nil {
