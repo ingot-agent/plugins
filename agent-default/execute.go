@@ -34,6 +34,7 @@ func (r *runtime) executeFrame(ctx context.Context, turn agent.Turn, handler age
 	if err := ctx.Err(); err != nil {
 		return agent.Execution{}, err
 	}
+	configuration := *r.config.Load()
 	turnID, err := newTurnID()
 	if err != nil {
 		return agent.Execution{}, fmt.Errorf("generate turn id: %w", err)
@@ -125,7 +126,7 @@ func (r *runtime) executeFrame(ctx context.Context, turn agent.Turn, handler age
 			return agent.Result{}, controlErr
 		}
 		callCtx = restoreExecutionContext(callCtx, ctx, recorder)
-		return r.runTurn(callCtx, selected, handler, frame)
+		return r.runTurn(callCtx, selected, handler, frame, configuration)
 	}
 	next := pipeline.Compose[agent.Turn, agent.Result](terminal, r.interceptors...)
 	owned := turn
@@ -148,7 +149,7 @@ func (r *runtime) executeFrame(ctx context.Context, turn agent.Turn, handler age
 	return agent.Execution{}, nil
 }
 
-func (r *runtime) runTurn(ctx context.Context, turn agent.Turn, handler agent.StreamHandler, frame *turnFrame) (agent.Result, error) {
+func (r *runtime) runTurn(ctx context.Context, turn agent.Turn, handler agent.StreamHandler, frame *turnFrame, configuration Config) (agent.Result, error) {
 	if err := ctx.Err(); err != nil {
 		executionRecorderFrom(ctx).recordFailure(err, agent.FailureHistoryLoad, nil, "")
 		return agent.Result{}, err
@@ -196,10 +197,10 @@ func (r *runtime) runTurn(ctx context.Context, turn agent.Turn, handler agent.St
 	}
 	messages = cloneMessages(messages)
 	definitions := cloneDefinitions(r.tools.Definitions())
-	for roundIndex := 0; roundIndex < r.maxRounds; roundIndex++ {
-		lastAllowed := roundIndex == r.maxRounds-1
+	for roundIndex := 0; roundIndex < configuration.MaxRounds; roundIndex++ {
+		lastAllowed := roundIndex == configuration.MaxRounds-1
 		roundDefinitions := definitionsForFrame(definitions, frame, lastAllowed)
-		result, err := r.observeRound(ctx, turn.SessionID, roundIndex, messages, roundDefinitions, handler, lastAllowed, frame)
+		result, err := r.observeRound(ctx, turn.SessionID, roundIndex, messages, roundDefinitions, handler, lastAllowed, frame, configuration)
 		if err != nil {
 			return agent.Result{}, err
 		}
@@ -212,7 +213,7 @@ func (r *runtime) runTurn(ctx context.Context, turn agent.Turn, handler agent.St
 			return agent.Result{Output: content.Clone(result.Decision.Content)}, nil
 		}
 	}
-	lastRound := r.maxRounds - 1
+	lastRound := configuration.MaxRounds - 1
 	executionRecorderFrom(ctx).recordFailure(ErrMaxRounds, agent.FailureRoundControl, &lastRound, "")
 	return agent.Result{}, ErrMaxRounds
 }
@@ -226,6 +227,7 @@ func (r *runtime) observeRound(
 	handler agent.StreamHandler,
 	lastAllowed bool,
 	frame *turnFrame,
+	configuration Config,
 ) (result agent.RoundResult, resultErr error) {
 	correlation, _ := observation.CorrelationFromContext(ctx)
 	correlation.RoundIndex = index
@@ -246,7 +248,7 @@ func (r *runtime) observeRound(
 		recorder.emit(ctx, finished)
 	}()
 
-	round, err := r.invokeRoundModel(ctx, sessionID, index, messages, definitions, handler)
+	round, err := r.invokeRoundModel(ctx, sessionID, index, messages, definitions, handler, configuration)
 	if err != nil {
 		return agent.RoundResult{}, err
 	}

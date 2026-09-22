@@ -16,7 +16,7 @@ import (
 
 // readTool reads a workspace-relative UTF-8 text file and returns its content.
 type readTool struct {
-	config    normalizedConfig
+	config    *liveConfig
 	workspace workspace.Resolver
 }
 
@@ -46,6 +46,7 @@ func (t *readTool) Invoke(ctx context.Context, invocation tool.Invocation) (tool
 	if err := ctx.Err(); err != nil {
 		return tool.Result{}, err
 	}
+	configuration := *t.config.current.Load()
 	call := invocation.Call
 	if call.Name != "" && call.Name != readToolName {
 		return tool.Result{}, fmt.Errorf("call name %q: %w", call.Name, ErrInvalidArguments)
@@ -81,8 +82,8 @@ func (t *readTool) Invoke(ctx context.Context, invocation tool.Invocation) (tool
 	if info.IsDir() {
 		return t.businessResult(ctx, fmt.Sprintf("read_file error: path is a directory: %s", *args.Path))
 	}
-	if info.Size() > int64(t.config.maxFileBytes) {
-		return t.businessResult(ctx, fmt.Sprintf("read_file error: file exceeds %d bytes: %s", t.config.maxFileBytes, *args.Path))
+	if info.Size() > int64(configuration.maxFileBytes) {
+		return t.businessResult(ctx, fmt.Sprintf("read_file error: file exceeds %d bytes: %s", configuration.maxFileBytes, *args.Path))
 	}
 	data, err := os.ReadFile(target)
 	if err != nil {

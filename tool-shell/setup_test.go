@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
+	"slices"
 	"testing"
 
 	"github.com/ingot-agent/sdk/interaction"
@@ -140,6 +141,11 @@ func TestSetupEnvironmentActionsPreserveRenameReplaceClearAndDelete(t *testing.T
 	want := map[string]string{"RENAMED": "secret", "REPLACE": "new", "CLEAR": "", "EMPTY": ""}
 	if !reflect.DeepEqual(stored.Environment, want) {
 		t.Fatalf("environment = %#v, want %#v", stored.Environment, want)
+	}
+	running := exports.Tools[0].(*shellTool).config.Load()
+	if !slices.Contains(running.environment, "CLEAR=") || !slices.Contains(running.environment, "EMPTY=") ||
+		!slices.Contains(running.environment, "RENAMED=secret") || !slices.Contains(running.environment, "REPLACE=new") || !running.inheritEnvironment {
+		t.Fatalf("running config = %#v", running)
 	}
 }
 

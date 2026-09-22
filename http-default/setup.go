@@ -27,7 +27,7 @@ const (
 // plugin configuration.
 type setupOperation struct {
 	scope  state.Scope
-	active effectiveConfig
+	client *clientState
 }
 
 var _ operation.Operation = (*setupOperation)(nil)
@@ -134,10 +134,17 @@ func (o *setupOperation) Invoke(ctx context.Context, request operation.Request) 
 	} else {
 		updated.ProxyURL = ""
 	}
-	effective, err := effectiveConfiguration(updated)
+	normalized, err := normalizeConfig(updated)
 	if err != nil {
 		return operation.Result{}, err
 	}
+	candidate, candidateTransport := newHTTPClient(normalized)
+	published := false
+	defer func() {
+		if !published {
+			candidateTransport.CloseIdleConnections()
+		}
+	}()
 	if err := ctx.Err(); err != nil {
 		return operation.Result{}, err
 	}
@@ -153,14 +160,22 @@ func (o *setupOperation) Invoke(ctx context.Context, request operation.Request) 
 	if err := ctx.Err(); err != nil {
 		return operation.Result{}, err
 	}
+	o.client.mu.Lock()
+	if err := ctx.Err(); err != nil {
+		o.client.mu.Unlock()
+		return operation.Result{}, err
+	}
 	if err := saveConfig(o.scope.Dir(), updated); err != nil {
+		o.client.mu.Unlock()
 		return operation.Result{}, err
 	}
-	output, err := json.Marshal(map[string]any{"restart_required": effective != o.active})
-	if err != nil {
-		return operation.Result{}, err
-	}
-	return operation.Result{Output: output}, nil
+	previousTransport := o.client.transport
+	o.client.client = candidate
+	o.client.transport = candidateTransport
+	o.client.mu.Unlock()
+	published = true
+	previousTransport.CloseIdleConnections()
+	return operation.Result{Output: json.RawMessage(`{"restart_required":false}`)}, nil
 }
 
 func valuePointer(value interaction.Value) *interaction.Value { return &value }

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"reflect"
+	"sync/atomic"
 	"unicode/utf8"
 
 	"github.com/ingot-agent/ingot-abi"
@@ -65,9 +66,8 @@ type Exports struct {
 }
 
 type askTool struct {
-	interactions                     interaction.ExecutionBinder
-	maxPromptBytes, maxResponseBytes int
-	maxOptions, maxOptionsBytes      int
+	interactions interaction.ExecutionBinder
+	config       atomic.Pointer[Config]
 }
 
 // businessResult reports a deterministic ask_user failure as a normal tool
@@ -139,12 +139,11 @@ func New(ctx context.Context, deps Dependencies) (Exports, ingotabi.Cleanup, err
 	if err != nil {
 		return Exports{}, nil, err
 	}
+	instance := &askTool{interactions: deps.Interaction}
+	instance.config.Store(&normalized)
 	return Exports{
-		Tools: []tool.Tool{&askTool{
-			interactions: deps.Interaction, maxPromptBytes: normalized.MaxPromptBytes, maxResponseBytes: normalized.MaxResponseBytes,
-			maxOptions: normalized.MaxOptions, maxOptionsBytes: normalized.MaxOptionsBytes,
-		}},
-		Operations: []operation.Operation{&setupOperation{scope: deps.State, active: normalized}},
+		Tools:      []tool.Tool{instance},
+		Operations: []operation.Operation{&setupOperation{scope: deps.State, tool: instance}},
 	}, nil, nil
 }
 
@@ -191,6 +190,7 @@ func (t *askTool) Invoke(ctx context.Context, invocation tool.Invocation) (tool.
 	if err := ctx.Err(); err != nil {
 		return tool.Result{}, err
 	}
+	configuration := *t.config.Load()
 	call := invocation.Call
 	if call.Name != "" && call.Name != "ask_user" {
 		return tool.Result{}, fmt.Errorf("call name %q: %w", call.Name, ErrInvalidArguments)
@@ -202,10 +202,10 @@ func (t *askTool) Invoke(ctx context.Context, invocation tool.Invocation) (tool.
 	if args.Prompt == nil || *args.Prompt == "" || !utf8.ValidString(*args.Prompt) {
 		return tool.Result{}, fmt.Errorf("prompt must be a non-empty UTF-8 string: %w", ErrInvalidArguments)
 	}
-	if len([]byte(*args.Prompt)) > t.maxPromptBytes {
+	if len([]byte(*args.Prompt)) > configuration.MaxPromptBytes {
 		return t.businessResult(ctx, ErrPromptLimit)
 	}
-	options, err := t.validateOptions(args.Options)
+	options, err := t.validateOptions(args.Options, configuration)
 	if err != nil {
 		if errors.Is(err, ErrOptionsLimit) {
 			return t.businessResult(ctx, err)
@@ -240,20 +240,20 @@ func (t *askTool) Invoke(ctx context.Context, invocation tool.Invocation) (tool.
 	if !utf8.ValidString(answer) {
 		return t.businessResult(ctx, fmt.Errorf("response is not valid UTF-8"))
 	}
-	if len([]byte(answer)) > t.maxResponseBytes {
+	if len([]byte(answer)) > configuration.MaxResponseBytes {
 		return t.businessResult(ctx, ErrResponseLimit)
 	}
 	return tool.Result{Content: content.FromText(answer)}, nil
 }
 
-func (t *askTool) validateOptions(raw askOptionArguments) ([]interaction.Option, error) {
+func (t *askTool) validateOptions(raw askOptionArguments, configuration Config) ([]interaction.Option, error) {
 	if !raw.present {
 		return nil, nil
 	}
 	if len(raw.values) == 0 {
 		return nil, fmt.Errorf("options must not be empty: %w", ErrInvalidArguments)
 	}
-	if len(raw.values) > t.maxOptions {
+	if len(raw.values) > configuration.MaxOptions {
 		return nil, ErrOptionsLimit
 	}
 	options := make([]interaction.Option, 0, len(raw.values))
@@ -271,7 +271,7 @@ func (t *askTool) validateOptions(raw askOptionArguments) ([]interaction.Option,
 		}
 		labels[*option.Label] = struct{}{}
 		totalBytes += len([]byte(*option.Label)) + len([]byte(option.Description))
-		if totalBytes > t.maxOptionsBytes {
+		if totalBytes > configuration.MaxOptionsBytes {
 			return nil, ErrOptionsLimit
 		}
 		options = append(options, interaction.Option{Value: *option.Label, Label: *option.Label, Description: option.Description})

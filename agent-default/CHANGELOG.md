@@ -14,6 +14,8 @@ All notable changes to this plugin are documented in this file.
 
 ### Changed
 
+- Apply successful configuration updates to the running Agent immediately and
+  return `restart_required:false`.
 - Tell parent agents to replace, rather than resume, child Sessions interrupted
   by a runtime restart and to treat unknown external-writer state conservatively.
 - Restrict every child execution to its configured tool set, hide
@@ -28,8 +30,8 @@ All notable changes to this plugin are documented in this file.
 - Expose configuration as `/agent-default config` using a stable plugin Group and local operation Name.
 - Present the available providers as a closed choice and configure optional
   numeric overrides through explicit inherit or override actions.
-- Reject stale configuration writes and report restart requirements against
-  the running configuration.
+- Reject stale configuration writes and revalidate provider selections at the
+  commit boundary.
 
 ## 0.1.0 - 2026-09-13
 

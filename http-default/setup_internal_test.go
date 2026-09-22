@@ -3,8 +3,11 @@ package httpdefault
 import (
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ingot-agent/sdk/interaction"
 	"github.com/ingot-agent/sdk/operation"
@@ -57,12 +60,8 @@ func TestSetupKeepsStoredProxyURLWithoutProjectingIt(t *testing.T) {
 	if err := saveConfig(scope.Dir(), current); err != nil {
 		t.Fatal(err)
 	}
-	active, err := effectiveConfiguration(current)
-	if err != nil {
-		t.Fatal(err)
-	}
 	channel := &setupTestChannel{t: t, secret: "stored-secret"}
-	result, err := (&setupOperation{scope: scope, active: active}).Invoke(context.Background(), operation.Request{Interaction: channel})
+	result, err := (&setupOperation{scope: scope, client: setupHTTPClient(t, current)}).Invoke(context.Background(), operation.Request{Interaction: channel})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,13 +92,10 @@ func TestSetupReplacesProxyURLThroughSensitiveRequest(t *testing.T) {
 	if err := saveConfig(scope.Dir(), current); err != nil {
 		t.Fatal(err)
 	}
-	active, err := effectiveConfiguration(current)
-	if err != nil {
-		t.Fatal(err)
-	}
 	replacement := "http://user:new-secret@proxy.example"
 	channel := &setupTestChannel{t: t, secret: "old-secret", replace: replacement}
-	result, err := (&setupOperation{scope: scope, active: active}).Invoke(context.Background(), operation.Request{Interaction: channel})
+	live := setupHTTPClient(t, current)
+	result, err := (&setupOperation{scope: scope, client: live}).Invoke(context.Background(), operation.Request{Interaction: channel})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,8 +106,73 @@ func TestSetupReplacesProxyURLThroughSensitiveRequest(t *testing.T) {
 	if stored.ProxyURL != replacement {
 		t.Fatalf("stored proxy URL = %q", stored.ProxyURL)
 	}
-	if !strings.Contains(string(result.Output), `"restart_required":true`) {
+	if !strings.Contains(string(result.Output), `"restart_required":false`) {
 		t.Fatalf("output = %s", result.Output)
+	}
+	proxy, err := live.transport.Proxy(&http.Request{URL: &url.URL{Scheme: "https", Host: "example.com"}})
+	if err != nil || proxy == nil || proxy.String() != replacement {
+		t.Fatalf("active proxy = %v, error = %v", proxy, err)
+	}
+}
+
+func setupHTTPClient(t *testing.T, configuration Config) *clientState {
+	t.Helper()
+	normalized, err := normalizeConfig(configuration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, transport := newHTTPClient(normalized)
+	return &clientState{client: client, transport: transport}
+}
+
+type blockingRoundTripper struct {
+	started chan struct{}
+	release chan struct{}
+}
+
+func (r *blockingRoundTripper) RoundTrip(request *http.Request) (*http.Response, error) {
+	close(r.started)
+	<-r.release
+	return &http.Response{StatusCode: http.StatusNoContent, Header: make(http.Header), Body: http.NoBody, Request: request}, nil
+}
+
+func TestDoReleasesStateLockBeforeRoundTripCompletes(t *testing.T) {
+	roundTripper := &blockingRoundTripper{started: make(chan struct{}), release: make(chan struct{})}
+	live := &clientState{client: &http.Client{Transport: roundTripper}}
+	request, err := http.NewRequest(http.MethodGet, "https://example.com", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		response, callErr := live.Do(context.Background(), request)
+		if response != nil {
+			_ = response.Body.Close()
+		}
+		done <- callErr
+	}()
+	select {
+	case <-roundTripper.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("round trip did not start")
+	}
+
+	locked := make(chan struct{})
+	go func() {
+		live.mu.Lock()
+		close(locked)
+		live.mu.Unlock()
+	}()
+	select {
+	case <-locked:
+	case <-time.After(2 * time.Second):
+		close(roundTripper.release)
+		<-done
+		t.Fatal("state lock remained held during round trip")
+	}
+	close(roundTripper.release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
 	}
 }
 

@@ -20,6 +20,7 @@ func (c *counter) CountInput(ctx context.Context, request usage.CountRequest) (u
 	if err := ctx.Err(); err != nil {
 		return usage.CountResult{}, err
 	}
+	configuration := c.config.Load()
 	owned := cloneRequest(request.Invocation)
 	if err := validateRequest(owned, false); err != nil {
 		return usage.CountResult{}, err
@@ -32,7 +33,7 @@ func (c *counter) CountInput(ctx context.Context, request usage.CountRequest) (u
 	if err := validateRequest(resolved, true); err != nil {
 		return usage.CountResult{}, err
 	}
-	selected, routeIndex, ok := selectProfile(c.routes, resolved.Provider, resolved.Model)
+	selected, routeIndex, ok := selectProfile(configuration.routes, resolved.Provider, resolved.Model)
 	if !ok {
 		return usage.CountResult{}, fmt.Errorf("provider %q model %q has no matching route: %w", resolved.Provider, resolved.Model, ErrUnsupportedModel)
 	}
@@ -114,7 +115,7 @@ func hasMedia(request model.Request) bool {
 func (c *counter) addCache(key string, result usage.CountResult) {
 	element := c.recent.PushFront(cacheEntry{key: key, result: result})
 	c.cache[key] = element
-	if c.recent.Len() <= c.capacity {
+	if c.recent.Len() <= c.config.Load().capacity {
 		return
 	}
 	oldest := c.recent.Back()

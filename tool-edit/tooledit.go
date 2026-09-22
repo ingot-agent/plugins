@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"unicode/utf8"
 
 	"github.com/ingot-agent/ingot-abi"
@@ -72,8 +73,12 @@ type normalizedConfig struct {
 	maxScanBytes int
 }
 
+type liveConfig struct {
+	current atomic.Pointer[normalizedConfig]
+}
+
 type editTool struct {
-	config    normalizedConfig
+	config    *liveConfig
 	workspace workspace.Resolver
 }
 
@@ -105,13 +110,15 @@ func New(ctx context.Context, deps Dependencies) (Exports, ingotabi.Cleanup, err
 	if err != nil {
 		return Exports{}, nil, err
 	}
+	live := &liveConfig{}
+	live.current.Store(&config)
 	return Exports{
 		Tools: []tool.Tool{
-			&editTool{config: config, workspace: deps.Workspace},
-			&readTool{config: config, workspace: deps.Workspace},
-			&searchTool{config: config, workspace: deps.Workspace},
+			&editTool{config: live, workspace: deps.Workspace},
+			&readTool{config: live, workspace: deps.Workspace},
+			&searchTool{config: live, workspace: deps.Workspace},
 		},
-		Operations: []operation.Operation{&setupOperation{scope: deps.State, active: config}},
+		Operations: []operation.Operation{&setupOperation{scope: deps.State, config: live}},
 	}, nil, nil
 }
 
@@ -143,6 +150,7 @@ func (t *editTool) Invoke(ctx context.Context, invocation tool.Invocation) (tool
 	if err := ctx.Err(); err != nil {
 		return tool.Result{}, err
 	}
+	configuration := *t.config.current.Load()
 	call := invocation.Call
 	if call.Name != "" && call.Name != toolName {
 		return tool.Result{}, fmt.Errorf("call name %q: %w", call.Name, ErrInvalidArguments)
@@ -188,8 +196,8 @@ func (t *editTool) Invoke(ctx context.Context, invocation tool.Invocation) (tool
 	if info.IsDir() {
 		return t.businessResult(ctx, fmt.Sprintf("edit_file error: path is a directory: %s", *args.Path))
 	}
-	if info.Size() > int64(t.config.maxFileBytes) {
-		return t.businessResult(ctx, fmt.Sprintf("edit_file error: file exceeds %d bytes: %s", t.config.maxFileBytes, *args.Path))
+	if info.Size() > int64(configuration.maxFileBytes) {
+		return t.businessResult(ctx, fmt.Sprintf("edit_file error: file exceeds %d bytes: %s", configuration.maxFileBytes, *args.Path))
 	}
 	data, err := os.ReadFile(target)
 	if err != nil {

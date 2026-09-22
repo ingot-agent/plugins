@@ -21,7 +21,7 @@ import (
 
 // searchTool searches workspace-relative UTF-8 text files for a string.
 type searchTool struct {
-	config    normalizedConfig
+	config    *liveConfig
 	workspace workspace.Resolver
 }
 
@@ -51,6 +51,7 @@ func (t *searchTool) Invoke(ctx context.Context, invocation tool.Invocation) (to
 	if err := ctx.Err(); err != nil {
 		return tool.Result{}, err
 	}
+	configuration := *t.config.current.Load()
 	call := invocation.Call
 	if call.Name != "" && call.Name != searchToolName {
 		return tool.Result{}, fmt.Errorf("call name %q: %w", call.Name, ErrInvalidArguments)
@@ -95,7 +96,7 @@ func (t *searchTool) Invoke(ctx context.Context, invocation tool.Invocation) (to
 	if !info.IsDir() {
 		return t.businessResult(ctx, fmt.Sprintf("search error: path is not a directory: %s", args.Path))
 	}
-	matches, truncated, err := t.search(ctx, searchRoot, *args.Pattern, args.Glob)
+	matches, truncated, err := t.search(ctx, searchRoot, *args.Pattern, args.Glob, configuration)
 	if err != nil {
 		return tool.Result{}, err
 	}
@@ -131,7 +132,7 @@ func (t *searchTool) format(matches []match, pattern string, truncated bool) str
 // returns matches in deterministic sorted file order. scanLimit is not a hard
 // error: if the cumulative byte budget is crossed, matching stops and the
 // truncated flag is set so callers can report the boundary.
-func (t *searchTool) search(ctx context.Context, searchRoot, pattern, glob string) ([]match, bool, error) {
+func (t *searchTool) search(ctx context.Context, searchRoot, pattern, glob string, configuration normalizedConfig) ([]match, bool, error) {
 	var matches []match
 	scanned := 0
 	truncated := false
@@ -169,13 +170,13 @@ func (t *searchTool) search(ctx context.Context, searchRoot, pattern, glob strin
 		if err != nil {
 			return err
 		}
-		if info.Size() > int64(t.config.maxFileBytes) {
+		if info.Size() > int64(configuration.maxFileBytes) {
 			// Skip oversized files rather than silently truncating their
 			// contents; the per-file bound is a known limit.
 			return nil
 		}
 		scanned += int(info.Size())
-		if scanned > t.config.maxScanBytes {
+		if scanned > configuration.maxScanBytes {
 			truncated = true
 			return fs.SkipAll
 		}

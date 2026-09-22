@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"reflect"
 	"sync"
+	"sync/atomic"
 	"unicode/utf8"
 
 	"github.com/ingot-agent/ingot-abi"
@@ -104,11 +105,7 @@ type runtime struct {
 	roundInterceptors []agent.RoundInterceptor
 	observation       observation.Consumer
 	gates             *gateManager
-	provider          string
-	modelName         string
-	temperature       *float64
-	maxTokens         *int
-	maxRounds         int
+	config            atomic.Pointer[Config]
 	control           sessioncontrol.Control
 	dispatchCancel    context.CancelFunc
 	dispatchDone      chan struct{}
@@ -169,10 +166,9 @@ func New(ctx context.Context, deps Dependencies) (Exports, ingotabi.Cleanup, err
 		model: deps.Model, streaming: deps.Streaming, tools: deps.Tools, store: deps.Store, assets: deps.Assets,
 		prompt: deps.Prompt, compactor: deps.Compactor, interceptors: interceptors,
 		roundInterceptors: roundInterceptors, observation: observationConsumer,
-		gates: newGateManager(), provider: normalized.Provider, modelName: normalized.Model,
-		temperature: copyFloat(normalized.Temperature), maxTokens: copyInt(normalized.MaxTokens),
-		maxRounds: normalized.MaxRounds,
+		gates: newGateManager(),
 	}
+	instance.config.Store(&normalized)
 	var cleanup ingotabi.Cleanup
 	if !isNil(deps.Control) {
 		if err := deps.Control.ValidateTools(deps.Tools.Definitions()); err != nil {
@@ -184,7 +180,7 @@ func New(ctx context.Context, deps Dependencies) (Exports, ingotabi.Cleanup, err
 		instance.startDispatcher(dispatchCtx)
 		cleanup = instance.cleanup
 	}
-	return Exports{Runtime: instance, Streaming: instance, History: instance, Operations: []operation.Operation{&setupOperation{scope: deps.State, providerSources: append([]model.ProviderSource(nil), deps.ProviderSources...), active: normalized}}}, cleanup, nil
+	return Exports{Runtime: instance, Streaming: instance, History: instance, Operations: []operation.Operation{&setupOperation{scope: deps.State, providerSources: append([]model.ProviderSource(nil), deps.ProviderSources...), runtime: instance}}}, cleanup, nil
 }
 
 // Load returns a validated, caller-owned snapshot of one session's persisted

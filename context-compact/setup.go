@@ -28,7 +28,7 @@ const (
 type setupOperation struct {
 	scope           state.Scope
 	providerSources []model.ProviderSource
-	active          normalizedConfig
+	compactor       *compactor
 }
 
 var _ operation.Operation = (*setupOperation)(nil)
@@ -147,11 +147,8 @@ func (o *setupOperation) Invoke(ctx context.Context, request operation.Request) 
 	if err := saveConfig(o.scope.Dir(), updated); err != nil {
 		return operation.Result{}, err
 	}
-	output, err := json.Marshal(map[string]any{"restart_required": normalized != o.active})
-	if err != nil {
-		return operation.Result{}, err
-	}
-	return operation.Result{Output: output}, nil
+	o.compactor.config.Store(&normalized)
+	return operation.Result{Output: json.RawMessage(`{"restart_required":false}`)}, nil
 }
 
 func valuePointer(value interaction.Value) *interaction.Value { return &value }

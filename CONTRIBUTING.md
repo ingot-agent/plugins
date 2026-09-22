@@ -2,6 +2,11 @@
 
 Thanks for contributing to the official Ingot plugins repository.
 
+Use the repository's issue templates for ordinary defects and proposals.
+For suspected vulnerabilities, follow [SECURITY.md](SECURITY.md); it documents
+the current reporting setup and how to request a private channel without
+publishing sensitive details.
+
 ## Repository rules
 
 Each plugin must be a first-level directory and an independent Go module. It
@@ -10,6 +15,12 @@ must contain:
 - `go.mod`
 - `ingot.plugin.toml`
 - `CHANGELOG.md`
+
+Also provide a `README.md` describing the manifest name, exported capabilities,
+required providers, configuration defaults and state files, Operations/tools,
+activation behavior, limitations, and validation commands. This is the public
+documentation standard; the repository validator currently enforces only the
+marker files above. See the [development guide](docs/plugin-development.md).
 
 Official plugins that expose configuration through Operation and Interaction
 must follow [`docs/plugin-configuration-interaction-conventions.md`](docs/plugin-configuration-interaction-conventions.md).
@@ -26,9 +37,10 @@ Plugin modules must not:
 - depend on `github.com/ingot-agent/ingot` or any of its submodules; or
 - depend on another first-level plugin module's implementation.
 
-The repository intentionally has no Core checkout, Core build, WebUI-specific
-CI, or release workflow. Keep plugin validation independent from those
-systems.
+The current workflow has no Core checkout/build, WebUI-specific job or release
+job. Keep module validation independent from Core. Frontend changes still
+require the separate [WebUI checks](app-webui/web/README.md); absence of a CI job
+does not validate browser behavior or embedded asset freshness.
 
 ## Repository layout and workspace
 
@@ -49,6 +61,7 @@ From the repository root, run:
 
 ```bash
 python scripts/validate_repo.py
+python -m unittest discover -s scripts/tests -p "test_*.py"
 ```
 
 For each changed plugin directory, run the same checks used by CI:
@@ -65,6 +78,26 @@ push diff and runs these commands in a separate matrix job for each one.
 Repository-only changes produce a visible no-op Plugin Tests matrix entry.
 The changed-plugin selection and matrix construction helpers are covered by
 standard-library unit tests in `scripts/tests/`.
+
+Python 3.11+ is needed for the validator's TOML parser (CI uses Python 3.12).
+CI uses Go 1.24.2; the race detector requires a supported C toolchain. In
+PowerShell, set `$env:GOWORK = 'off'` before running the three Go commands;
+the inline environment syntax above is for a POSIX shell.
+
+## Documentation ownership
+
+Maintain concrete plugin behavior here, adjacent to its implementation.
+Shared configuration and development guides belong in `docs/`; historical
+designs belong in `docs/design-history/` and must remain visibly marked as
+historical. Core owns generic Builder/CLI/file-format documentation; SDK and
+ABI repositories own their public contracts. Link across repositories using
+their GitHub URLs so documentation works in an independent checkout.
+
+When changing behavior, update the module README and affected shared guides in
+the same change. Verify TOML keys/defaults, constructor signatures, operation
+names/groups, tool schemas and restart claims against code and tests. Check
+Markdown targets after moves and keep the catalog complete. Never describe
+branch-only functionality as already present in a released module tag.
 
 At this stage, SDK and ABI compatibility means that the plugin compiles and
 passes tests against the exact SDK and ABI versions in its `go.mod`. Manifest

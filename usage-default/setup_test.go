@@ -39,9 +39,13 @@ func TestSetupSuggestsInjectedProvidersWithoutClosingFutureRoutes(t *testing.T) 
 	active := cloneConfig(current)
 	active.CacheEntries = defaultCacheEntries
 	channel := &setupChannel{}
-	op := &setupOperation{scope: scope, providerSources: []model.ProviderSource{&setupProviderSource{names: []string{"first", "second"}}}, active: active}
+	op := &setupOperation{scope: scope, providerSources: []model.ProviderSource{&setupProviderSource{names: []string{"first", "second"}}}, counter: setupCounter(t, active)}
 	if _, err := op.Invoke(context.Background(), operation.Request{Interaction: channel}); err != nil {
 		t.Fatal(err)
+	}
+	running := op.counter.config.Load()
+	if running.capacity != defaultCacheEntries || len(running.routes) != len(current.Routes) || running.routes[0].provider != current.Routes[0].Provider {
+		t.Fatalf("running config = %#v", running)
 	}
 	routes := findSetupField(t, channel.request.Fields, "routes")
 	provider := findSetupField(t, routes.Element.Fields, "provider")
@@ -54,7 +58,7 @@ func TestSetupRefreshesProviderSuggestions(t *testing.T) {
 	current := validConfig()
 	scope := testStateScope{dir: writeTestConfig(t, current)}
 	source := &setupProviderSource{}
-	op := &setupOperation{scope: scope, providerSources: []model.ProviderSource{source}}
+	op := &setupOperation{scope: scope, providerSources: []model.ProviderSource{source}, counter: setupCounter(t, cloneConfig(current))}
 	for _, names := range [][]string{nil, {"new", "second"}, {"renamed"}} {
 		source.names = names
 		channel := &setupChannel{}
@@ -83,10 +87,27 @@ func TestSetupRereadsProviderSourcesBeforeSaving(t *testing.T) {
 	source := &setupProviderSource{names: []string{"available"}}
 	sourceErr := errors.New("source unavailable")
 	channel := &setupChannel{onRequest: func(interaction.Request) { source.err = sourceErr }}
-	op := &setupOperation{scope: scope, providerSources: []model.ProviderSource{source}}
+	op := &setupOperation{scope: scope, providerSources: []model.ProviderSource{source}, counter: setupCounter(t, validConfig())}
 	if _, err := op.Invoke(context.Background(), operation.Request{Interaction: channel}); !errors.Is(err, sourceErr) {
 		t.Fatalf("error = %v, want source error", err)
 	}
+}
+
+func setupCounter(t *testing.T, configuration Config) *counter {
+	t.Helper()
+	profiles, err := builtInProfiles()
+	if err != nil {
+		t.Fatal(err)
+	}
+	routes, err := compileRoutes(configuration.Routes, profiles)
+	if err != nil {
+		t.Fatal(err)
+	}
+	capacity := configuration.CacheEntries
+	if capacity == 0 {
+		capacity = defaultCacheEntries
+	}
+	return newCounter(nil, routes, capacity)
 }
 
 func findSetupField(t *testing.T, fields []interaction.Field, name string) interaction.Field {

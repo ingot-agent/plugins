@@ -12,6 +12,14 @@ functions in each `ProviderEntry`; the two built-in model provider Operations
 and `model-runtime` configuration publish saved changes
 immediately. The historical findings and verification below are retained.
 
+Follow-up (2026-09-22): The current catalog has 19 modules and 16 configuration
+Operations. Fifteen publish validated saved settings before returning success
+and require no restart. `app-webui` still reports a required restart when saved
+server settings differ from its active configuration. The counts, provider
+terminology and restart calculations below describe the September 16 audit
+scope, not the current catalog. See the [current configuration guide](configuration.md)
+and [live configuration contract](live-plugin-configuration.md).
+
 This audit applies
 [`plugin-configuration-interaction-conventions.md`](plugin-configuration-interaction-conventions.md)
 to every first-level official plugin in this repository. It reviews source

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"reflect"
 	"sort"
+	"sync/atomic"
 	"unicode/utf8"
 
 	"github.com/ingot-agent/ingot-abi"
@@ -69,11 +70,15 @@ type Exports struct {
 }
 
 type approvalInterceptor struct {
+	config      atomic.Pointer[approvalConfig]
+	interaction ingotabi.Optional[interaction.ExecutionBinder]
+}
+
+type approvalConfig struct {
 	defaultAction string
 	display       string
 	maxDisplay    int
 	rules         map[string]string
-	interaction   ingotabi.Optional[interaction.ExecutionBinder]
 }
 
 // New loads this Plugin's own configuration from its state scope. A missing
@@ -98,14 +103,20 @@ func New(ctx context.Context, deps Dependencies) (Exports, ingotabi.Cleanup, err
 	if err != nil {
 		return Exports{}, nil, err
 	}
-	rules := make(map[string]string, len(normalized.Rules))
-	for _, rule := range normalized.Rules {
+	instance := &approvalInterceptor{interaction: deps.Interaction}
+	instance.config.Store(prepareApprovalConfig(normalized))
+	return Exports{
+		Interceptors: []tool.Interceptor{instance},
+		Operations:   []operation.Operation{&setupOperation{scope: deps.State, interceptor: instance}},
+	}, nil, nil
+}
+
+func prepareApprovalConfig(config Config) *approvalConfig {
+	rules := make(map[string]string, len(config.Rules))
+	for _, rule := range config.Rules {
 		rules[rule.Tool] = rule.Action
 	}
-	return Exports{
-		Interceptors: []tool.Interceptor{&approvalInterceptor{defaultAction: normalized.DefaultAction, display: normalized.ArgumentDisplay, maxDisplay: normalized.MaxDisplayBytes, rules: rules, interaction: deps.Interaction}},
-		Operations:   []operation.Operation{&setupOperation{scope: deps.State, active: normalized}},
-	}, nil, nil
+	return &approvalConfig{defaultAction: config.DefaultAction, display: config.ArgumentDisplay, maxDisplay: config.MaxDisplayBytes, rules: rules}
 }
 
 func validAction(action string) bool {
@@ -119,9 +130,10 @@ func (a *approvalInterceptor) Invoke(ctx context.Context, invocation tool.Invoca
 	if err := ctx.Err(); err != nil {
 		return tool.Result{}, err
 	}
+	configuration := a.config.Load()
 	call := invocation.Call
-	action := a.defaultAction
-	if override, ok := a.rules[call.Name]; ok {
+	action := configuration.defaultAction
+	if override, ok := configuration.rules[call.Name]; ok {
 		action = override
 	}
 	switch action {
@@ -133,13 +145,13 @@ func (a *approvalInterceptor) Invoke(ctx context.Context, invocation tool.Invoca
 	case actionDeny:
 		return tool.Result{}, fmt.Errorf("tool %q: %w", call.Name, ErrApprovalDenied)
 	case actionAsk:
-		return a.ask(ctx, invocation, next)
+		return a.ask(ctx, invocation, next, configuration)
 	default:
 		return tool.Result{}, fmt.Errorf("unknown approval action %q: %w", action, ErrInvalidConfig)
 	}
 }
 
-func (a *approvalInterceptor) ask(ctx context.Context, invocation tool.Invocation, next pipeline.Next[tool.Invocation, tool.Result]) (tool.Result, error) {
+func (a *approvalInterceptor) ask(ctx context.Context, invocation tool.Invocation, next pipeline.Next[tool.Invocation, tool.Result], configuration *approvalConfig) (tool.Result, error) {
 	if next == nil {
 		return tool.Result{}, errors.New("approval: nil next")
 	}
@@ -153,7 +165,7 @@ func (a *approvalInterceptor) ask(ctx context.Context, invocation tool.Invocatio
 	if isNil(channel) {
 		return tool.Result{}, fmt.Errorf("tool %q: bind approval interaction: %w: %w", invocation.Call.Name, ErrApprovalUnavailable, interaction.ErrUnavailable)
 	}
-	prompt := a.prompt(invocation.Call)
+	prompt := a.prompt(invocation.Call, configuration)
 	for attempt := 0; attempt < maxAttempts; attempt++ {
 		response, err := channel.Request(ctx, interaction.Request{
 			Name:        requestName,
@@ -204,9 +216,9 @@ func responseString(response interaction.Response, name string) (string, bool) {
 	return result, found
 }
 
-func (a *approvalInterceptor) prompt(call tool.Call) string {
-	arguments := displayArguments(call.Arguments, a.display)
-	arguments = truncate(arguments, a.maxDisplay)
+func (a *approvalInterceptor) prompt(call tool.Call, configuration *approvalConfig) string {
+	arguments := displayArguments(call.Arguments, configuration.display)
+	arguments = truncate(arguments, configuration.maxDisplay)
 	return fmt.Sprintf("Approval required for tool %q (call %q).\nArguments: %s\nApprove this tool call?", call.Name, call.ID, arguments)
 }
 

@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"sync"
 	"time"
 
 	"github.com/ingot-agent/ingot-abi"
@@ -90,28 +91,29 @@ func New(ctx context.Context, deps Dependencies) (Exports, ingotabi.Cleanup, err
 	if err != nil {
 		return Exports{}, nil, err
 	}
-	active, err := effectiveConfiguration(cfg)
-	if err != nil {
-		return Exports{}, nil, err
-	}
-
-	transport := &http.Transport{
-		Proxy:                 normalized.proxy,
-		DialContext:           (&net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
-		ForceAttemptHTTP2:     true,
-		MaxIdleConns:          normalized.maxIdleConns,
-		MaxIdleConnsPerHost:   normalized.maxIdleConnsPerHost,
-		IdleConnTimeout:       normalized.idleConnTimeout,
-		TLSHandshakeTimeout:   normalized.tlsHandshakeTimeout,
-		ExpectContinueTimeout: time.Second,
-	}
-
-	client := &client{client: &http.Client{Transport: transport}}
+	client, transport := newHTTPClient(normalized)
+	instance := &clientState{client: client, transport: transport}
 	cleanup := ingotabi.Cleanup(func(context.Context) error {
-		transport.CloseIdleConnections()
+		instance.mu.Lock()
+		defer instance.mu.Unlock()
+		instance.transport.CloseIdleConnections()
 		return nil
 	})
-	return Exports{Client: client, Operations: []operation.Operation{&setupOperation{scope: deps.State, active: active}}}, cleanup, nil
+	return Exports{Client: instance, Operations: []operation.Operation{&setupOperation{scope: deps.State, client: instance}}}, cleanup, nil
+}
+
+func newHTTPClient(config normalizedConfig) (*http.Client, *http.Transport) {
+	transport := &http.Transport{
+		Proxy:                 config.proxy,
+		DialContext:           (&net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          config.maxIdleConns,
+		MaxIdleConnsPerHost:   config.maxIdleConnsPerHost,
+		IdleConnTimeout:       config.idleConnTimeout,
+		TLSHandshakeTimeout:   config.tlsHandshakeTimeout,
+		ExpectContinueTimeout: time.Second,
+	}
+	return &http.Client{Transport: transport}, transport
 }
 
 func effectiveConfiguration(cfg Config) (effectiveConfig, error) {
@@ -210,19 +212,24 @@ func proxyConfigError(want string) error {
 	return fmt.Errorf("proxy_url: want %s: %w", want, ErrInvalidConfig)
 }
 
-type client struct {
-	client *http.Client
+type clientState struct {
+	mu        sync.RWMutex
+	client    *http.Client
+	transport *http.Transport
 }
 
-func (c *client) Do(ctx context.Context, request *http.Request) (*http.Response, error) {
+func (c *clientState) Do(ctx context.Context, request *http.Request) (*http.Response, error) {
 	if ctx == nil || request == nil {
 		return nil, ErrInvalidRequest
 	}
-	response, err := c.client.Do(request.Clone(ctx))
+	c.mu.RLock()
+	client := c.client
+	c.mu.RUnlock()
+	response, err := client.Do(request.Clone(ctx))
 	if err != nil {
 		return response, fmt.Errorf("http request: %w", err)
 	}
 	return response, nil
 }
 
-var _ httpx.Client = (*client)(nil)
+var _ httpx.Client = (*clientState)(nil)

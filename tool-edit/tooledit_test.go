@@ -290,8 +290,9 @@ func TestEditLoadsOwnConfigFromStateScope(t *testing.T) {
 	if !ok {
 		t.Fatalf("unexpected tool type %T", exports.Tools[0])
 	}
-	if edit.config.maxFileBytes != 7 || edit.config.maxScanBytes != 9 {
-		t.Fatalf("loaded config = %#v", edit.config)
+	configuration := *edit.config.current.Load()
+	if configuration.maxFileBytes != 7 || configuration.maxScanBytes != 9 {
+		t.Fatalf("loaded config = %#v", configuration)
 	}
 }
 
@@ -306,8 +307,9 @@ func TestEditStartsUnconfigured(t *testing.T) {
 		t.Fatal(err)
 	}
 	edit := exports.Tools[0].(*editTool)
-	if edit.config.maxFileBytes != defaultMaxFileBytes || edit.config.maxScanBytes != defaultMaxScanBytes {
-		t.Fatalf("unconfigured defaults = %#v", edit.config)
+	configuration := *edit.config.current.Load()
+	if configuration.maxFileBytes != defaultMaxFileBytes || configuration.maxScanBytes != defaultMaxScanBytes {
+		t.Fatalf("unconfigured defaults = %#v", configuration)
 	}
 }
 

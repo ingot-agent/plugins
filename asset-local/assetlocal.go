@@ -69,12 +69,20 @@ type store struct {
 	root      string
 	blobs     string
 	staging   string
+	configMu  sync.RWMutex
 	maxObject uint64
 	maxTotal  uint64
-	slots     chan struct{}
+	limiter   *ioLimiter
 
 	mu    sync.Mutex
 	total uint64
+}
+
+type ioLimiter struct {
+	mu      sync.Mutex
+	changed chan struct{}
+	limit   int
+	active  int
 }
 
 // New loads this Plugin's own configuration from its state scope, validates
@@ -103,12 +111,53 @@ func New(ctx context.Context, deps Dependencies) (Exports, ingotabi.Cleanup, err
 	root = filepath.Clean(root)
 	instance := &store{
 		root: root, blobs: filepath.Join(root, "blobs"), staging: filepath.Join(root, "staging"),
-		maxObject: uint64(normalized.MaxObjectBytes), maxTotal: uint64(normalized.MaxTotalBytes), slots: make(chan struct{}, normalized.IOConcurrency),
+		maxObject: uint64(normalized.MaxObjectBytes), maxTotal: uint64(normalized.MaxTotalBytes), limiter: newIOLimiter(normalized.IOConcurrency),
 	}
 	if err := instance.initialize(ctx); err != nil {
 		return Exports{}, nil, err
 	}
-	return Exports{Store: instance, Operations: []operation.Operation{&setupOperation{scope: deps.State, active: normalized}}}, nil, nil
+	return Exports{Store: instance, Operations: []operation.Operation{&setupOperation{scope: deps.State, store: instance}}}, nil, nil
+}
+
+func newIOLimiter(limit int) *ioLimiter {
+	return &ioLimiter{changed: make(chan struct{}), limit: limit}
+}
+
+func (l *ioLimiter) acquire(ctx context.Context) error {
+	for {
+		l.mu.Lock()
+		if l.active < l.limit {
+			l.active++
+			l.mu.Unlock()
+			return nil
+		}
+		changed := l.changed
+		l.mu.Unlock()
+		select {
+		case <-changed:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+}
+
+func (l *ioLimiter) release() {
+	l.mu.Lock()
+	l.active--
+	l.notifyLocked()
+	l.mu.Unlock()
+}
+
+func (l *ioLimiter) setLimit(limit int) {
+	l.mu.Lock()
+	l.limit = limit
+	l.notifyLocked()
+	l.mu.Unlock()
+}
+
+func (l *ioLimiter) notifyLocked() {
+	close(l.changed)
+	l.changed = make(chan struct{})
 }
 
 func normalizeConfig(cfg Config) (Config, error) {
@@ -204,6 +253,8 @@ func (s *store) Put(ctx context.Context, request asset.PutRequest) (asset.Refere
 	if err := ctx.Err(); err != nil {
 		return asset.Reference{}, asset.Info{}, err
 	}
+	s.configMu.RLock()
+	defer s.configMu.RUnlock()
 	if request.Size > s.maxObject {
 		return asset.Reference{}, asset.Info{}, fmt.Errorf("declared size %d exceeds %d: %w", request.Size, s.maxObject, ErrObjectLimit)
 	}
@@ -371,15 +422,10 @@ func (s *store) path(reference asset.Reference) string {
 }
 
 func (s *store) acquire(ctx context.Context) error {
-	select {
-	case s.slots <- struct{}{}:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
+	return s.limiter.acquire(ctx)
 }
 
-func (s *store) release() { <-s.slots }
+func (s *store) release() { s.limiter.release() }
 
 type contextReader struct {
 	ctx    context.Context

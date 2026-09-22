@@ -24,8 +24,8 @@ const (
 // scope. rules is a repeated object, which is why the interaction protocol
 // needs nested field kinds.
 type setupOperation struct {
-	scope  state.Scope
-	active Config
+	scope       state.Scope
+	interceptor *approvalInterceptor
 }
 
 var _ operation.Operation = (*setupOperation)(nil)
@@ -122,6 +122,7 @@ func (o *setupOperation) Invoke(ctx context.Context, request operation.Request) 
 	if err != nil {
 		return operation.Result{}, err
 	}
+	prepared := prepareApprovalConfig(normalized)
 	if err := ctx.Err(); err != nil {
 		return operation.Result{}, err
 	}
@@ -140,11 +141,8 @@ func (o *setupOperation) Invoke(ctx context.Context, request operation.Request) 
 	if err := saveConfig(o.scope.Dir(), updated); err != nil {
 		return operation.Result{}, err
 	}
-	output, err := json.Marshal(map[string]any{"restart_required": !reflect.DeepEqual(normalized, o.active)})
-	if err != nil {
-		return operation.Result{}, err
-	}
-	return operation.Result{Output: output}, nil
+	o.interceptor.config.Store(prepared)
+	return operation.Result{Output: json.RawMessage(`{"restart_required":false}`)}, nil
 }
 
 func approvalRulesValue(rules []Rule) interaction.Value {

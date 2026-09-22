@@ -35,8 +35,8 @@ var ErrConfigConflict = errors.New("tool.shell configuration changed during inte
 // scope. environment and inherit_env use the nested and repeated field kinds
 // because they are maps and lists rather than scalar values.
 type setupOperation struct {
-	scope  state.Scope
-	active normalizedConfig
+	scope state.Scope
+	tool  *shellTool
 }
 
 var _ operation.Operation = (*setupOperation)(nil)
@@ -164,11 +164,8 @@ func (o *setupOperation) Invoke(ctx context.Context, request operation.Request) 
 	if err := saveConfig(o.scope.Dir(), updated); err != nil {
 		return operation.Result{}, err
 	}
-	output, err := json.Marshal(map[string]any{"restart_required": !reflect.DeepEqual(normalized, o.active)})
-	if err != nil {
-		return operation.Result{}, err
-	}
-	return operation.Result{Output: output}, nil
+	o.tool.config.Store(&normalized)
+	return operation.Result{Output: json.RawMessage(`{"restart_required":false}`)}, nil
 }
 
 func environmentNamesValue(environment map[string]string) interaction.Value {

@@ -1,5 +1,8 @@
 # Live model provider configuration
 
+This document describes the model-specific part of the repository-wide
+[live official plugin configuration](live-plugin-configuration.md) contract.
+
 The configuration Operations of `model-openai-compatible`,
 `model-openai-responses`, and `model-runtime` apply successful changes to the
 running process. Adding a provider to an already-loaded plugin makes it
@@ -79,11 +82,11 @@ to take precedence over runtime defaults.
 
 ## Configuration boundaries
 
-Configuration through the existing Operations needs no restart. This covers
-already-loaded plugins. Installing new plugin binaries follows the existing
-runtime image build and startup workflow. Editing state files directly does
-not trigger live reload. Provider state file formats and names are unchanged.
-Model enumeration and a new model-picker UI are outside this change.
+Model configuration through the existing Operations needs no restart. This
+covers already-loaded plugins. Installing new plugin binaries follows the
+existing runtime image build and startup workflow. Editing state files directly
+does not trigger live reload. Provider state file formats and names are
+unchanged. Model enumeration and a new model-picker UI are outside this change.
 
 ## Verification
 
@@ -109,7 +112,10 @@ and removes its workspace afterward. It preserves the repository's `go.work`
 and module dependency files. Caller settings such as `GOCACHE` remain in effect.
 No Core checkout or build is required.
 
-The six plugins pin SDK `v0.2.10` and build independently with `GOWORK=off`.
-The temporary workspace is only needed when testing further SDK changes from
+Five of these model-related plugins declare SDK `v0.2.10`; `agent-default`
+now declares `v0.2.11` for its child-agent contracts. Check each `go.mod` and
+the selected module graph: a composition uses one SDK version, and all modules
+must pass independent checks with `GOWORK=off`.
+The temporary workspace is used when testing further SDK changes from
 a local checkout. It leaves dependency files unchanged; do not add local
 `replace` directives or external SDK paths to the repository's `go.work`.
