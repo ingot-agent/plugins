@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"sync/atomic"
 	"unicode/utf8"
 
 	"github.com/ingot-agent/ingot-abi"
@@ -90,10 +91,11 @@ type normalizedConfig struct {
 }
 
 type compactor struct {
-	model model.Runtime
-	store session.Store
-	cfg   normalizedConfig
-	gates *gateManager
+	model  model.Runtime
+	store  session.Store
+	config atomic.Pointer[normalizedConfig]
+	cfg    normalizedConfig
+	gates  *gateManager
 }
 
 // New validates configuration and creates an independent compactor instance.
@@ -120,8 +122,9 @@ func New(ctx context.Context, deps Dependencies) (Exports, ingotabi.Cleanup, err
 	if err != nil {
 		return Exports{}, nil, err
 	}
-	instance := &compactor{model: deps.Model, store: deps.Store, cfg: normalized, gates: newGateManager()}
-	return Exports{Compactor: instance, Operations: []operation.Operation{&setupOperation{scope: deps.State, providerSources: append([]model.ProviderSource(nil), deps.ProviderSources...), active: normalized}}}, nil, nil
+	instance := &compactor{model: deps.Model, store: deps.Store, gates: newGateManager()}
+	instance.config.Store(&normalized)
+	return Exports{Compactor: instance, Operations: []operation.Operation{&setupOperation{scope: deps.State, providerSources: append([]model.ProviderSource(nil), deps.ProviderSources...), compactor: instance}}}, nil, nil
 }
 
 func normalizeConfig(cfg Config) (normalizedConfig, error) {

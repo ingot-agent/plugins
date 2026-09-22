@@ -25,14 +25,15 @@ func (r *runtime) invokeRoundModel(
 	messages []model.Message,
 	definitions []tool.Definition,
 	handler agent.StreamHandler,
+	configuration Config,
 ) (agent.Round, error) {
 	request := model.Request{
-		Provider:    r.provider,
-		Model:       r.modelName,
+		Provider:    configuration.Provider,
+		Model:       configuration.Model,
 		Messages:    cloneMessages(messages),
 		Tools:       cloneDefinitions(definitions),
-		Temperature: copyFloat(r.temperature),
-		MaxTokens:   copyInt(r.maxTokens),
+		Temperature: copyFloat(configuration.Temperature),
+		MaxTokens:   copyInt(configuration.MaxTokens),
 	}
 	request, err := r.compactRequest(ctx, sessionID, request)
 	if err != nil {

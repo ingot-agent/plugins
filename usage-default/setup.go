@@ -28,7 +28,7 @@ const (
 type setupOperation struct {
 	scope           state.Scope
 	providerSources []model.ProviderSource
-	active          Config
+	counter         *counter
 }
 
 var _ operation.Operation = (*setupOperation)(nil)
@@ -118,7 +118,8 @@ func (o *setupOperation) Invoke(ctx context.Context, request operation.Request) 
 	if updated.CacheEntries < 0 {
 		return operation.Result{}, fmt.Errorf("cache_entries must not be negative: %w", ErrInvalidConfig)
 	}
-	if _, err := compileRoutes(updated.Routes, profiles); err != nil {
+	routes, err := compileRoutes(updated.Routes, profiles)
+	if err != nil {
 		return operation.Result{}, err
 	}
 	if _, err := currentProviderNames(ctx, o.providerSources); err != nil {
@@ -146,11 +147,8 @@ func (o *setupOperation) Invoke(ctx context.Context, request operation.Request) 
 	if err := saveConfig(o.scope.Dir(), updated); err != nil {
 		return operation.Result{}, err
 	}
-	output, err := json.Marshal(map[string]any{"restart_required": !reflect.DeepEqual(effective, o.active)})
-	if err != nil {
-		return operation.Result{}, err
-	}
-	return operation.Result{Output: output}, nil
+	o.counter.applyConfig(routes, effective.CacheEntries)
+	return operation.Result{Output: json.RawMessage(`{"restart_required":false}`)}, nil
 }
 
 func cloneConfig(config Config) Config {

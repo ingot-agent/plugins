@@ -45,24 +45,33 @@ func TestSetupOperationPersistsThroughInteraction(t *testing.T) {
 	if err := json.Unmarshal(result.Output, &output); err != nil {
 		t.Fatal(err)
 	}
-	if output.MaxFileBytes != 2048 || output.MaxScanBytes != 4096 || !output.RestartRequired {
+	if output.MaxFileBytes != 2048 || output.MaxScanBytes != 4096 || output.RestartRequired {
 		t.Fatalf("output = %#v", output)
 	}
 	// The request carried the effective defaults so a UI can prefill the form.
 	if len(channel.request.Fields) != 2 || channel.request.Fields[0].Default == nil || channel.request.Fields[0].Default.Integer != defaultMaxFileBytes {
 		t.Fatalf("request = %#v", channel.request)
 	}
-	// A fresh construction reads the persisted values back.
+	edit, ok := exports.Tools[0].(*editTool)
+	if !ok {
+		t.Fatalf("unexpected tool %T", exports.Tools[0])
+	}
+	active := *edit.config.current.Load()
+	if active.maxFileBytes != 2048 || active.maxScanBytes != 4096 {
+		t.Fatalf("active config = %#v", active)
+	}
+	// A fresh construction also reads the persisted values back.
 	reloaded, _, err := New(context.Background(), deps)
 	if err != nil {
 		t.Fatal(err)
 	}
-	edit, ok := reloaded.Tools[0].(*editTool)
+	edit, ok = reloaded.Tools[0].(*editTool)
 	if !ok {
 		t.Fatalf("unexpected tool %T", reloaded.Tools[0])
 	}
-	if edit.config.maxFileBytes != 2048 || edit.config.maxScanBytes != 4096 {
-		t.Fatalf("reloaded config = %#v", edit.config)
+	reloadedConfig := *edit.config.current.Load()
+	if reloadedConfig.maxFileBytes != 2048 || reloadedConfig.maxScanBytes != 4096 {
+		t.Fatalf("reloaded config = %#v", reloadedConfig)
 	}
 }
 

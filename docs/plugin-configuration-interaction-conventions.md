@@ -1,6 +1,6 @@
 # Plugin configuration through Operation and Interaction
 
-Status: v1.0, 2026-09-16
+Status: v1.1, 2026-09-22
 
 This document defines how official Ingot plugins expose configuration behavior
 through the existing `operation` and `interaction` contracts. It does not add
@@ -148,6 +148,9 @@ contract for official plugins.
   active state unchanged. Successful live model configuration returns
   `restart_required:false`; see
   [live model provider configuration](live-model-provider-configuration.md).
+- All current configurable official plugins apply successful Operation changes
+  immediately and return `restart_required:false`; see
+  [live official plugin configuration](live-plugin-configuration.md).
 - Plugins that can start usefully while unconfigured SHOULD remain constructible
   and expose the capability needed to complete initial configuration. This is
   not a requirement for plugins with no configuration or no meaningful

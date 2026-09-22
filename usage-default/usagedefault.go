@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"regexp"
 	"sync"
+	"sync/atomic"
 	"unicode/utf8"
 
 	"github.com/ingot-agent/ingot-abi"
@@ -82,14 +83,18 @@ type flight struct {
 
 type counter struct {
 	resolver model.RequestResolver
-	routes   []compiledRoute
-	capacity int
+	config   atomic.Pointer[counterConfig]
 
 	mu       sync.Mutex
 	closed   bool
 	cache    map[string]*list.Element
 	recent   *list.List
 	inflight map[string]*flight
+}
+
+type counterConfig struct {
+	routes   []compiledRoute
+	capacity int
 }
 
 // New loads this Plugin's own configuration from its state scope, validates
@@ -135,8 +140,6 @@ func New(ctx context.Context, deps Dependencies) (Exports, ingotabi.Cleanup, err
 	if capacity == 0 {
 		capacity = defaultCacheEntries
 	}
-	active := cloneConfig(cfg)
-	active.CacheEntries = capacity
 	instance := newCounter(deps.Resolver, routes, capacity)
 	cleanup := ingotabi.Cleanup(func(cleanupCtx context.Context) error {
 		if cleanupCtx == nil {
@@ -148,18 +151,26 @@ func New(ctx context.Context, deps Dependencies) (Exports, ingotabi.Cleanup, err
 		instance.close()
 		return nil
 	})
-	return Exports{Counter: instance, Operations: []operation.Operation{&setupOperation{scope: deps.State, providerSources: append([]model.ProviderSource(nil), deps.ProviderSources...), active: active}}}, cleanup, nil
+	return Exports{Counter: instance, Operations: []operation.Operation{&setupOperation{scope: deps.State, providerSources: append([]model.ProviderSource(nil), deps.ProviderSources...), counter: instance}}}, cleanup, nil
 }
 
 func newCounter(resolver model.RequestResolver, routes []compiledRoute, capacity int) *counter {
-	return &counter{
+	instance := &counter{
 		resolver: resolver,
-		routes:   routes,
-		capacity: capacity,
 		cache:    make(map[string]*list.Element, capacity),
 		recent:   list.New(),
 		inflight: make(map[string]*flight),
 	}
+	instance.config.Store(&counterConfig{routes: routes, capacity: capacity})
+	return instance
+}
+
+func (c *counter) applyConfig(routes []compiledRoute, capacity int) {
+	c.config.Store(&counterConfig{routes: routes, capacity: capacity})
+	c.mu.Lock()
+	clear(c.cache)
+	c.recent.Init()
+	c.mu.Unlock()
 }
 
 func compileRoutes(routes []Route, profiles map[string]profile) ([]compiledRoute, error) {

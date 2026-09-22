@@ -37,7 +37,7 @@ func TestSetupUsesClosedProviderOptionsAndRejectsUnknownProvider(t *testing.T) {
 	channel := &setupChannel{response: interaction.Response{Values: []interaction.Answer{
 		{Name: "provider", Value: interaction.StringValue("missing")},
 	}}}
-	op := &setupOperation{scope: scope, providerSources: []model.ProviderSource{&setupProviderSource{names: []string{"first", "second"}}}, active: active}
+	op := &setupOperation{scope: scope, providerSources: []model.ProviderSource{&setupProviderSource{names: []string{"first", "second"}}}, compactor: setupCompactor(active)}
 	_, err = op.Invoke(context.Background(), operation.Request{Interaction: channel})
 	if !errors.Is(err, ErrInvalidConfig) {
 		t.Fatalf("error = %v, want ErrInvalidConfig", err)
@@ -58,7 +58,7 @@ func TestSetupUsesClosedProviderOptionsAndRejectsUnknownProvider(t *testing.T) {
 func TestSetupRefreshesProvidersAndRepairsRemovedSelection(t *testing.T) {
 	scope := testStateScope{dir: writeTestConfig(t, Config{Provider: "removed"})}
 	source := &setupProviderSource{}
-	op := &setupOperation{scope: scope, providerSources: []model.ProviderSource{source}}
+	op := &setupOperation{scope: scope, providerSources: []model.ProviderSource{source}, compactor: setupCompactor(normalizedConfig{})}
 	for _, selected := range []string{"", "added"} {
 		if selected != "" {
 			source.names = []string{selected}
@@ -81,6 +81,9 @@ func TestSetupRefreshesProvidersAndRepairsRemovedSelection(t *testing.T) {
 		if _, err := op.Invoke(context.Background(), operation.Request{Interaction: channel}); err != nil {
 			t.Fatal(err)
 		}
+		if running := op.compactor.config.Load(); running.provider != selected {
+			t.Fatalf("running provider = %q, want %q", running.provider, selected)
+		}
 		stored, err := loadConfig(scope.Dir())
 		if err != nil || stored.Provider != selected {
 			t.Fatalf("saved provider = %q, error = %v", stored.Provider, err)
@@ -97,7 +100,7 @@ func TestSetupRejectsProviderRemovedDuringInteraction(t *testing.T) {
 			response:  interaction.Response{Values: []interaction.Answer{{Name: "provider", Value: interaction.StringValue(selected)}}},
 			onRequest: func(interaction.Request) { source.names = remaining },
 		}
-		op := &setupOperation{scope: scope, providerSources: []model.ProviderSource{source}}
+		op := &setupOperation{scope: scope, providerSources: []model.ProviderSource{source}, compactor: setupCompactor(normalizedConfig{})}
 		if _, err := op.Invoke(context.Background(), operation.Request{Interaction: channel}); !errors.Is(err, ErrInvalidConfig) {
 			t.Fatalf("error = %v, want ErrInvalidConfig", err)
 		}
@@ -106,6 +109,12 @@ func TestSetupRejectsProviderRemovedDuringInteraction(t *testing.T) {
 			t.Fatalf("removed selection was saved: %#v, error = %v", stored, err)
 		}
 	}
+}
+
+func setupCompactor(configuration normalizedConfig) *compactor {
+	instance := &compactor{}
+	instance.config.Store(&configuration)
+	return instance
 }
 
 func findSetupField(t *testing.T, fields []interaction.Field, name string) interaction.Field {

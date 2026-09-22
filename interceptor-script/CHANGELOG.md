@@ -6,6 +6,8 @@ All notable changes to this plugin are documented in this file.
 
 ### Changed
 
+- Dispatch through stable target interceptors so hook additions, removals,
+  reordering, and target changes apply without restart.
 - Expose configuration as `/interceptor-script config` using a stable plugin Group and local operation Name.
 - Populate hook forms with saved hooks, arguments, and execution limits.
 - Preserve hidden environment values and renamed hooks through stable source

@@ -32,7 +32,7 @@ var ErrConfigConflict = errors.New("agent.default configuration changed during i
 type setupOperation struct {
 	scope           state.Scope
 	providerSources []model.ProviderSource
-	active          Config
+	runtime         *runtime
 }
 
 var _ operation.Operation = (*setupOperation)(nil)
@@ -175,11 +175,8 @@ func (o *setupOperation) Invoke(ctx context.Context, request operation.Request) 
 	if err := saveConfig(o.scope.Dir(), updated); err != nil {
 		return operation.Result{}, err
 	}
-	output, err := json.Marshal(map[string]any{"restart_required": !reflect.DeepEqual(effective, o.active)})
-	if err != nil {
-		return operation.Result{}, err
-	}
-	return operation.Result{Output: output}, nil
+	o.runtime.config.Store(&effective)
+	return operation.Result{Output: json.RawMessage(`{"restart_required":false}`)}, nil
 }
 
 // validateConfig applies the same generation limits at construction and in the

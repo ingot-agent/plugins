@@ -31,8 +31,8 @@ var ErrConfigConflict = errors.New("interceptor.script configuration changed dur
 // scope. hooks is a repeated object containing a repeated string field and a
 // map, which is exactly the shape the nested interaction kinds exist for.
 type setupOperation struct {
-	scope  state.Scope
-	active []normalizedHook
+	scope   state.Scope
+	runtime *hookRuntime
 }
 
 var _ operation.Operation = (*setupOperation)(nil)
@@ -173,6 +173,7 @@ func (o *setupOperation) Invoke(ctx context.Context, request operation.Request) 
 	if err != nil {
 		return operation.Result{}, err
 	}
+	prepared := prepareHookSnapshot(normalized)
 	if err := ctx.Err(); err != nil {
 		return operation.Result{}, err
 	}
@@ -191,7 +192,8 @@ func (o *setupOperation) Invoke(ctx context.Context, request operation.Request) 
 	if err := saveConfig(o.scope.Dir(), updated); err != nil {
 		return operation.Result{}, err
 	}
-	output, err := json.Marshal(map[string]any{"hooks": len(hooks), "restart_required": !reflect.DeepEqual(normalized, o.active)})
+	o.runtime.current.Store(prepared)
+	output, err := json.Marshal(map[string]any{"hooks": len(hooks), "restart_required": false})
 	if err != nil {
 		return operation.Result{}, err
 	}

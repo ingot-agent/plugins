@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -89,7 +90,7 @@ type normalizedConfig struct {
 }
 
 type shellTool struct {
-	config      normalizedConfig
+	config      atomic.Pointer[normalizedConfig]
 	workspace   workspace.Resolver
 	observation observation.Consumer
 }
@@ -122,9 +123,11 @@ func New(ctx context.Context, deps Dependencies) (Exports, ingotabi.Cleanup, err
 	if deps.Observation.Valid {
 		consumer = deps.Observation.Value
 	}
+	instance := &shellTool{workspace: deps.Workspace, observation: consumer}
+	instance.config.Store(&normalized)
 	return Exports{
-		Tools:      []tool.Tool{&shellTool{config: normalized, workspace: deps.Workspace, observation: consumer}},
-		Operations: []operation.Operation{&setupOperation{scope: deps.State, active: normalized}},
+		Tools:      []tool.Tool{instance},
+		Operations: []operation.Operation{&setupOperation{scope: deps.State, tool: instance}},
 	}, nil, nil
 }
 
@@ -303,6 +306,7 @@ func (t *shellTool) Invoke(ctx context.Context, invocation tool.Invocation) (too
 	if err := ctx.Err(); err != nil {
 		return tool.Result{}, err
 	}
+	configuration := *t.config.Load()
 	call := invocation.Call
 	if call.Name != "" && call.Name != "shell_exec" {
 		return tool.Result{}, fmt.Errorf("call name %q: %w", call.Name, ErrInvalidArguments)
@@ -327,7 +331,7 @@ func (t *shellTool) Invoke(ctx context.Context, invocation tool.Invocation) (too
 	if args.Command == nil || *args.Command == "" || !utf8.ValidString(*args.Command) {
 		return tool.Result{}, fmt.Errorf("command must be a non-empty UTF-8 string: %w", ErrInvalidArguments)
 	}
-	timeout := t.config.timeout
+	timeout := configuration.timeout
 	if args.TimeoutSeconds != nil {
 		if *args.TimeoutSeconds < 1 {
 			return tool.Result{}, fmt.Errorf("timeout_seconds must be positive: %w", ErrInvalidArguments)
@@ -343,10 +347,10 @@ func (t *shellTool) Invoke(ctx context.Context, invocation tool.Invocation) (too
 	}
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	command := exec.Command(t.config.shell, shellCommandArgs(t.config.shell, *args.Command)...)
+	command := exec.Command(configuration.shell, shellCommandArgs(configuration.shell, *args.Command)...)
 	command.Dir = binding.Root
-	command.Env = commandEnvironment(t.config.environment, t.config.inheritEnvironment, binding.Root)
-	collector := newOutputCollector(t.config.maxOutputBytes)
+	command.Env = commandEnvironment(configuration.environment, configuration.inheritEnvironment, binding.Root)
+	collector := newOutputCollector(configuration.maxOutputBytes)
 	stdoutWriter := newOutputWriter(ctx, collector, t.observation, "stdout", false)
 	stderrWriter := newOutputWriter(ctx, collector, t.observation, "stderr", true)
 	command.Stdout = stdoutWriter
