@@ -4,6 +4,14 @@ All notable changes to this plugin are documented in this file.
 
 ## Unreleased
 
+### Added
+
+- Publish configured models and their supported reasoning-effort values through
+  `model.ProviderEntry`, and map the request-selected value to
+  `reasoning_effort` on Chat Completions requests.
+- Allow individual models to override the provider-level reasoning efforts;
+  an empty override disables explicit reasoning effort for that model.
+
 ### Changed
 
 - Replace static provider exports with a live `model.ProviderSource`; saved
@@ -17,6 +25,11 @@ All notable changes to this plugin are documented in this file.
   sensitive header values through explicit keep, replace, or clear actions.
 - Preserve hidden values across provider renames, apply full construction
   validation, and reject stale configuration writes.
+
+### Fixed
+
+- Persist reasoning-effort selections submitted by a host as a MultiChoice
+  value so `model-runtime` can expose the configured choices.
 
 ## 0.1.0 - 2026-09-13
 

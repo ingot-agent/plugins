@@ -20,6 +20,7 @@ an ABI dependency:
 ```go
 type ProviderEntry struct {
     Name     string
+    Models   []ModelEntry
     Complete func(context.Context, Request) (Response, error)
     Stream   StreamNext
 }
@@ -33,6 +34,10 @@ A source is always present, including before initial configuration, when its
 snapshot is empty. It returns a caller-owned slice of current entries.
 `Complete` is required; `Stream` is optional. The runtime invokes these
 functions directly and returns `ErrStreamingUnsupported` when `Stream` is nil.
+Each model entry names an available model and the explicit reasoning-effort
+values it supports. An empty model directory preserves compatibility with
+providers that do not expose closed model discovery.
+
 Functions retain immutable configuration, support concurrent calls, and remain
 usable after the source publishes another snapshot.
 
@@ -69,11 +74,11 @@ the directory can be used.
 
 Provider choices in `model-runtime`, `agent-default`, and `context-compact`,
 and suggestions in `usage-default`, use current source snapshots. Existing
-forms remain immutable; closed choices are revalidated at submission. This
-does not add model enumeration. Existing explicit agent or context provider
-overrides continue to take precedence over runtime defaults. The remaining
-official plugin settings now also publish after a successful configuration
-commit as described by the repository-wide contract.
+forms remain immutable; closed choices are revalidated at submission. Model
+and reasoning-effort choices in `model-runtime` use provider capability
+directories, while changes to other plugins' configuration are not applied
+live. Existing explicit agent or context provider or model overrides continue
+to take precedence over runtime defaults.
 
 ## Configuration boundaries
 

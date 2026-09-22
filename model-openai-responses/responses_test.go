@@ -63,14 +63,14 @@ func TestCompleteMapsResponsesRequestAndResponse(t *testing.T) {
 	provider := newProvider(t, openairesponses.ProviderConfig{
 		Name: "primary", BaseURL: "https://example.test/v1/", APIKey: "secret",
 		Organization: "org", Project: "project", Models: []string{"requested-model"},
-		DefaultHeaders: headers,
+		DefaultHeaders: headers, ReasoningEfforts: []string{"low", "high"},
 	}, client, assetResolver{data: map[string][]byte{}})
 	headers["X-Tenant"] = "mutated"
 
 	temperature := 0.25
 	maxTokens := 128
 	result, err := provider.Complete(context.Background(), model.Request{
-		Model: "requested-model",
+		Model: "requested-model", ReasoningEffort: model.ReasoningEffortHigh,
 		Messages: []model.Message{
 			{Role: model.RoleSystem, Content: content.FromText("system")},
 			{Role: model.RoleUser, Content: content.Content{
@@ -114,7 +114,10 @@ func TestCompleteMapsResponsesRequestAndResponse(t *testing.T) {
 		Store           bool    `json:"store"`
 		Temperature     float64 `json:"temperature"`
 		MaxOutputTokens int     `json:"max_output_tokens"`
-		Input           []struct {
+		Reasoning       struct {
+			Effort string `json:"effort"`
+		} `json:"reasoning"`
+		Input []struct {
 			Type      string          `json:"type"`
 			Role      string          `json:"role"`
 			Content   json.RawMessage `json:"content"`
@@ -132,7 +135,7 @@ func TestCompleteMapsResponsesRequestAndResponse(t *testing.T) {
 	if err := json.Unmarshal(requestBody, &payload); err != nil {
 		t.Fatal(err)
 	}
-	if payload.Model != "requested-model" || payload.Instructions != "system" || payload.Stream || payload.Store || payload.Temperature != 0.25 || payload.MaxOutputTokens != 128 {
+	if payload.Model != "requested-model" || payload.Instructions != "system" || payload.Stream || payload.Store || payload.Temperature != 0.25 || payload.MaxOutputTokens != 128 || payload.Reasoning.Effort != "high" {
 		t.Fatalf("payload = %s", requestBody)
 	}
 	wantTypes := []string{"message", "message", "function_call", "function_call_output"}
@@ -163,6 +166,40 @@ func TestCompleteMapsResponsesRequestAndResponse(t *testing.T) {
 	}
 	if bytes.Contains(requestBody, []byte(`"messages"`)) || bytes.Contains(requestBody, []byte(`"max_tokens"`)) {
 		t.Fatalf("request contains Chat Completions fields: %s", requestBody)
+	}
+}
+
+func TestReasoningEffortOverridesApplyPerModel(t *testing.T) {
+	provider := newProvider(t, openairesponses.ProviderConfig{
+		Name: "p", BaseURL: "https://example.test",
+		Models:           []string{"inherited", "disabled", "high-only"},
+		ReasoningEfforts: []string{"low", "high"},
+		ReasoningEffortOverrides: []openairesponses.ReasoningEffortOverride{
+			{Model: "disabled", ReasoningEfforts: []string{}},
+			{Model: "high-only", ReasoningEfforts: []string{"high"}},
+		},
+	}, staticClient(`{"id":"resp_1","object":"response","status":"completed","model":"actual-model","output":[]}`), assetResolver{data: map[string][]byte{}})
+	wantModels := []model.ModelEntry{
+		{Name: "inherited", ReasoningEfforts: []model.ReasoningEffort{model.ReasoningEffortLow, model.ReasoningEffortHigh}},
+		{Name: "disabled"},
+		{Name: "high-only", ReasoningEfforts: []model.ReasoningEffort{model.ReasoningEffortHigh}},
+	}
+	if !reflect.DeepEqual(provider.Models, wantModels) {
+		t.Fatalf("model capabilities = %#v, want %#v", provider.Models, wantModels)
+	}
+	if _, err := provider.Complete(context.Background(), model.Request{Model: "inherited", ReasoningEffort: model.ReasoningEffortLow}); err != nil {
+		t.Fatalf("inherited effort: %v", err)
+	}
+	if _, err := provider.Complete(context.Background(), model.Request{Model: "high-only", ReasoningEffort: model.ReasoningEffortHigh}); err != nil {
+		t.Fatalf("overridden effort: %v", err)
+	}
+	for _, request := range []model.Request{
+		{Model: "disabled", ReasoningEffort: model.ReasoningEffortHigh},
+		{Model: "high-only", ReasoningEffort: model.ReasoningEffortLow},
+	} {
+		if _, err := provider.Complete(context.Background(), request); !errors.Is(err, model.ErrReasoningEffortUnsupported) {
+			t.Fatalf("request %#v error = %v, want ErrReasoningEffortUnsupported", request, err)
+		}
 	}
 }
 
@@ -200,6 +237,9 @@ func TestCompleteOnlyPromotesLeadingSystemMessage(t *testing.T) {
 	}
 	if len(payload.Input) != 2 || payload.Input[0].Role != "user" || payload.Input[1].Role != "system" || payload.Input[1].Content != "historical system message" {
 		t.Fatalf("input = %#v; payload = %s", payload.Input, requestBody)
+	}
+	if strings.Contains(string(requestBody), `"reasoning"`) {
+		t.Fatalf("unset reasoning effort was encoded: %s", requestBody)
 	}
 }
 
@@ -430,6 +470,24 @@ func TestConfigAndHTTPErrorBoundaries(t *testing.T) {
 	}}}, dependencies(staticClient(`{}`))))
 	if !errors.Is(err, openairesponses.ErrInvalidConfig) {
 		t.Fatalf("owned header error = %v", err)
+	}
+	_, _, err = openairesponses.New(context.Background(), withState(t, openairesponses.Config{Providers: []openairesponses.ProviderConfig{{
+		Name: "p", BaseURL: "https://example.test", ReasoningEfforts: []string{"extreme"},
+	}}}, dependencies(staticClient(`{}`))))
+	if !errors.Is(err, openairesponses.ErrInvalidConfig) {
+		t.Fatalf("reasoning effort error = %v", err)
+	}
+	for name, cfg := range map[string]openairesponses.ProviderConfig{
+		"unknown reasoning override model":  {Name: "p", BaseURL: "https://example.test", Models: []string{"m"}, ReasoningEffortOverrides: []openairesponses.ReasoningEffortOverride{{Model: "missing"}}},
+		"duplicate reasoning override":      {Name: "p", BaseURL: "https://example.test", Models: []string{"m"}, ReasoningEffortOverrides: []openairesponses.ReasoningEffortOverride{{Model: "m"}, {Model: "m"}}},
+		"invalid reasoning override effort": {Name: "p", BaseURL: "https://example.test", Models: []string{"m"}, ReasoningEffortOverrides: []openairesponses.ReasoningEffortOverride{{Model: "m", ReasoningEfforts: []string{"extreme"}}}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, _, err := openairesponses.New(context.Background(), withState(t, openairesponses.Config{Providers: []openairesponses.ProviderConfig{cfg}}, dependencies(staticClient(`{}`))))
+			if !errors.Is(err, openairesponses.ErrInvalidConfig) {
+				t.Fatalf("error = %v, want ErrInvalidConfig", err)
+			}
+		})
 	}
 
 	client := clientFunc(func(context.Context, *http.Request) (*http.Response, error) {

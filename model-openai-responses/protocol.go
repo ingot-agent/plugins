@@ -21,6 +21,7 @@ import (
 
 type responseRequest struct {
 	Model           string              `json:"model"`
+	Reasoning       *responseReasoning  `json:"reasoning,omitempty"`
 	Instructions    string              `json:"instructions,omitempty"`
 	Input           []responseInputItem `json:"input"`
 	Tools           []responseTool      `json:"tools,omitempty"`
@@ -28,6 +29,10 @@ type responseRequest struct {
 	MaxOutputTokens *int                `json:"max_output_tokens,omitempty"`
 	Stream          bool                `json:"stream"`
 	Store           bool                `json:"store"`
+}
+
+type responseReasoning struct {
+	Effort model.ReasoningEffort `json:"effort"`
 }
 
 type responseInputItem struct {
@@ -146,6 +151,9 @@ func (p *provider) encodeResponseRequest(ctx context.Context, request model.Requ
 		Model: request.Model, Instructions: instructions, Input: input, Tools: tools,
 		Temperature: request.Temperature, MaxOutputTokens: request.MaxTokens,
 		Stream: stream, Store: false,
+	}
+	if request.ReasoningEffort != "" {
+		payload.Reasoning = &responseReasoning{Effort: request.ReasoningEffort}
 	}
 	raw, err := json.Marshal(payload)
 	if err != nil {

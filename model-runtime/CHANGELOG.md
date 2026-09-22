@@ -4,6 +4,11 @@ All notable changes to this plugin are documented in this file.
 
 ## Unreleased
 
+### Added
+
+- Configure provider, model, and reasoning-effort defaults from live provider
+  capability directories and validate every resolved request against them.
+
 ### Changed
 
 - Invoke the required `Complete` and optional `Stream` functions carried by

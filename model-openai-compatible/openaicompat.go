@@ -92,19 +92,29 @@ type Config struct {
 	Providers []ProviderConfig `toml:"providers"`
 }
 
+// ReasoningEffortOverride replaces the provider-level reasoning efforts for
+// one configured model. An empty ReasoningEfforts list disables explicit
+// reasoning-effort selection for that model.
+type ReasoningEffortOverride struct {
+	Model            string   `toml:"model"`
+	ReasoningEfforts []string `toml:"reasoning_efforts"`
+}
+
 // ProviderConfig configures one named Chat Completions endpoint.
 type ProviderConfig struct {
-	Name              string            `toml:"name"`
-	BaseURL           string            `toml:"base_url"`
-	APIKey            string            `toml:"api_key"`
-	Organization      string            `toml:"organization"`
-	Project           string            `toml:"project"`
-	Models            []string          `toml:"models"`
-	DefaultHeaders    map[string]string `toml:"default_headers"`
-	MaxResponseBytes  int               `toml:"max_response_bytes"`
-	MaxErrorBodyBytes int               `toml:"max_error_body_bytes"`
-	MaxAssetBytes     int               `toml:"max_asset_bytes"`
-	AssetConcurrency  int               `toml:"asset_concurrency"`
+	Name                     string                    `toml:"name"`
+	BaseURL                  string                    `toml:"base_url"`
+	ReasoningEfforts         []string                  `toml:"reasoning_efforts"`
+	ReasoningEffortOverrides []ReasoningEffortOverride `toml:"reasoning_effort_overrides,omitempty"`
+	APIKey                   string                    `toml:"api_key"`
+	Organization             string                    `toml:"organization"`
+	Project                  string                    `toml:"project"`
+	Models                   []string                  `toml:"models"`
+	DefaultHeaders           map[string]string         `toml:"default_headers"`
+	MaxResponseBytes         int                       `toml:"max_response_bytes"`
+	MaxErrorBodyBytes        int                       `toml:"max_error_body_bytes"`
+	MaxAssetBytes            int                       `toml:"max_asset_bytes"`
+	AssetConcurrency         int                       `toml:"asset_concurrency"`
 }
 
 // Dependencies contains shared HTTP and immutable asset resolution
@@ -122,24 +132,27 @@ type Exports struct {
 }
 
 type provider struct {
-	name             string
-	endpoint         string
-	apiKey           string
-	organization     string
-	project          string
-	models           map[string]struct{}
-	headers          http.Header
-	maxResponseBytes int
-	maxErrorBytes    int
-	maxAssetBytes    int
-	assetSlots       chan struct{}
-	http             httpx.Client
-	assets           asset.Resolver
+	name                    string
+	endpoint                string
+	reasoningEffortsByModel map[string]map[model.ReasoningEffort]struct{}
+	modelEntries            []model.ModelEntry
+	apiKey                  string
+	organization            string
+	project                 string
+	models                  map[string]struct{}
+	headers                 http.Header
+	maxResponseBytes        int
+	maxErrorBytes           int
+	maxAssetBytes           int
+	assetSlots              chan struct{}
+	http                    httpx.Client
+	assets                  asset.Resolver
 }
 
 type normalizedProviderConfig struct {
 	name             string
 	endpoint         string
+	modelEntries     []model.ModelEntry
 	apiKey           string
 	organization     string
 	project          string
@@ -229,6 +242,17 @@ func normalizeProviderConfig(cfg ProviderConfig) (normalizedProviderConfig, erro
 		}
 		models[name] = struct{}{}
 	}
+	reasoningEfforts, err := normalizeReasoningEfforts(cfg.ReasoningEfforts)
+	if err != nil {
+		return normalizedProviderConfig{}, err
+	}
+	if len(reasoningEfforts) != 0 && len(models) == 0 {
+		return normalizedProviderConfig{}, configError("reasoning_efforts", "require at least one configured model")
+	}
+	overrides, err := normalizeReasoningEffortOverrides(cfg.ReasoningEffortOverrides, models)
+	if err != nil {
+		return normalizedProviderConfig{}, err
+	}
 
 	headers := make(http.Header, len(cfg.DefaultHeaders))
 	seen := make(map[string]string, len(cfg.DefaultHeaders))
@@ -247,10 +271,21 @@ func normalizeProviderConfig(cfg ProviderConfig) (normalizedProviderConfig, erro
 		seen[lower] = key
 		headers.Set(canonical, value)
 	}
+	modelEntries := make([]model.ModelEntry, 0, len(cfg.Models))
+	for _, name := range cfg.Models {
+		efforts := reasoningEfforts
+		if override, exists := overrides[name]; exists {
+			efforts = override
+		}
+		modelEntries = append(modelEntries, model.ModelEntry{
+			Name: name, ReasoningEfforts: append([]model.ReasoningEffort(nil), efforts...),
+		})
+	}
 
 	return normalizedProviderConfig{
 		name:             cfg.Name,
 		endpoint:         endpoint,
+		modelEntries:     modelEntries,
 		apiKey:           cfg.APIKey,
 		organization:     cfg.Organization,
 		project:          cfg.Project,
@@ -264,13 +299,65 @@ func normalizeProviderConfig(cfg ProviderConfig) (normalizedProviderConfig, erro
 }
 
 func newProviderFromNormalized(cfg normalizedProviderConfig, client httpx.Client, assets asset.Resolver) *provider {
+	reasoningEffortsByModel := make(map[string]map[model.ReasoningEffort]struct{}, len(cfg.modelEntries))
+	for _, entry := range cfg.modelEntries {
+		efforts := make(map[model.ReasoningEffort]struct{}, len(entry.ReasoningEfforts))
+		for _, effort := range entry.ReasoningEfforts {
+			efforts[effort] = struct{}{}
+		}
+		reasoningEffortsByModel[entry.Name] = efforts
+	}
 	return &provider{
 		name: cfg.name, endpoint: cfg.endpoint, apiKey: cfg.apiKey,
+		reasoningEffortsByModel: reasoningEffortsByModel, modelEntries: cloneModelEntries(cfg.modelEntries),
 		organization: cfg.organization, project: cfg.project, models: cfg.models,
 		headers: cfg.headers, maxResponseBytes: cfg.maxResponseBytes,
 		maxErrorBytes: cfg.maxErrorBytes, maxAssetBytes: cfg.maxAssetBytes,
 		assetSlots: make(chan struct{}, cfg.assetConcurrency), http: client, assets: assets,
 	}
+}
+
+func normalizeReasoningEfforts(values []string) ([]model.ReasoningEffort, error) {
+	return normalizeReasoningEffortsField(values, "reasoning_efforts")
+}
+
+func normalizeReasoningEffortsField(values []string, field string) ([]model.ReasoningEffort, error) {
+	result := make([]model.ReasoningEffort, 0, len(values))
+	seen := make(map[model.ReasoningEffort]struct{}, len(values))
+	for i, value := range values {
+		effort := model.ReasoningEffort(value)
+		if !effort.Valid() {
+			return nil, configError(fmt.Sprintf("%s[%d]", field, i), "must be one of none, minimal, low, medium, high, or xhigh")
+		}
+		if _, exists := seen[effort]; exists {
+			return nil, configError(fmt.Sprintf("%s[%d]", field, i), "duplicates an earlier effort")
+		}
+		seen[effort] = struct{}{}
+		result = append(result, effort)
+	}
+	return result, nil
+}
+
+func normalizeReasoningEffortOverrides(values []ReasoningEffortOverride, models map[string]struct{}) (map[string][]model.ReasoningEffort, error) {
+	result := make(map[string][]model.ReasoningEffort, len(values))
+	for i, value := range values {
+		field := fmt.Sprintf("reasoning_effort_overrides[%d]", i)
+		if value.Model == "" || !utf8.ValidString(value.Model) {
+			return nil, configError(field+".model", "must be non-empty UTF-8")
+		}
+		if _, exists := models[value.Model]; !exists {
+			return nil, configError(field+".model", "must reference a configured model")
+		}
+		if _, exists := result[value.Model]; exists {
+			return nil, configError(field+".model", "duplicates an earlier override")
+		}
+		efforts, err := normalizeReasoningEffortsField(value.ReasoningEfforts, field+".reasoning_efforts")
+		if err != nil {
+			return nil, err
+		}
+		result[value.Model] = efforts
+	}
+	return result, nil
 }
 
 func positiveDefault(value, fallback int, field string) (int, error) {
@@ -369,6 +456,11 @@ func (p *provider) validateRequest(ctx context.Context, request model.Request) e
 	if len(p.models) != 0 {
 		if _, ok := p.models[request.Model]; !ok {
 			return fmt.Errorf("model %q is not allowed by provider %q: %w", request.Model, p.name, model.ErrModelNotFound)
+		}
+	}
+	if request.ReasoningEffort != "" {
+		if _, ok := p.reasoningEffortsByModel[request.Model][request.ReasoningEffort]; !ok {
+			return fmt.Errorf("model %q does not support reasoning effort %q: %w", request.Model, request.ReasoningEffort, model.ErrReasoningEffortUnsupported)
 		}
 	}
 	if err := validateSDKRequest(request); err != nil {

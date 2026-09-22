@@ -9,6 +9,7 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -120,13 +121,13 @@ func TestCompleteMapsRequestHeadersAndResponse(t *testing.T) {
 	headers := map[string]string{"X-Tenant": "one"}
 	exports, _, err := openaicompat.New(context.Background(), withState(t, openaicompat.Config{Providers: []openaicompat.ProviderConfig{{
 		Name: "primary", BaseURL: "https://example.test/v1/", APIKey: "secret", Organization: "org", Project: "project",
-		Models: []string{"requested-model"}, DefaultHeaders: headers,
+		Models: []string{"requested-model"}, DefaultHeaders: headers, ReasoningEfforts: []string{"low", "high"},
 	}}}, dependencies(httpx.Client(client))))
 	if err != nil {
 		t.Fatal(err)
 	}
 	headers["X-Tenant"] = "mutated"
-	result, err := providerEntries(t, exports)[0].Complete(context.Background(), model.Request{Model: "requested-model", Messages: []model.Message{{Role: model.RoleUser, Content: content.FromText("hi")}}})
+	result, err := providerEntries(t, exports)[0].Complete(context.Background(), model.Request{Model: "requested-model", ReasoningEffort: model.ReasoningEffortHigh, Messages: []model.Message{{Role: model.RoleUser, Content: content.FromText("hi")}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,8 +142,45 @@ func TestCompleteMapsRequestHeadersAndResponse(t *testing.T) {
 		t.Fatalf("headers=%v", captured.Header)
 	}
 	var payload map[string]any
-	if err := json.Unmarshal(body, &payload); err != nil || payload["stream"] != false || payload["model"] != "requested-model" {
+	if err := json.Unmarshal(body, &payload); err != nil || payload["stream"] != false || payload["model"] != "requested-model" || payload["reasoning_effort"] != "high" {
 		t.Fatalf("payload=%s err=%v", body, err)
+	}
+}
+
+func TestReasoningEffortOverridesApplyPerModel(t *testing.T) {
+	client := clientFunc(func(context.Context, *http.Request) (*http.Response, error) {
+		return response(http.StatusOK, `{"model":"actual-model","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`), nil
+	})
+	provider := newProvider(t, openaicompat.ProviderConfig{
+		Name: "p", BaseURL: "https://example.test",
+		Models:           []string{"inherited", "disabled", "high-only"},
+		ReasoningEfforts: []string{"low", "high"},
+		ReasoningEffortOverrides: []openaicompat.ReasoningEffortOverride{
+			{Model: "disabled", ReasoningEfforts: []string{}},
+			{Model: "high-only", ReasoningEfforts: []string{"high"}},
+		},
+	}, client)
+	wantModels := []model.ModelEntry{
+		{Name: "inherited", ReasoningEfforts: []model.ReasoningEffort{model.ReasoningEffortLow, model.ReasoningEffortHigh}},
+		{Name: "disabled"},
+		{Name: "high-only", ReasoningEfforts: []model.ReasoningEffort{model.ReasoningEffortHigh}},
+	}
+	if !reflect.DeepEqual(provider.Models, wantModels) {
+		t.Fatalf("model capabilities = %#v, want %#v", provider.Models, wantModels)
+	}
+	if _, err := provider.Complete(context.Background(), model.Request{Model: "inherited", ReasoningEffort: model.ReasoningEffortLow}); err != nil {
+		t.Fatalf("inherited effort: %v", err)
+	}
+	if _, err := provider.Complete(context.Background(), model.Request{Model: "high-only", ReasoningEffort: model.ReasoningEffortHigh}); err != nil {
+		t.Fatalf("overridden effort: %v", err)
+	}
+	for _, request := range []model.Request{
+		{Model: "disabled", ReasoningEffort: model.ReasoningEffortHigh},
+		{Model: "high-only", ReasoningEffort: model.ReasoningEffortLow},
+	} {
+		if _, err := provider.Complete(context.Background(), request); !errors.Is(err, model.ErrReasoningEffortUnsupported) {
+			t.Fatalf("request %#v error = %v, want ErrReasoningEffortUnsupported", request, err)
+		}
 	}
 }
 
@@ -191,6 +229,9 @@ func TestCompleteMapsMessagesToolsAndOptionalFields(t *testing.T) {
 		if !strings.Contains(requestBody, fragment) {
 			t.Fatalf("request body %s does not contain %s", requestBody, fragment)
 		}
+	}
+	if strings.Contains(requestBody, "reasoning_effort") {
+		t.Fatalf("unset reasoning effort was encoded: %s", requestBody)
 	}
 }
 
@@ -474,6 +515,10 @@ func TestConfigRejectsUnsafeProviderIdentityURLAndHeaders(t *testing.T) {
 		{name: "provider name", cfg: openaicompat.ProviderConfig{Name: "Bad Name", BaseURL: "https://example.test"}},
 		{name: "provider name length", cfg: openaicompat.ProviderConfig{Name: "a" + strings.Repeat("b", 64), BaseURL: "https://example.test"}},
 		{name: "URL userinfo", cfg: openaicompat.ProviderConfig{Name: "p", BaseURL: "https://user:secret@example.test/v1"}},
+		{name: "reasoning effort", cfg: openaicompat.ProviderConfig{Name: "p", BaseURL: "https://example.test", ReasoningEfforts: []string{"extreme"}}},
+		{name: "unknown reasoning override model", cfg: openaicompat.ProviderConfig{Name: "p", BaseURL: "https://example.test", Models: []string{"m"}, ReasoningEffortOverrides: []openaicompat.ReasoningEffortOverride{{Model: "missing"}}}},
+		{name: "duplicate reasoning override", cfg: openaicompat.ProviderConfig{Name: "p", BaseURL: "https://example.test", Models: []string{"m"}, ReasoningEffortOverrides: []openaicompat.ReasoningEffortOverride{{Model: "m"}, {Model: "m"}}}},
+		{name: "invalid reasoning override effort", cfg: openaicompat.ProviderConfig{Name: "p", BaseURL: "https://example.test", Models: []string{"m"}, ReasoningEffortOverrides: []openaicompat.ReasoningEffortOverride{{Model: "m", ReasoningEfforts: []string{"extreme"}}}}},
 		{name: "API key newline", cfg: openaicompat.ProviderConfig{Name: "p", BaseURL: "https://example.test", APIKey: "secret\nX-Evil: yes"}},
 		{name: "header name", cfg: openaicompat.ProviderConfig{Name: "p", BaseURL: "https://example.test", DefaultHeaders: map[string]string{"Bad Header": "x"}}},
 		{name: "header value", cfg: openaicompat.ProviderConfig{Name: "p", BaseURL: "https://example.test", DefaultHeaders: map[string]string{"X-Test": "x\r\ny"}}},
