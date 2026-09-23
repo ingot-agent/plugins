@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"math"
+	"strings"
 	"unicode/utf8"
 
 	"github.com/ingot-agent/sdk/content"
@@ -21,17 +22,6 @@ type profile interface {
 
 type unicodeEstimateProfile struct{}
 
-func builtInProfiles() (map[string]profile, error) {
-	deepSeekV4, err := newDeepSeekV4Profile()
-	if err != nil {
-		return nil, err
-	}
-	return map[string]profile{
-		unicodeEstimateSource: unicodeEstimateProfile{},
-		deepSeekV4Source:      deepSeekV4,
-	}, nil
-}
-
 // CountInput estimates an OpenAI-style chat envelope. ASCII text is estimated
 // at four bytes per token and non-ASCII runes at one token each. Fixed framing
 // values deliberately remain part of this versioned, estimate-only profile.
@@ -46,11 +36,13 @@ func (unicodeEstimateProfile) CountInput(ctx context.Context, request model.Requ
 		if err != nil {
 			return 0, err
 		}
-		messageText, ok := content.TextOnly(message.Content)
-		if !ok {
-			return 0, usage.ErrUnsupportedModel
+		var text strings.Builder
+		for _, part := range message.Content {
+			if part.Kind == content.KindText {
+				text.WriteString(part.Text)
+			}
 		}
-		for _, value := range []string{string(message.Role), messageText, message.Name, message.ToolCallID} {
+		for _, value := range []string{string(message.Role), text.String(), message.Name, message.ToolCallID} {
 			estimated, estimateErr := estimateText(ctx, value)
 			if estimateErr != nil {
 				return 0, estimateErr

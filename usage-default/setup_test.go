@@ -2,17 +2,18 @@ package usagedefault
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 
 	"github.com/ingot-agent/sdk/interaction"
-	"github.com/ingot-agent/sdk/model"
 	"github.com/ingot-agent/sdk/operation"
 )
 
 type setupChannel struct {
-	request   interaction.Request
-	onRequest func(interaction.Request)
+	request      interaction.Request
+	onRequest    func(interaction.Request)
+	cacheEntries *int64
 }
 
 func (c *setupChannel) Request(_ context.Context, request interaction.Request) (interaction.Response, error) {
@@ -23,7 +24,11 @@ func (c *setupChannel) Request(_ context.Context, request interaction.Request) (
 	answers := make([]interaction.Answer, 0, len(request.Fields))
 	for _, field := range request.Fields {
 		if field.Default != nil {
-			answers = append(answers, interaction.Answer{Name: field.Name, Value: *field.Default})
+			value := *field.Default
+			if field.Name == "cache_entries" && c.cacheEntries != nil {
+				value = interaction.IntegerValue(*c.cacheEntries)
+			}
+			answers = append(answers, interaction.Answer{Name: field.Name, Value: value})
 		}
 	}
 	return interaction.Response{Values: answers}, nil
@@ -33,90 +38,66 @@ func (*setupChannel) Emit(context.Context, interaction.Event) error { return nil
 func (*setupChannel) Set(context.Context, interaction.State) error  { return nil }
 func (*setupChannel) Clear(context.Context, string) error           { return nil }
 
-func TestSetupSuggestsInjectedProvidersWithoutClosingFutureRoutes(t *testing.T) {
-	current := validConfig()
+func TestSetupOnlyConfiguresCacheAndDropsLegacyRoutes(t *testing.T) {
+	current := Config{Routes: []Route{{Provider: "old", ModelPattern: ".*", Profile: deepSeekV4Source}}}
 	scope := testStateScope{dir: writeTestConfig(t, current)}
-	active := cloneConfig(current)
-	active.CacheEntries = defaultCacheEntries
+	counter := newCounter(resolverFunc(passthroughResolver), unicodeEstimateProfile{}, defaultCacheEntries)
 	channel := &setupChannel{}
-	op := &setupOperation{scope: scope, providerSources: []model.ProviderSource{&setupProviderSource{names: []string{"first", "second"}}}, counter: setupCounter(t, active)}
-	if _, err := op.Invoke(context.Background(), operation.Request{Interaction: channel}); err != nil {
+	op := &setupOperation{scope: scope, counter: counter}
+	result, err := op.Invoke(context.Background(), operation.Request{Interaction: channel})
+	if err != nil {
 		t.Fatal(err)
 	}
-	running := op.counter.config.Load()
-	if running.capacity != defaultCacheEntries || len(running.routes) != len(current.Routes) || running.routes[0].provider != current.Routes[0].Provider {
-		t.Fatalf("running config = %#v", running)
+	if len(channel.request.Fields) != 1 || channel.request.Fields[0].Name != "cache_entries" {
+		t.Fatalf("setup fields = %#v", channel.request.Fields)
 	}
-	routes := findSetupField(t, channel.request.Fields, "routes")
-	provider := findSetupField(t, routes.Element.Fields, "provider")
-	if provider.Kind != interaction.FieldString || len(provider.Options) != 2 || provider.Options[0].Value != "first" || provider.Options[1].Value != "second" {
-		t.Fatalf("provider field = %#v", provider)
+	stored, err := loadConfig(scope.Dir())
+	if err != nil || len(stored.Routes) != 0 || stored.CacheEntries != 0 {
+		t.Fatalf("stored config = %+v, error = %v", stored, err)
+	}
+	if counter.config.Load().capacity != defaultCacheEntries {
+		t.Fatalf("running capacity = %d", counter.config.Load().capacity)
+	}
+	var output struct {
+		RestartRequired bool `json:"restart_required"`
+	}
+	if err := json.Unmarshal(result.Output, &output); err != nil || output.RestartRequired {
+		t.Fatalf("output = %s, error = %v", result.Output, err)
 	}
 }
 
-func TestSetupRefreshesProviderSuggestions(t *testing.T) {
-	current := validConfig()
+func TestSetupCacheChangeAppliesWithoutRestart(t *testing.T) {
+	current := Config{CacheEntries: 12}
 	scope := testStateScope{dir: writeTestConfig(t, current)}
-	source := &setupProviderSource{}
-	op := &setupOperation{scope: scope, providerSources: []model.ProviderSource{source}, counter: setupCounter(t, cloneConfig(current))}
-	for _, names := range [][]string{nil, {"new", "second"}, {"renamed"}} {
-		source.names = names
-		channel := &setupChannel{}
-		if _, err := op.Invoke(context.Background(), operation.Request{Interaction: channel}); err != nil {
+	counter := newCounter(resolverFunc(passthroughResolver), unicodeEstimateProfile{}, 12)
+	changed := int64(24)
+	channel := &setupChannel{cacheEntries: &changed}
+	op := &setupOperation{scope: scope, counter: counter}
+	result, err := op.Invoke(context.Background(), operation.Request{Interaction: channel})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored, err := loadConfig(scope.Dir())
+	if err != nil || stored.CacheEntries != 24 || counter.config.Load().capacity != 24 {
+		t.Fatalf("stored config = %+v, running capacity = %d, error = %v", stored, counter.config.Load().capacity, err)
+	}
+	var output struct {
+		RestartRequired bool `json:"restart_required"`
+	}
+	if err := json.Unmarshal(result.Output, &output); err != nil || output.RestartRequired {
+		t.Fatalf("output = %s, error = %v", result.Output, err)
+	}
+}
+
+func TestSetupDetectsConcurrentConfigurationChange(t *testing.T) {
+	scope := testStateScope{dir: writeTestConfig(t, validConfig())}
+	channel := &setupChannel{onRequest: func(interaction.Request) {
+		if err := saveConfig(scope.Dir(), Config{CacheEntries: 3}); err != nil {
 			t.Fatal(err)
 		}
-		routes := findSetupField(t, channel.request.Fields, "routes")
-		provider := findSetupField(t, routes.Element.Fields, "provider")
-		if provider.Kind != interaction.FieldString || len(provider.Options) != len(names) {
-			t.Fatalf("provider field = %#v", provider)
-		}
-		for i, name := range names {
-			if provider.Options[i].Value != name {
-				t.Fatalf("provider options = %#v", provider.Options)
-			}
-		}
-		stored, err := loadConfig(scope.Dir())
-		if err != nil || stored.Routes[0].Provider != current.Routes[0].Provider {
-			t.Fatalf("future route was not preserved: %#v, error = %v", stored, err)
-		}
+	}}
+	op := &setupOperation{scope: scope}
+	if _, err := op.Invoke(context.Background(), operation.Request{Interaction: channel}); !errors.Is(err, ErrConfigConflict) {
+		t.Fatalf("error = %v, want ErrConfigConflict", err)
 	}
-}
-
-func TestSetupRereadsProviderSourcesBeforeSaving(t *testing.T) {
-	scope := testStateScope{dir: writeTestConfig(t, validConfig())}
-	source := &setupProviderSource{names: []string{"available"}}
-	sourceErr := errors.New("source unavailable")
-	channel := &setupChannel{onRequest: func(interaction.Request) { source.err = sourceErr }}
-	op := &setupOperation{scope: scope, providerSources: []model.ProviderSource{source}, counter: setupCounter(t, validConfig())}
-	if _, err := op.Invoke(context.Background(), operation.Request{Interaction: channel}); !errors.Is(err, sourceErr) {
-		t.Fatalf("error = %v, want source error", err)
-	}
-}
-
-func setupCounter(t *testing.T, configuration Config) *counter {
-	t.Helper()
-	profiles, err := builtInProfiles()
-	if err != nil {
-		t.Fatal(err)
-	}
-	routes, err := compileRoutes(configuration.Routes, profiles)
-	if err != nil {
-		t.Fatal(err)
-	}
-	capacity := configuration.CacheEntries
-	if capacity == 0 {
-		capacity = defaultCacheEntries
-	}
-	return newCounter(nil, routes, capacity)
-}
-
-func findSetupField(t *testing.T, fields []interaction.Field, name string) interaction.Field {
-	t.Helper()
-	for _, field := range fields {
-		if field.Name == name {
-			return field
-		}
-	}
-	t.Fatalf("field %q not found", name)
-	return interaction.Field{}
 }

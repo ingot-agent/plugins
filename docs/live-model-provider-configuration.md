@@ -72,9 +72,12 @@ fail until it is configured again; explicit valid requests and configuration
 remain available. Invalid or duplicate directory entries require repair before
 the directory can be used.
 
-Provider choices in `model-runtime`, `agent-default`, and `context-compact`,
-and suggestions in `usage-default`, use current source snapshots. Existing
-forms remain immutable; closed choices are revalidated at submission. Model
+Provider choices in `model-runtime`, `agent-default`, and `context-compact`
+use current source snapshots. `usage-default` estimates input tokens with
+`unicode-estimate-v1` for every resolved model and has no provider route
+configuration. Non-text content is skipped by this estimate. Existing forms
+remain immutable; closed choices are revalidated
+at submission. Model
 and reasoning-effort choices in `model-runtime` use provider capability
 directories, while changes to other plugins' configuration are not applied
 live. Existing explicit agent or context provider or model overrides continue
