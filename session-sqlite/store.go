@@ -445,6 +445,15 @@ WHERE json_extract(meta, '$.agent.parent_session_id') = ?`, string(id)).Scan(&ch
 	if childCount != 0 {
 		return fmt.Errorf("delete session %q: %w", id, ErrSessionHasChildren)
 	}
+	if err := tx.QueryRowContext(ctx, `
+SELECT COUNT(*) FROM sessions
+WHERE json_extract(meta, '$."app-webui".kind') = 'inline-followup'
+  AND json_extract(meta, '$."app-webui".sourceSessionId') = ?`, string(id)).Scan(&childCount); err != nil {
+		return fmt.Errorf("inspect followups of session %q: %w", id, err)
+	}
+	if childCount != 0 {
+		return fmt.Errorf("delete session %q: %w", id, ErrSessionHasChildren)
+	}
 	childMeta, err := childMetaFromMetadata(metadata)
 	if err != nil {
 		return err
@@ -496,6 +505,10 @@ func (s *store) Fork(ctx context.Context, source session.ID, request session.For
 	if err != nil {
 		return session.Metadata{}, err
 	}
+	encodedMeta, err := encodeMeta(request.Meta)
+	if err != nil {
+		return session.Metadata{}, fmt.Errorf("fork session metadata: %w", err)
+	}
 	targetID, err := s.generateID(0)
 	if err != nil {
 		return session.Metadata{}, fmt.Errorf("generate fork target ID: %w", err)
@@ -505,10 +518,10 @@ func (s *store) Fork(ctx context.Context, source session.ID, request session.For
 		title = sourceMetadata.Title
 	}
 	now := s.now().UTC()
-	target := session.Metadata{ID: targetID, Title: title, CreatedAt: now, UpdatedAt: now, Meta: session.Meta{}}
+	target := session.Metadata{ID: targetID, Title: title, CreatedAt: now, UpdatedAt: now, Meta: cloneMeta(request.Meta)}
 	if _, err := tx.ExecContext(ctx,
-		"INSERT INTO sessions (id, title, created_at, updated_at, archived_at, meta) VALUES (?, ?, ?, ?, NULL, '{}')",
-		string(targetID), title, encodeTime(now), encodeTime(now),
+		"INSERT INTO sessions (id, title, created_at, updated_at, archived_at, meta) VALUES (?, ?, ?, ?, NULL, ?)",
+		string(targetID), title, encodeTime(now), encodeTime(now), encodedMeta,
 	); err != nil {
 		return session.Metadata{}, fmt.Errorf("create fork target for session %q: %w", source, err)
 	}

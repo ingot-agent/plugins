@@ -2,12 +2,12 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { Activity, ArrowDown, ChevronRight, Copy, FolderOpen, LoaderCircle, Terminal, X } from 'lucide-vue-next'
+import { Activity, ArrowDown, ChevronRight, Copy, FolderOpen, Grip, LoaderCircle, MessageCircleQuestion, Terminal, X } from 'lucide-vue-next'
 import { useRuntime } from '../stores/runtime'
 import { APIError, errorMessage } from '../api'
 import { turnCopyTexts } from '../copy'
 import { titleForFirstMessage } from '../title'
-import type { Attachment, LiveTurn, Message, Operation, Part } from '../protocol'
+import type { Attachment, Followup, FollowupAnchor, LiveTurn, Message, Operation, Part } from '../protocol'
 import Brand from '../components/Brand.vue'
 import Composer from '../components/Composer.vue'
 import ContentParts from '../components/ContentParts.vue'
@@ -20,6 +20,7 @@ import StatusBadge from '../components/StatusBadge.vue'
 import Overlay from '../components/Overlay.vue'
 import JsonBlock from '../components/JsonBlock.vue'
 import WorkspaceHeader from '../components/WorkspaceHeader.vue'
+import FollowupNote from '../components/FollowupNote.vue'
 import { readPreference, savePreference } from '../theme'
 import { shouldShowTurnByline } from './conversationDisplay'
 defineEmits<{ navigation: []; pending: []; operation: [operation: Operation, sessionId: string] }>()
@@ -31,6 +32,18 @@ const sessionId = computed(() => typeof route.params.id === 'string' ? route.par
 const session = computed(() => runtime.sessions.find(item => item.id === sessionId.value))
 const running = computed(() => runtime.running(sessionId.value))
 const messages = computed(() => runtime.histories[sessionId.value] || [])
+const followups = computed(() => runtime.followups[sessionId.value] || [])
+const selectionAction = ref<{ anchor: FollowupAnchor; x: number; y: number }>()
+type FollowupWindow = { id: string; x: number; y: number; width: number; height: number; z: number }
+const openWindows = ref<FollowupWindow[]>([])
+const visibleWindows = computed(() => openWindows.value.flatMap(window => {
+  const note = followups.value.find(item => item.id === window.id)
+  return note ? [{ window, note }] : []
+}))
+const noteRanges = new Map<string, Range>()
+let topWindow = 20
+const openingFollowup = ref(false)
+let windowGesture: { id: string; kind: 'move' | 'resize'; x: number; y: number; original: FollowupWindow } | undefined
 const liveTurns = computed(() => Object.values(runtime.turns).filter(turn => turn.sessionId === sessionId.value))
 const requests = computed(() => Object.values(runtime.interactions).filter(item => item.scope?.agent?.sessionId === sessionId.value))
 const hostStates = computed(() => Object.values(runtime.interactionStates).filter(item => item.scope?.agent?.sessionId === sessionId.value || !item.scope))
@@ -127,7 +140,175 @@ onMounted(() => {
 })
 watch(details, value => savePreference('details', value ? 'open' : 'closed'))
 watch(showToolCalls, value => savePreference('tool-calls', value ? 'visible' : 'hidden'))
-watch(sessionId, id => { runtime.activeSession = id; following.value = true; if (id) void runtime.loadHistory(id) }, { immediate: true })
+watch(sessionId, id => {
+  runtime.activeSession = id
+  following.value = true
+  openWindows.value = []
+  selectionAction.value = undefined
+  if (id) {
+    void runtime.loadHistory(id)
+    void runtime.loadFollowups(id).catch(error => runtime.notify(errorMessage(error)))
+  }
+}, { immediate: true })
+function captureSelection() {
+  const selection = window.getSelection()
+  if (!selection || selection.isCollapsed || !selection.rangeCount) { selectionAction.value = undefined; return }
+  const range = selection.getRangeAt(0)
+  const start = range.startContainer instanceof Element ? range.startContainer : range.startContainer.parentElement
+  const end = range.endContainer instanceof Element ? range.endContainer : range.endContainer.parentElement
+  const markdown = start?.closest<HTMLElement>('.message-assistant[data-message-index] .markdown[data-part-index]')
+  if (!markdown || !markdown.contains(range.startContainer) || !markdown.contains(range.endContainer) || end?.closest('.code-toolbar')) return
+  const article = markdown.closest<HTMLElement>('[data-message-index]')
+  const messageIndex = Number(article?.dataset.messageIndex)
+  const partIndex = Number(markdown.dataset.partIndex)
+  const selected = range.toString()
+  const quote = selected.trim()
+  if (!article || !Number.isInteger(messageIndex) || !Number.isInteger(partIndex) || !quote || quote.length > 2000) return
+  const prefix = document.createRange()
+  prefix.selectNodeContents(markdown)
+  prefix.setEnd(range.startContainer, range.startOffset)
+  const offset = prefix.toString().length + (selected.length - selected.trimStart().length)
+  const rect = range.getBoundingClientRect()
+  selectionAction.value = { anchor: { messageIndex, partIndex, start: offset, end: offset + quote.length, quote }, x: rect.right, y: rect.bottom }
+}
+function selectionPosition(x: number, y: number) {
+  return { left: `${Math.max(12, Math.min(x + 12, window.innerWidth - 126))}px`, top: `${Math.max(12, Math.min(y + 8, window.innerHeight - 48))}px` }
+}
+async function openDraft() {
+  if (!selectionAction.value) return
+  openingFollowup.value = true
+  try {
+    const note = await runtime.createFollowup(sessionId.value, selectionAction.value.anchor)
+    openFollowup(note, { x: selectionAction.value.x, y: selectionAction.value.y })
+    selectionAction.value = undefined
+    window.getSelection()?.removeAllRanges()
+  } catch (error) { runtime.notify(errorMessage(error)) }
+  finally { openingFollowup.value = false }
+}
+function clamp(value: number, min: number, max: number) { return Math.max(min, Math.min(max, value)) }
+function windowSize() {
+  return { width: Math.min(420, window.innerWidth - 24), height: Math.min(470, window.innerHeight - 24) }
+}
+function focusWindow(id: string) {
+  const item = openWindows.value.find(window => window.id === id)
+  if (item) item.z = ++topWindow
+}
+function openFollowup(note: Followup, point?: { x: number; y: number }) {
+  const existing = openWindows.value.find(window => window.id === note.id)
+  if (existing) { focusWindow(note.id); return }
+  const { width, height } = windowSize()
+  const offset = (openWindows.value.length % 5) * 28
+  const x = point?.x ?? noteRanges.get(note.id)?.getBoundingClientRect().right ?? window.innerWidth / 2
+  const y = point?.y ?? noteRanges.get(note.id)?.getBoundingClientRect().top ?? 90
+  const right = x + 16 + width <= window.innerWidth - 12 ? x + 16 : x - width - 16
+  openWindows.value.push({ id: note.id, x: clamp(right + offset, 12, window.innerWidth - width - 12),
+    y: clamp(y + offset, 12, window.innerHeight - height - 12), width, height, z: ++topWindow })
+  selectionAction.value = undefined
+}
+function closeWindow(id: string) { openWindows.value = openWindows.value.filter(window => window.id !== id) }
+function startWindowGesture(event: PointerEvent, id: string, kind: 'move' | 'resize') {
+  if (event.button !== 0 || (kind === 'move' && (event.target as HTMLElement).closest('button'))) return
+  const item = openWindows.value.find(window => window.id === id)
+  if (!item) return
+  event.preventDefault()
+  focusWindow(id)
+  windowGesture = { id, kind, x: event.clientX, y: event.clientY, original: { ...item } }
+  window.addEventListener('pointermove', moveWindowGesture)
+  window.addEventListener('pointerup', endWindowGesture, { once: true })
+  window.addEventListener('pointercancel', endWindowGesture, { once: true })
+}
+function moveWindowGesture(event: PointerEvent) {
+  if (!windowGesture) return
+  const item = openWindows.value.find(window => window.id === windowGesture!.id)
+  if (!item) return
+  const { original, kind, x, y } = windowGesture
+  if (kind === 'move') {
+    item.x = clamp(original.x + event.clientX - x, 12, window.innerWidth - item.width - 12)
+    item.y = clamp(original.y + event.clientY - y, 12, window.innerHeight - item.height - 12)
+  } else {
+    item.width = clamp(original.width + event.clientX - x, Math.min(300, window.innerWidth - 24), window.innerWidth - item.x - 12)
+    item.height = clamp(original.height + event.clientY - y, Math.min(240, window.innerHeight - 24), window.innerHeight - item.y - 12)
+  }
+}
+function endWindowGesture() {
+  windowGesture = undefined
+  window.removeEventListener('pointermove', moveWindowGesture)
+  window.removeEventListener('pointerup', endWindowGesture)
+  window.removeEventListener('pointercancel', endWindowGesture)
+}
+function resizeWindowWithKeyboard(event: KeyboardEvent, id: string) {
+  const item = openWindows.value.find(window => window.id === id)
+  if (!item) return
+  const x = event.key === 'ArrowRight' ? 24 : event.key === 'ArrowLeft' ? -24 : 0
+  const y = event.key === 'ArrowDown' ? 24 : event.key === 'ArrowUp' ? -24 : 0
+  if (!x && !y) return
+  event.preventDefault()
+  focusWindow(id)
+  item.width = clamp(item.width + x, Math.min(300, window.innerWidth - 24), window.innerWidth - item.x - 12)
+  item.height = clamp(item.height + y, Math.min(240, window.innerHeight - 24), window.innerHeight - item.y - 12)
+}
+function clampWindows() {
+  for (const item of openWindows.value) {
+    item.width = Math.min(item.width, window.innerWidth - 24)
+    item.height = Math.min(item.height, window.innerHeight - 24)
+    item.x = clamp(item.x, 12, window.innerWidth - item.width - 12)
+    item.y = clamp(item.y, 12, window.innerHeight - item.height - 12)
+  }
+}
+window.addEventListener('resize', clampWindows)
+function textRange(root: Element, start: number, end: number): Range | undefined {
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT)
+  const result = document.createRange()
+  let offset = 0
+  let startFound = false
+  while (walker.nextNode()) {
+    const node = walker.currentNode
+    const length = node.textContent?.length || 0
+    if (!startFound && start <= offset + length) { result.setStart(node, Math.max(0, start - offset)); startFound = true }
+    if (startFound && end <= offset + length) { result.setEnd(node, Math.max(0, end - offset)); return result }
+    offset += length
+  }
+}
+function updateMarkers() {
+  const ranges: Range[] = []
+  noteRanges.clear()
+  for (const note of [...followups.value].sort((a, b) => a.messageIndex - b.messageIndex || a.start - b.start)) {
+    const article = scroll.value?.querySelector<HTMLElement>(`[data-message-index="${note.messageIndex}"]`)
+    const markdown = article?.querySelector(`.markdown[data-part-index="${note.partIndex}"]`)
+    if (!article || !markdown) continue
+    const range = textRange(markdown, note.start, note.end)
+    if (!range || range.toString().trim() !== note.quote) continue
+    noteRanges.set(note.id, range)
+    ranges.push(range)
+  }
+  if ('highlights' in CSS && 'Highlight' in window) {
+    if (ranges.length) CSS.highlights.set('inline-followups', new Highlight(...ranges))
+    else CSS.highlights.delete('inline-followups')
+  }
+}
+function highlightedNoteAt(x: number, y: number) {
+  const caret = document.caretPositionFromPoint?.(x, y)
+  const legacy = !caret ? document.caretRangeFromPoint?.(x, y) : undefined
+  const node = caret?.offsetNode || legacy?.startContainer
+  const offset = caret?.offset ?? legacy?.startOffset
+  if (!node || offset === undefined) return
+  for (const note of followups.value) {
+    const range = noteRanges.get(note.id)
+    if (range && [...range.getClientRects()].some(rect => x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom)
+      && range.isPointInRange(node, offset)) return note
+  }
+}
+function clickHighlighted(event: MouseEvent) {
+  if (window.getSelection()?.toString()) return
+  const note = highlightedNoteAt(event.clientX, event.clientY)
+  if (!note) return
+  event.preventDefault()
+  openFollowup(note, { x: event.clientX, y: event.clientY })
+}
+function hoverHighlighted(event: MouseEvent) {
+  if (scroll.value) scroll.value.style.cursor = highlightedNoteAt(event.clientX, event.clientY) ? 'pointer' : ''
+}
+watch(() => [sessionId.value, messages.value.length, ...followups.value.map(note => `${note.id}:${note.start}:${note.end}`)].join('|'), () => { void nextTick(updateMarkers) }, { flush: 'post' })
 // A directory chosen in the sidebar starts one new conversation in that
 // Workspace. Ordinary new conversations always reset to the server default.
 watch(() => [sessionId.value, route.query.workspace] as const, ([id, value]) => {
@@ -188,7 +369,7 @@ async function copy(text: string) {
 async function restore() {
   try { await runtime.mutateSession(sessionId.value, 'restore') } catch (error) { runtime.notify(errorMessage(error)) }
 }
-onBeforeUnmount(() => { media.removeEventListener('change', resize); composerObserver?.disconnect(); runtime.activeSession = '' })
+onBeforeUnmount(() => { media.removeEventListener('change', resize); window.removeEventListener('resize', clampWindows); endWindowGesture(); composerObserver?.disconnect(); if ('highlights' in CSS) CSS.highlights.delete('inline-followups'); runtime.activeSession = '' })
 </script>
 <template>
   <div class="chat-layout" :class="{ 'with-details': details && !narrow }">
@@ -204,12 +385,12 @@ onBeforeUnmount(() => { media.removeEventListener('change', resize); composerObs
           <h2>{{ t('welcome') }}</h2>
           <p>{{ t('welcomeSub') }}</p>
         </div>
-        <div v-else class="transcript">
+        <div v-else class="transcript" @mouseup="captureSelection" @keyup="captureSelection" @click="clickHighlighted" @mousemove="hoverHighlighted" @mouseleave="scroll && (scroll.style.cursor = '')">
           <div v-if="!session && runtime.connection === 'online'" class="empty-panel"><p>{{ t('missingSession') }}</p><RouterLink to="/new" class="btn">{{ t('back') }}</RouterLink></div>
           <div v-if="runtime.historyLoading[sessionId] && !messages.length" class="history-loading"><LoaderCircle class="spin" :size="16" /><div>{{ t('loadingHistory') }}<p v-if="running.length" class="muted text-xs mt-1">{{ t('historyWaiting') }}</p></div></div>
           <div v-if="runtime.historyErrors[sessionId]" class="error-banner"><p>{{ runtime.historyErrors[sessionId] }}</p><button class="text-button" @click="runtime.loadHistory(sessionId)">{{ t('retry') }}</button></div>
           <template v-for="entry in transcript" :key="entry.id">
-            <article v-if="entry.kind === 'message'" class="message" :class="'message-' + entry.message.role">
+            <article v-if="entry.kind === 'message'" class="message" :class="'message-' + entry.message.role" :data-message-index="entry.message.role === 'assistant' ? entry.index : undefined">
               <div v-if="entry.message.role !== 'user'" class="message-byline"><Brand /><span>{{ entry.message.role === 'assistant' ? t('assistant') : entry.message.role }}</span></div>
               <div class="message-content"><ContentParts :parts="entry.message.content" /></div>
               <ToolCard v-for="call in entry.message.toolCalls" :key="call.id" :name="call.name" :arguments="call.arguments" :content="toolResults.get(call.id)?.content" />
@@ -229,6 +410,7 @@ onBeforeUnmount(() => { media.removeEventListener('change', resize); composerObs
           <details v-for="state in hostStates" :key="state.id" class="host-state"><summary>{{ state.description || state.name }}</summary><JsonBlock :value="state.values" /></details>
         </div>
       </div>
+      <button v-if="selectionAction" type="button" class="followup-selection btn small" :style="selectionPosition(selectionAction.x, selectionAction.y)" :disabled="openingFollowup" @mousedown.prevent @click="openDraft"><LoaderCircle v-if="openingFollowup" class="spin" :size="15" /><MessageCircleQuestion v-else :size="15" />{{ t('followup') }}</button>
       <div ref="composerDock" class="composer-dock" :class="{ 'welcome-composer': welcome }">
         <div v-if="welcome" class="workspace-picker">
           <button type="button" class="workspace-browse" :aria-label="t('chooseWorkspace')" :disabled="selectingWorkspace" @click="chooseWorkspace">
@@ -246,6 +428,12 @@ onBeforeUnmount(() => { media.removeEventListener('change', resize); composerObs
         <Composer :session-key="sessionId || 'new'" :running="running" :archived="!!session?.archivedAt || (!!sessionId && !session)" :disabled="selectingWorkspace || assigningWorkspace" :sending="sending" @send="send" @command="$emit('operation', $event, sessionId)" />
       </div>
     </section>
+    <div class="followup-layer">
+      <div v-for="item in visibleWindows" :key="item.note.id" class="followup-window" :data-note-id="item.note.id" :style="{ left: item.window.x + 'px', top: item.window.y + 'px', width: item.window.width + 'px', height: item.window.height + 'px', zIndex: item.window.z }" @pointerdown="focusWindow(item.note.id)">
+        <FollowupNote :source-session-id="sessionId" :anchor="item.note" :note="item.note" @drag-start="startWindowGesture($event, item.note.id, 'move')" @deleted="closeWindow(item.note.id)" @close="closeWindow(item.note.id)" />
+        <button type="button" class="followup-resize" :aria-label="t('resizeFollowupWindow')" :title="t('resizeFollowupWindow')" @pointerdown.stop="startWindowGesture($event, item.note.id, 'resize')" @keydown="resizeWindowWithKeyboard($event, item.note.id)"><Grip :size="13" /></button>
+      </div>
+    </div>
     <aside v-if="details && !narrow" class="details-sidebar"><header><h2>{{ t('execution') }}</h2><button class="icon-button" :aria-label="t('close')" @click="details = false"><X :size="17" /></button></header><ExecutionPanel :session-id="sessionId" /></aside>
     <Overlay :open="details && narrow" :title="t('execution')" drawer @update:open="details = $event"><ExecutionPanel :session-id="sessionId" /></Overlay>
   </div>

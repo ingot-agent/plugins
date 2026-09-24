@@ -3,6 +3,7 @@ package sessionsqlite
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -16,6 +17,72 @@ import (
 	"github.com/ingot-agent/sdk/session"
 	"github.com/ingot-agent/sdk/workspace"
 )
+
+func TestForkMetadataAndFollowupDeletionGuard(t *testing.T) {
+	ctx := context.Background()
+	databasePath := filepath.Join(t.TempDir(), "sessions.sqlite3")
+	created, err := openStore(ctx, databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = created.close() })
+	ids := []session.ID{"source", "note", "plain"}
+	created.generateID = func(uint32) (session.ID, error) {
+		id := ids[0]
+		ids = ids[1:]
+		return id, nil
+	}
+	source, err := created.Create(ctx, session.CreateRequest{Title: "source", Meta: session.Meta{"owner": json.RawMessage(`{"value":1}`)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := created.Append(ctx, source.ID, session.Entry{Kind: "test", Version: 1, Payload: []byte("history")}); err != nil {
+		t.Fatal(err)
+	}
+	meta := session.Meta{"app-webui": json.RawMessage(`{"kind":"inline-followup","sourceSessionId":"source"}`)}
+	note, err := created.Fork(ctx, source.ID, session.ForkRequest{Title: "note", Meta: meta})
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta["app-webui"][0] = ' '
+	stored, err := created.Get(ctx, note.ID)
+	if err != nil || !bytes.Equal(stored.Meta["app-webui"], note.Meta["app-webui"]) || stored.Meta["owner"] != nil {
+		t.Fatalf("fork metadata=%v returned=%v err=%v", stored.Meta, note.Meta, err)
+	}
+	reopened, err := openStore(ctx, databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = reopened.close() })
+	restored, err := reopened.Get(ctx, note.ID)
+	if err != nil || !bytes.Equal(restored.Meta["app-webui"], stored.Meta["app-webui"]) {
+		t.Fatalf("reopened fork metadata=%v err=%v", restored.Meta, err)
+	}
+	entries, err := created.Load(ctx, note.ID)
+	if err != nil || len(entries) != 1 || string(entries[0].Payload) != "history" {
+		t.Fatalf("fork entries=%v err=%v", entries, err)
+	}
+	listed, err := created.List(ctx)
+	if err != nil || len(listed) != 2 {
+		t.Fatalf("ordinary query must include followup: %v err=%v", listed, err)
+	}
+	if err := created.Delete(ctx, source.ID); !errors.Is(err, ErrSessionHasChildren) {
+		t.Fatalf("delete referenced source: %v", err)
+	}
+	if err := created.Delete(ctx, note.ID); err != nil {
+		t.Fatal(err)
+	}
+	plain, err := created.Fork(ctx, source.ID, session.ForkRequest{})
+	if err != nil || len(plain.Meta) != 0 {
+		t.Fatalf("ordinary fork metadata=%v err=%v", plain.Meta, err)
+	}
+	if _, err := created.Fork(ctx, source.ID, session.ForkRequest{Meta: session.Meta{"bad": json.RawMessage(`null`)}}); err == nil {
+		t.Fatal("invalid fork metadata accepted")
+	}
+	if err := created.Delete(ctx, source.ID); err != nil {
+		t.Fatalf("ordinary fork must not block deleting source: %v", err)
+	}
+}
 
 func TestPersistenceLifecycleForkAndDelete(t *testing.T) {
 	ctx := context.Background()

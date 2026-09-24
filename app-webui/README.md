@@ -86,6 +86,7 @@ Web 命令 `/app-webui config`（Group `app-webui`、Name `config`、输入 `{}`
 | Turn | `POST /api/turns`、`DELETE /api/turns/{id}` |
 | Session | `GET/POST /api/sessions`、`GET/PATCH/DELETE /api/sessions/{id}`、`POST /api/sessions/{id}/workspace` |
 | Session 生命周期 | `POST /api/sessions/{id}/archive`、`/restore`、`/fork` |
+| 原文追问 | `GET/POST /api/sessions/{id}/followups`、`DELETE /api/followups/{id}` |
 | Workspace 目录选择 | `POST /api/workspace/select` |
 | 历史消息 | `GET /api/sessions/{id}/history` |
 | Asset | `POST /api/assets`、`GET /api/assets/{id}` |
@@ -105,6 +106,8 @@ Web 命令 `/app-webui config`（Group `app-webui`、Name `config`、输入 `{}`
 ```
 
 附件可省略；Asset 必须先上传。Turn 被接受时返回 `202` 与 `{"id":"invocation-id"}`，取消使用该 invocation ID 而非 Session ID。响应 Interaction 使用 `{"values":{"answer":"回答文本"}}`，审批则使用 `{"values":{"decision":"allow"}}`；字段名以 pending request 声明为准，成功响应为 `204`。错误包装统一为 `{"error":{"code":"...","message":"..."}}`。
+
+原文追问在点击追问时 fork 当前 Session 并保存便签，即使尚未发送问题也可收起后重开；后续 Turn 使用返回的便签 Session ID。创建请求包含 `messageIndex`、`partIndex`、`start`、`end` 和 `quote`；返回值还包含 `baseMessageCount`，供界面隐藏 fork 时复制的主对话历史。已保存的选区以橙色标注，直接点击原文即可重开便签；多个便签可同时作为可移动、可缩放的小窗显示，点击窗口会将它置顶。WebUI 将锚点、主会话 ID 和历史边界写入追问 Session 的 `Meta["app-webui"]`，不写入模型上下文，也不使用单独的 `inline-followups.json`；普通 Session 列表不会显示便签。删除主 Session 时会先删除其便签。旧 JSON 不迁移，旧追问 Session 可能作为普通会话显示。
 
 ## Turn 与流式输出
 

@@ -22,6 +22,7 @@ import (
 	"time"
 
 	ingotabi "github.com/ingot-agent/ingot-abi"
+	appbackend "github.com/ingot-agent/plugins/app-webui"
 	hostcomponent "github.com/ingot-agent/plugins/app-webui/host"
 	"github.com/ingot-agent/sdk/agent"
 	"github.com/ingot-agent/sdk/asset"
@@ -42,6 +43,22 @@ type browserAgent struct {
 	interaction interaction.ExecutionBinder
 	observer    observation.Observer
 	sequence    atomic.Uint64
+}
+
+type browserSessionController struct {
+	sessionController
+	agent *browserAgent
+}
+
+func (c browserSessionController) Fork(ctx context.Context, source session.ID, request session.ForkRequest) (appbackend.Session, error) {
+	target, err := c.sessionController.Fork(ctx, source, request)
+	if err != nil {
+		return target, err
+	}
+	c.agent.mu.Lock()
+	c.agent.history[session.ID(target.ID)] = append([]model.Message(nil), c.agent.history[source]...)
+	c.agent.mu.Unlock()
+	return target, nil
 }
 
 func (b *browserAgent) Load(ctx context.Context, id session.ID) ([]model.Message, error) {
@@ -267,6 +284,7 @@ func TestBrowserFixture(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	a.sessions = browserSessionController{sessionController: a.sessions, agent: b}
 	a.turns = newTurnRegistry(ctx, a.agent, host.Runtime.Events())
 	a.assets = &browserAssets{items: make(map[string][]byte)}
 	echo := operationFixture("echo")

@@ -6,7 +6,7 @@ defineProps<{ parts: Part[] }>()
 </script>
 <template>
   <template v-for="(part, index) in parts" :key="index">
-    <MarkdownContent v-if="part.kind === 'text'" :text="part.text || ''" />
+    <MarkdownContent v-if="part.kind === 'text'" :text="part.text || ''" :part-index="index" />
     <MediaPart v-else :part="part" />
   </template>
 </template>
