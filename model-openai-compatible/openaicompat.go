@@ -13,6 +13,7 @@ import (
 	"reflect"
 	"regexp"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/ingot-agent/ingot-abi"
@@ -52,6 +53,8 @@ type ProviderHTTPError struct {
 	RequestID  string
 	Body       string
 	Truncated  bool
+	// RetryAfter is the provider's suggested wait; zero means no valid hint.
+	RetryAfter time.Duration
 }
 
 func (e *ProviderHTTPError) Error() string {
@@ -405,7 +408,7 @@ func (p *provider) Complete(ctx context.Context, request model.Request) (model.R
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return model.Response{}, ctxErr
 		}
-		return model.Response{}, err
+		return model.Response{}, wrapReadError(err)
 	}
 	return decodeComplete(raw, p.name)
 }
@@ -510,6 +513,7 @@ func (p *provider) checkStatus(ctx context.Context, response *http.Response) err
 		RequestID:  response.Header.Get("X-Request-Id"),
 		Body:       redactSecret(string(body), p.apiKey),
 		Truncated:  truncated,
+		RetryAfter: parseRetryAfter(response.Header.Get("Retry-After"), time.Now()),
 	}
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {

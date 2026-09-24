@@ -162,9 +162,25 @@ func (r *runtime) Complete(ctx context.Context, request model.Request) (model.Re
 		if err := callCtx.Err(); err != nil {
 			return model.Response{}, err
 		}
-		response, err := provider.Complete(callCtx, cloneRequest(selected))
-		if err != nil {
-			return cloneResponse(response), err
+		var response model.Response
+		for attempt := 1; attempt <= maxProviderAttempts; attempt++ {
+			response, err = provider.Complete(callCtx, cloneRequest(selected))
+			if err == nil {
+				break
+			}
+			if contextErr := callCtx.Err(); contextErr != nil {
+				return model.Response{}, contextErr
+			}
+			if attempt == maxProviderAttempts {
+				return cloneResponse(response), err
+			}
+			delay, retry := retryDelay(err, attempt)
+			if !retry {
+				return cloneResponse(response), err
+			}
+			if waitErr := waitRetry(callCtx, delay); waitErr != nil {
+				return model.Response{}, waitErr
+			}
 		}
 		response.Provider = selected.Provider
 		if response.Model == "" {
@@ -219,9 +235,31 @@ func (r *runtime) Stream(ctx context.Context, request model.Request, handler mod
 		if err := callCtx.Err(); err != nil {
 			return model.Response{}, err
 		}
-		response, err := provider.Stream(callCtx, cloneRequest(selected), selectedHandler)
-		if err != nil {
-			return cloneResponse(response), err
+		var response model.Response
+		for attempt := 1; attempt <= maxProviderAttempts; attempt++ {
+			delivered := false
+			response, err = provider.Stream(callCtx, cloneRequest(selected), func(event model.StreamEvent) error {
+				// Count every callback, including one returning an error: events
+				// already delivered to interceptors/consumers cannot be retracted.
+				delivered = true
+				return selectedHandler(event)
+			})
+			if err == nil {
+				break
+			}
+			if contextErr := callCtx.Err(); contextErr != nil {
+				return model.Response{}, contextErr
+			}
+			if delivered || attempt == maxProviderAttempts {
+				return cloneResponse(response), err
+			}
+			delay, retry := retryDelay(err, attempt)
+			if !retry {
+				return cloneResponse(response), err
+			}
+			if waitErr := waitRetry(callCtx, delay); waitErr != nil {
+				return model.Response{}, waitErr
+			}
 		}
 		response.Provider = selected.Provider
 		if response.Model == "" {

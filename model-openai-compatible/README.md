@@ -134,3 +134,12 @@ snapshot replacement in [openaicompat_test.go](openaicompat_test.go),
 [setup_internal_test.go](setup_internal_test.go), and
 [source_internal_test.go](source_internal_test.go).
 See [CONTRIBUTING](../CONTRIBUTING.md) for workspace setup.
+
+## Transient failures
+
+The adapter marks dispatch/response-read network interruptions and HTTP 408,
+429, 500, 502, 503, and 504 as retryable for callers that support retries.
+It parses `Retry-After` (seconds or HTTP-date) as a bounded delay hint. Invalid
+requests, decoding errors, and cancellation are not marked. In streaming mode,
+the caller must additionally check that no events were delivered before replay.
+A retry may still incur duplicate provider charges.

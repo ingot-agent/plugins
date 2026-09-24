@@ -132,7 +132,7 @@ func (p *provider) decodeStream(ctx context.Context, response *http.Response, ha
 			return model.Response{}, &ResponseLimitError{Limit: p.maxResponseBytes, Kind: "stream response"}
 		}
 		if err != nil && err != io.EOF {
-			return model.Response{}, fmt.Errorf("read model stream: %w", err)
+			return model.Response{}, wrapReadError(fmt.Errorf("read model stream: %w", err))
 		}
 		line = strings.TrimSuffix(line, "\n")
 		line = strings.TrimSuffix(line, "\r")

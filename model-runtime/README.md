@@ -71,6 +71,19 @@ within the invocation's snapshot. A missing stream callback returns
 `model.ErrStreamingUnsupported`; this runtime does not itself retry as a complete
 request. `agent.default` implements its own pre-output fallback.
 
+At the provider boundary, a single complete or stream invocation can retry
+transient errors explicitly marked by the provider adapter. It makes at most
+three attempts (including the first) with bounded exponential jitter and honors
+a bounded provider Retry-After hint. Cancellation interrupts the wait. The
+selected provider snapshot and request are kept for all attempts; interceptors
+run once around the invocation. Streaming retries only before the provider has
+passed any event to its handler (including reasoning or part-start); after any
+event, failure is returned without replay. Invalid responses, interceptor and
+consumer errors, and unsupported streaming are not retried. A failed attempt
+may have consumed provider resources; `agent.default` model accounting still
+counts logical invocations, not underlying provider attempts. Retry-specific
+observation is intentionally deferred.
+
 Provider and interceptor responses are validated: the final role must be
 assistant; provider/model identities must be present; usage counts must be
 nonnegative, explicitly reported when present, and have a consistent total.
