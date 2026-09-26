@@ -15,12 +15,12 @@
 ingot init
 ingot build web --tag local/ingot:web
 ingot runtime command set web -- web
-ingot start web --foreground
+ingot start web
 ```
 
-`build web` 已创建或更新 Runtime 绑定，不需要再次 create。启动后打开默认地址 `http://127.0.0.1:7316/`，在配置命令中设置模型供应商和 Agent 模型选择，再发送消息；新插件没有配置文件时以 Unconfigured/default 状态启动。`--foreground` 连接当前终端，按 `Ctrl+C` 可停止；`ingot start web` 默认后台启动，可用 `ingot logs web` 查看输出、`ingot stop web` 停止。
+`build web` 已创建或更新 Runtime 绑定，不需要再次 create。启动后打开默认地址 `http://127.0.0.1:7316/`，在配置命令中设置模型供应商和 Agent 模型选择，再发送消息；新插件没有配置文件时以 Unconfigured/default 状态启动。`ingot start web` 默认连接当前终端，按 `Ctrl+C` 可停止；`ingot start web -d` 后台启动并将输出写入日志文件，可用 `ingot logs web` 查看、`ingot stop web` 停止。
 
-最后一个 `web` 是保存给 Runtime 的 default argv，用来启用启动地址提示。HTTP 监听本身由应用组件生命周期启动，不依赖 Builder 的专用 Web 命令。使用已有 Image 创建另一个 Runtime 时，语法为 `ingot runtime create another local/ingot:web -- web`，随后执行 `ingot start another --foreground`。不要同时组合另一个全局 Interaction Channel 提供者，除非组件图已经明确消除了单值依赖歧义。
+最后一个 `web` 是保存给 Runtime 的 default argv，用来启用启动地址提示。HTTP 监听本身由应用组件生命周期启动，不依赖 Builder 的专用 Web 命令。使用已有 Image 创建另一个 Runtime 时，语法为 `ingot runtime create another local/ingot:web -- web`，随后执行 `ingot start another`。不要同时组合另一个全局 Interaction Channel 提供者，除非组件图已经明确消除了单值依赖歧义。
 
 前端产物通过 Go `embed` 编入 Runtime Image；运行时不需要 Node、Vite 或外部 CDN。前端源码和构建说明位于 [web/README.md](web/README.md)。开发本模块时，项目 recipe 必须引用你的本地模块修改；只修改 checkout 不会改变引用已发布版本的 recipe。重新构建前端后，从该项目执行 `ingot up web -- web`，重建、绑定并重新启动 Runtime；或依次 `ingot build web`、`ingot restart web`。已有 Image 的显式切换可使用 `ingot runtime switch web <image>`，再重启。
 
