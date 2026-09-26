@@ -20,11 +20,11 @@ import (
 )
 
 const (
-	defaultTriggerInputTokens  = 128000
-	defaultTargetInputTokens   = 64000
+	defaultTriggerInputTokens  = 800000
+	defaultTargetInputTokens   = 250000
 	defaultRecentRounds        = 4
-	defaultSummaryChunkTokens  = 16000
-	defaultSummaryInputTokens  = 32000
+	defaultSummaryChunkTokens  = 128000
+	defaultSummaryInputTokens  = 256000
 	defaultSummaryMaxTokens    = 1024
 	defaultRollupMaxTokens     = 4096
 	defaultSummaryMaxBytes     = 64 * 1024
@@ -71,7 +71,8 @@ type Config struct {
 // Dependencies contains the model and counting capabilities and append-oriented store.
 type Dependencies struct {
 	Model           model.Runtime
-	Counter         usage.Counter
+	Counter         ingotabi.Optional[usage.Counter]
+	Resolver        ingotabi.Optional[model.RequestResolver]
 	ProviderSources []model.ProviderSource
 	Store           session.Store
 	State           state.Scope
@@ -95,12 +96,13 @@ type normalizedConfig struct {
 }
 
 type compactor struct {
-	model   model.Runtime
-	counter usage.Counter
-	store   session.Store
-	cfg     normalizedConfig
-	config  atomic.Pointer[normalizedConfig]
-	gates   *gateManager
+	model    model.Runtime
+	counter  usage.Counter
+	resolver model.RequestResolver
+	store    session.Store
+	cfg      normalizedConfig
+	config   atomic.Pointer[normalizedConfig]
+	gates    *gateManager
 }
 
 func New(ctx context.Context, deps Dependencies) (Exports, ingotabi.Cleanup, error) {
@@ -110,8 +112,8 @@ func New(ctx context.Context, deps Dependencies) (Exports, ingotabi.Cleanup, err
 	if err := ctx.Err(); err != nil {
 		return Exports{}, nil, err
 	}
-	if isNil(deps.Model) || isNil(deps.Counter) || isNil(deps.Store) || isNil(deps.State) {
-		return Exports{}, nil, fmt.Errorf("model, counter, store, and state dependencies are required: %w", ErrInvalidConfig)
+	if isNil(deps.Model) || isNil(deps.Store) || isNil(deps.State) {
+		return Exports{}, nil, fmt.Errorf("model, store, and state dependencies are required: %w", ErrInvalidConfig)
 	}
 	for i, source := range deps.ProviderSources {
 		if isNil(source) {
@@ -126,7 +128,21 @@ func New(ctx context.Context, deps Dependencies) (Exports, ingotabi.Cleanup, err
 	if err != nil {
 		return Exports{}, nil, err
 	}
-	instance := &compactor{model: deps.Model, counter: deps.Counter, store: deps.Store, cfg: normalized, gates: newGateManager()}
+	var counter usage.Counter
+	if deps.Counter.Valid {
+		if isNil(deps.Counter.Value) {
+			return Exports{}, nil, fmt.Errorf("counter is typed nil: %w", ErrInvalidConfig)
+		}
+		counter = deps.Counter.Value
+	}
+	var resolver model.RequestResolver
+	if deps.Resolver.Valid {
+		if isNil(deps.Resolver.Value) {
+			return Exports{}, nil, fmt.Errorf("resolver is typed nil: %w", ErrInvalidConfig)
+		}
+		resolver = deps.Resolver.Value
+	}
+	instance := &compactor{model: deps.Model, counter: counter, resolver: resolver, store: deps.Store, cfg: normalized, gates: newGateManager()}
 	instance.config.Store(&normalized)
 	return Exports{Compactor: instance, Operations: []operation.Operation{&setupOperation{scope: deps.State, providerSources: append([]model.ProviderSource(nil), deps.ProviderSources...), compactor: instance}}}, nil, nil
 }

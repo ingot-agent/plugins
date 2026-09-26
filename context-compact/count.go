@@ -15,9 +15,19 @@ func (r *compactor) countRequest(ctx context.Context, request model.Request, exp
 	if err := ctx.Err(); err != nil {
 		return usage.CountResult{}, err
 	}
-	count, err := r.counter.CountInput(ctx, usage.CountRequest{Invocation: cloneRequest(request)})
-	if err != nil {
-		return usage.CountResult{}, fmt.Errorf("count context input: %w", err)
+	var count usage.CountResult
+	if r.counter != nil {
+		var err error
+		count, err = r.counter.CountInput(ctx, usage.CountRequest{Invocation: cloneRequest(request)})
+		if err != nil {
+			return usage.CountResult{}, fmt.Errorf("count context input: %w", err)
+		}
+	} else {
+		var err error
+		count, err = r.estimateInput(ctx, request)
+		if err != nil {
+			return usage.CountResult{}, err
+		}
 	}
 	if err := ctx.Err(); err != nil {
 		return usage.CountResult{}, err
@@ -70,4 +80,44 @@ func (r *compactor) memoryTokens(ctx context.Context, request model.Request, cha
 	}
 	stateTokens, err := r.countMessages(ctx, request, []model.Message{{Role: model.RoleAssistant, Content: content.FromText(snapshot)}}, identity)
 	return memory, stateTokens, err
+}
+
+const fallbackCountSource = "context-compact-character-estimate-v1"
+
+// estimateInput measures the canonical request so message framing, tools, and
+// call arguments all contribute. This is an approximation, not an upper bound.
+// Keep the source stable: it participates in checkpoint policy identity.
+func (r *compactor) estimateInput(ctx context.Context, request model.Request) (usage.CountResult, error) {
+	resolved := cloneRequest(request)
+	if (resolved.Provider == "" || resolved.Model == "") && r.resolver != nil {
+		var err error
+		resolved, err = r.resolver.ResolveRequest(ctx, resolved)
+		if err != nil {
+			return usage.CountResult{}, fmt.Errorf("resolve context model for token estimate: %w", err)
+		}
+	}
+	if resolved.Provider == "" || resolved.Model == "" || !utf8.ValidString(resolved.Provider) || !utf8.ValidString(resolved.Model) {
+		return usage.CountResult{}, fmt.Errorf("token estimate needs an explicit provider and model or a model.RequestResolver: %w", ErrInvalidCount)
+	}
+	raw, err := canonicalRequestBytes(resolved)
+	if err != nil {
+		return usage.CountResult{}, fmt.Errorf("canonicalize context for token estimate: %w", err)
+	}
+	// ASCII is roughly four bytes per token, while each non-ASCII rune is
+	// counted as one. JSON escapes and inline media can distort the estimate.
+	var ascii, nonASCII int64
+	for len(raw) > 0 {
+		value, size := utf8.DecodeRune(raw)
+		if value < utf8.RuneSelf {
+			ascii++
+		} else {
+			nonASCII++
+		}
+		raw = raw[size:]
+	}
+	return usage.CountResult{
+		InputTokens: (ascii+3)/4 + nonASCII,
+		Accuracy:    usage.AccuracyEstimate, Source: fallbackCountSource,
+		Provider: resolved.Provider, Model: resolved.Model,
+	}, nil
 }

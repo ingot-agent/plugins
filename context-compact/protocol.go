@@ -342,7 +342,6 @@ func (r *compactor) summaryRequest(invocation model.Request, systemPrompt, input
 		Tools:       []tool.Definition{},
 		Temperature: &temperature,
 		MaxTokens:   &maxTokens,
-		Stop:        []string{},
 	}
 }
 

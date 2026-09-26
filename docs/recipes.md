@@ -315,8 +315,8 @@ HTTP API，也不是启动 CLI 的参数。
   `tool.Runtime` 拦截，Workspace 和本机用户权限不是系统沙箱。
 - `model-openai-responses` 与 Chat Completions 适配器可提供不同名称的
   provider，但名称必须唯一；本页没有验证 Responses。
-- 当前 `context-compact` 的摘要请求包含非 nil 空 Stop，Responses 适配器
-  拒绝该参数，不能把二者的组合当作已验证配方。
+- 当前 `context-compact` 的摘要请求不再传递 Stop；与 Responses 适配器的该项
+  兼容性问题已消除，但此 recipe 未验证真实 Responses 模型上的摘要调用。
 - 本页没有安装 `skill-runtime`、用量统计或脚本拦截器。需要时读对应模块
   README，补齐配置、构建及业务调用验证，不能只检查 manifest 存在。
 

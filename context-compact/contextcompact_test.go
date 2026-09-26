@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	ingotabi "github.com/ingot-agent/ingot-abi"
 	"github.com/ingot-agent/sdk/asset"
 	"github.com/ingot-agent/sdk/content"
 	"github.com/ingot-agent/sdk/contextwindow"
@@ -507,7 +508,7 @@ func TestConfigAndContextValidation(t *testing.T) {
 	}
 	for _, counter := range []usage.Counter{nil, (*canonicalTokenCounter)(nil)} {
 		_, _, err := New(context.Background(), Dependencies{
-			Model: models, Counter: counter, Store: store,
+			Model: models, Counter: ingotabi.Some[usage.Counter](counter), Store: store,
 			State: testStateScope{dir: writeTestConfig(t, Config{})},
 		})
 		if !errors.Is(err, ErrInvalidConfig) {

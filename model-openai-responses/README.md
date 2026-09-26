@@ -118,10 +118,10 @@ additional typed SDK support. Built-in Responses tools, arbitrary response-forma
 options, and provider-specific reasoning controls are not represented by this
 adapter's request mapping.
 
-The current [context compactor](../context-compact/README.md) explicitly creates a
-non-nil empty `Stop` slice in summarizer requests. Configure a Chat Completions
-provider for compaction; the Responses adapter currently rejects that request
-shape unless another component explicitly transforms it.
+The current [context compactor](../context-compact/README.md) sends nil `Stop`
+for summary requests, so this specific request-shape incompatibility is resolved.
+Actual model support for temperature, output limits, and structured summary
+instructions still depends on the configured provider/model.
 
 HTTP errors retain bounded bodies and request IDs. The configured API key is
 redacted in the explicitly sanitized error paths; this is not universal redaction
