@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/ingot-agent/sdk/content"
@@ -107,15 +108,15 @@ func TestRuntimeValidatesAndSnapshotsDefinitions(t *testing.T) {
 }
 
 func TestRuntimeInterceptorOrderAndLimits(t *testing.T) {
-	fake := &fakeTool{definition: validDefinition("echo"), content: "0123456789"}
+	fake := &fakeTool{definition: validDefinition("echo"), content: "01234" + strings.Repeat("x", minimumMaxTextBytes+1) + "56789"}
 	events := []string{}
-	exports, _, err := New(context.Background(), withState(t, Config{MaxTextBytes: 5}, Dependencies{Tools: []tool.Tool{fake}, Interceptors: []tool.Interceptor{recordingInterceptor{name: "outer", events: &events}, recordingInterceptor{name: "inner", events: &events}}}))
+	exports, _, err := New(context.Background(), withState(t, Config{MaxTextBytes: minimumMaxTextBytes + 10}, Dependencies{Tools: []tool.Tool{fake}, Interceptors: []tool.Interceptor{recordingInterceptor{name: "outer", events: &events}, recordingInterceptor{name: "inner", events: &events}}}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = exports.Runtime.Call(context.Background(), testInvocation("echo", "{\"x\":\"value\"}", execution.Scope{}))
-	if !errors.Is(err, ErrInvalidResult) {
-		t.Fatalf("result limit=%v", err)
+	result, err := exports.Runtime.Call(context.Background(), testInvocation("echo", "{\"x\":\"value\"}", execution.Scope{}))
+	if text, ok := content.TextOnly(result.Content); err != nil || !ok || text != "01234"+textTruncationMarker+"56789" {
+		t.Fatalf("result=%#v error=%v", result, err)
 	}
 	want := []string{"outer-before", "inner-before", "inner-after", "outer-after"}
 	for i := range want {
@@ -140,7 +141,7 @@ func TestRuntimeValidatesLimitsAndOwnsMultimodalResult(t *testing.T) {
 		content.Text("ok"),
 		content.Inline(content.KindImage, "image/png", "image.png", data),
 	}}}
-	exports, _, err := New(context.Background(), withState(t, Config{MaxTextBytes: 2, MaxInlinePartBytes: 3, MaxInlineBytes: 3}, Dependencies{Tools: []tool.Tool{implementation}}))
+	exports, _, err := New(context.Background(), withState(t, Config{MaxInlinePartBytes: 3, MaxInlineBytes: 3}, Dependencies{Tools: []tool.Tool{implementation}}))
 	if err != nil {
 		t.Fatal(err)
 	}

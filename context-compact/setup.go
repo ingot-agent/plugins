@@ -12,6 +12,7 @@ import (
 	"github.com/ingot-agent/sdk/interaction"
 	"github.com/ingot-agent/sdk/model"
 	"github.com/ingot-agent/sdk/operation"
+	"github.com/ingot-agent/sdk/usage"
 )
 
 var ErrConfigConflict = errors.New("context.compact configuration changed during interaction")
@@ -71,14 +72,19 @@ func (o *setupOperation) Invoke(ctx context.Context, request operation.Request) 
 		Fields: []interaction.Field{
 			providerField,
 			{Name: "model", Label: "Model", Kind: interaction.FieldString, Required: false, Default: &interaction.Value{Kind: interaction.ValueString, String: current.Model}},
-			{Name: "trigger_request_bytes", Label: "Trigger Request Bytes", Kind: interaction.FieldInteger, Required: false, Default: &interaction.Value{Kind: interaction.ValueInteger, Integer: int64(current.TriggerRequestBytes)}},
-			{Name: "target_request_bytes", Label: "Target Request Bytes", Kind: interaction.FieldInteger, Required: false, Default: &interaction.Value{Kind: interaction.ValueInteger, Integer: int64(current.TargetRequestBytes)}},
-			{Name: "anchor_turns", Label: "Anchor Turns", Kind: interaction.FieldInteger, Required: false, Default: &interaction.Value{Kind: interaction.ValueInteger, Integer: int64(current.AnchorTurns)}},
-			{Name: "recent_turns", Label: "Recent Turns", Kind: interaction.FieldInteger, Required: false, Default: &interaction.Value{Kind: interaction.ValueInteger, Integer: int64(current.RecentTurns)}},
-			{Name: "summary_chunk_bytes", Label: "Summary Chunk Bytes", Kind: interaction.FieldInteger, Required: false, Default: &interaction.Value{Kind: interaction.ValueInteger, Integer: int64(current.SummaryChunkBytes)}},
+			{Name: "trigger_input_tokens", Label: "Trigger Input Tokens", Kind: interaction.FieldInteger, Required: false, Default: &interaction.Value{Kind: interaction.ValueInteger, Integer: int64(current.TriggerInputTokens)}},
+			{Name: "target_input_tokens", Label: "Target Input Tokens", Kind: interaction.FieldInteger, Required: false, Default: &interaction.Value{Kind: interaction.ValueInteger, Integer: int64(current.TargetInputTokens)}},
+			{Name: "recent_rounds", Label: "Recent Rounds", Kind: interaction.FieldInteger, Required: false, Default: &interaction.Value{Kind: interaction.ValueInteger, Integer: int64(current.RecentRounds)}},
+			{Name: "summary_chunk_tokens", Label: "Summary Chunk Tokens", Kind: interaction.FieldInteger, Required: false, Default: &interaction.Value{Kind: interaction.ValueInteger, Integer: int64(current.SummaryChunkTokens)}},
 			{Name: "summary_max_tokens", Label: "Summary Max Tokens", Kind: interaction.FieldInteger, Required: false, Default: &interaction.Value{Kind: interaction.ValueInteger, Integer: int64(current.SummaryMaxTokens)}},
 			{Name: "summary_max_bytes", Label: "Summary Max Bytes", Kind: interaction.FieldInteger, Required: false, Default: &interaction.Value{Kind: interaction.ValueInteger, Integer: int64(current.SummaryMaxBytes)}},
-			{Name: "max_summary_chunks", Label: "Max Summary Chunks", Kind: interaction.FieldInteger, Required: false, Default: &interaction.Value{Kind: interaction.ValueInteger, Integer: int64(current.MaxSummaryChunks)}},
+			{Name: "summary_input_tokens", Label: "Summary Input Tokens", Kind: interaction.FieldInteger, Default: &interaction.Value{Kind: interaction.ValueInteger, Integer: int64(current.SummaryInputTokens)}},
+			{Name: "rollup_max_tokens", Label: "Rollup Max Tokens", Kind: interaction.FieldInteger, Default: &interaction.Value{Kind: interaction.ValueInteger, Integer: int64(current.RollupMaxTokens)}},
+			{Name: "memory_trigger_tokens", Label: "Memory Trigger Tokens", Kind: interaction.FieldInteger, Default: &interaction.Value{Kind: interaction.ValueInteger, Integer: int64(current.MemoryTriggerTokens)}},
+			{Name: "memory_target_tokens", Label: "Memory Target Tokens", Kind: interaction.FieldInteger, Default: &interaction.Value{Kind: interaction.ValueInteger, Integer: int64(current.MemoryTargetTokens)}},
+			{Name: "state_trigger_tokens", Label: "State Trigger Tokens", Kind: interaction.FieldInteger, Default: &interaction.Value{Kind: interaction.ValueInteger, Integer: int64(current.StateTriggerTokens)}},
+			{Name: "state_target_tokens", Label: "State Target Tokens", Kind: interaction.FieldInteger, Default: &interaction.Value{Kind: interaction.ValueInteger, Integer: int64(current.StateTargetTokens)}},
+			{Name: "allowed_accuracies", Label: "Allowed Count Accuracies", Kind: interaction.FieldMultiChoice, Required: true, Default: valuePointer(interaction.Value{Kind: interaction.ValueStrings, Strings: configuredAccuracyNames(current)}), Options: []interaction.Option{{Value: "exact", Label: "Exact"}, {Value: "upper_bound", Label: "Upper Bound"}, {Value: "estimate", Label: "Estimate"}}},
 			{Name: "max_summary_passes", Label: "Max Summary Passes", Kind: interaction.FieldInteger, Required: false, Default: &interaction.Value{Kind: interaction.ValueInteger, Integer: int64(current.MaxSummaryPasses)}},
 		},
 	})
@@ -94,20 +100,17 @@ func (o *setupOperation) Invoke(ctx context.Context, request operation.Request) 
 	if v, ok := answerString(response, "model"); ok {
 		updated.Model = v
 	}
-	if v, ok := answerInteger(response, "trigger_request_bytes"); ok {
-		updated.TriggerRequestBytes = int(v)
+	if v, ok := answerInteger(response, "trigger_input_tokens"); ok {
+		updated.TriggerInputTokens = v
 	}
-	if v, ok := answerInteger(response, "target_request_bytes"); ok {
-		updated.TargetRequestBytes = int(v)
+	if v, ok := answerInteger(response, "target_input_tokens"); ok {
+		updated.TargetInputTokens = v
 	}
-	if v, ok := answerInteger(response, "anchor_turns"); ok {
-		updated.AnchorTurns = int(v)
+	if v, ok := answerInteger(response, "recent_rounds"); ok {
+		updated.RecentRounds = int(v)
 	}
-	if v, ok := answerInteger(response, "recent_turns"); ok {
-		updated.RecentTurns = int(v)
-	}
-	if v, ok := answerInteger(response, "summary_chunk_bytes"); ok {
-		updated.SummaryChunkBytes = int(v)
+	if v, ok := answerInteger(response, "summary_chunk_tokens"); ok {
+		updated.SummaryChunkTokens = v
 	}
 	if v, ok := answerInteger(response, "summary_max_tokens"); ok {
 		updated.SummaryMaxTokens = int(v)
@@ -115,11 +118,37 @@ func (o *setupOperation) Invoke(ctx context.Context, request operation.Request) 
 	if v, ok := answerInteger(response, "summary_max_bytes"); ok {
 		updated.SummaryMaxBytes = int(v)
 	}
-	if v, ok := answerInteger(response, "max_summary_chunks"); ok {
-		updated.MaxSummaryChunks = int(v)
-	}
 	if v, ok := answerInteger(response, "max_summary_passes"); ok {
 		updated.MaxSummaryPasses = int(v)
+	}
+	if v, ok := answerInteger(response, "summary_input_tokens"); ok {
+		updated.SummaryInputTokens = v
+	}
+	if v, ok := answerInteger(response, "rollup_max_tokens"); ok {
+		updated.RollupMaxTokens = int(v)
+	}
+	if v, ok := answerInteger(response, "memory_trigger_tokens"); ok {
+		updated.MemoryTriggerTokens = v
+	}
+	if v, ok := answerInteger(response, "memory_target_tokens"); ok {
+		updated.MemoryTargetTokens = v
+	}
+	if v, ok := answerInteger(response, "state_trigger_tokens"); ok {
+		updated.StateTriggerTokens = v
+	}
+	if v, ok := answerInteger(response, "state_target_tokens"); ok {
+		updated.StateTargetTokens = v
+	}
+	for _, answer := range response.Values {
+		if answer.Name == "allowed_accuracies" {
+			if answer.Value.Kind != interaction.ValueStrings {
+				return operation.Result{}, fmt.Errorf("allowed_accuracies requires choices: %w", ErrInvalidConfig)
+			}
+			updated.AllowedAccuracies = make([]usage.Accuracy, len(answer.Value.Strings))
+			for i, value := range answer.Value.Strings {
+				updated.AllowedAccuracies[i] = usage.Accuracy(value)
+			}
+		}
 	}
 	providerNames, err = currentProviderNames(ctx, o.providerSources)
 	if err != nil {
@@ -203,4 +232,15 @@ func answerBoolean(response interaction.Response, name string) (bool, bool) {
 		return answer.Value.Boolean, true
 	}
 	return false, false
+}
+
+func configuredAccuracyNames(cfg Config) []string {
+	if cfg.AllowedAccuracies == nil {
+		return []string{"exact", "upper_bound", "estimate"}
+	}
+	values := make([]string, len(cfg.AllowedAccuracies))
+	for i, value := range cfg.AllowedAccuracies {
+		values[i] = string(value)
+	}
+	return values
 }

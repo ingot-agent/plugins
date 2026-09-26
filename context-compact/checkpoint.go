@@ -16,14 +16,15 @@ import (
 	"github.com/ingot-agent/sdk/content"
 	"github.com/ingot-agent/sdk/model"
 	"github.com/ingot-agent/sdk/session"
+	"github.com/ingot-agent/sdk/usage"
 )
 
 const (
 	checkpointEntryKind    = "context.compact.checkpoint"
-	checkpointEntryVersion = 1
+	checkpointEntryVersion = 2
 	checkpointModeSegment  = "segment"
 	checkpointModeRollup   = "rollup"
-	protocolVersion        = 1
+	protocolVersion        = 2
 )
 
 type patchOperation struct {
@@ -62,28 +63,31 @@ type chainState struct {
 	maxSequence  int
 }
 
-func (r *compactor) policyDigest(request model.Request) (string, error) {
+func (r *compactor) policyDigest(request model.Request, count usage.CountResult) (string, error) {
 	provider, modelName := r.summarySelection(request)
 	projection := struct {
-		Protocol            int    `json:"protocol"`
-		Provider            string `json:"provider"`
-		Model               string `json:"model"`
-		TriggerRequestBytes int    `json:"trigger_request_bytes"`
-		TargetRequestBytes  int    `json:"target_request_bytes"`
-		AnchorTurns         int    `json:"anchor_turns"`
-		RecentTurns         int    `json:"recent_turns"`
-		SummaryChunkBytes   int    `json:"summary_chunk_bytes"`
-		SummaryMaxTokens    int    `json:"summary_max_tokens"`
-		SummaryMaxBytes     int    `json:"summary_max_bytes"`
-		MaxSummaryChunks    int    `json:"max_summary_chunks"`
-		MaxSummaryPasses    int    `json:"max_summary_passes"`
+		Protocol                                           int
+		Provider, Model                                    string
+		TriggerInputTokens, TargetInputTokens              int64
+		RecentRounds                                       int
+		SummaryChunkTokens, SummaryInputTokens             int64
+		SummaryMaxTokens, RollupMaxTokens, SummaryMaxBytes int
+		MemoryTriggerTokens, MemoryTargetTokens            int64
+		StateTriggerTokens, StateTargetTokens              int64
+		MaxSummaryPasses                                   int
+		AllowedAccuracies                                  uint8
+		Counter                                            usage.CountResult
 	}{
 		Protocol: protocolVersion, Provider: provider, Model: modelName,
-		TriggerRequestBytes: r.cfg.triggerRequestBytes, TargetRequestBytes: r.cfg.targetRequestBytes,
-		AnchorTurns: r.cfg.anchorTurns, RecentTurns: r.cfg.recentTurns,
-		SummaryChunkBytes: r.cfg.summaryChunkBytes, SummaryMaxTokens: r.cfg.summaryMaxTokens,
-		SummaryMaxBytes: r.cfg.summaryMaxBytes, MaxSummaryChunks: r.cfg.maxSummaryChunks,
-		MaxSummaryPasses: r.cfg.maxSummaryPasses,
+		TriggerInputTokens: r.cfg.triggerInputTokens, TargetInputTokens: r.cfg.targetInputTokens,
+		RecentRounds: r.cfg.recentRounds, SummaryChunkTokens: r.cfg.summaryChunkTokens,
+		SummaryInputTokens: r.cfg.summaryInputTokens, SummaryMaxTokens: r.cfg.summaryMaxTokens,
+		RollupMaxTokens: r.cfg.rollupMaxTokens, SummaryMaxBytes: r.cfg.summaryMaxBytes,
+		MemoryTriggerTokens: r.cfg.memoryTriggerTokens, MemoryTargetTokens: r.cfg.memoryTargetTokens,
+		StateTriggerTokens: r.cfg.stateTriggerTokens, StateTargetTokens: r.cfg.stateTargetTokens,
+		MaxSummaryPasses:  r.cfg.maxSummaryPasses,
+		AllowedAccuracies: r.cfg.allowedAccuracies,
+		Counter:           usage.CountResult{Source: count.Source, Accuracy: count.Accuracy, Provider: count.Provider, Model: count.Model},
 	}
 	raw, err := json.Marshal(projection)
 	if err != nil {
@@ -106,7 +110,7 @@ func (r *compactor) loadChain(
 		return chainState{}, fmt.Errorf("load context checkpoints for session %q: %w", id, err)
 	}
 	nodes := make(map[int]chainState)
-	best := chainState{covered: layout.anchorEnd, state: make(map[string]json.RawMessage)}
+	best := chainState{state: make(map[string]json.RawMessage)}
 	lastSequence := 0
 	for entryIndex, entry := range entries {
 		if err := ctx.Err(); err != nil {
@@ -115,7 +119,7 @@ func (r *compactor) loadChain(
 		if entry.Kind != checkpointEntryKind {
 			continue
 		}
-		if entry.Version != checkpointEntryVersion {
+		if entry.Version != 1 && entry.Version != checkpointEntryVersion {
 			return chainState{}, fmt.Errorf("entry %d version %d: %w", entryIndex, entry.Version, ErrUnsupportedCheckpointVersion)
 		}
 		checkpoint, err := decodeCheckpoint(entry.Payload)
@@ -127,7 +131,7 @@ func (r *compactor) loadChain(
 		}
 		lastSequence = checkpoint.Sequence
 		best.maxSequence = checkpoint.Sequence
-		if checkpoint.PolicyDigest != policy || checkpoint.CoveredMessages < layout.anchorEnd || checkpoint.CoveredMessages > layout.eligibleEnd {
+		if entry.Version == 1 || checkpoint.PolicyDigest != policy || checkpoint.CoveredMessages > layout.completeEnd {
 			continue
 		}
 		if provider == "" || modelName == "" || checkpoint.Provider != provider || checkpoint.Model != modelName {
@@ -143,7 +147,10 @@ func (r *compactor) loadChain(
 		if digest != checkpoint.SourceDigest {
 			continue
 		}
-		parent := chainState{covered: layout.anchorEnd, state: make(map[string]json.RawMessage)}
+		if !isRoundBoundary(layout, checkpoint.CoveredMessages) {
+			return chainState{}, fmt.Errorf("entry %d splits a round: %w", entryIndex, ErrCorruptCheckpoint)
+		}
+		parent := chainState{state: make(map[string]json.RawMessage)}
 		if checkpoint.ParentSequence != 0 {
 			candidate, ok := nodes[checkpoint.ParentSequence]
 			if !ok {
@@ -182,15 +189,24 @@ func extendChain(parent chainState, checkpoint persistedCheckpoint) (chainState,
 		active := append(append([]persistedCheckpoint(nil), parent.active...), cloneCheckpoint(checkpoint))
 		return chainState{lastSequence: checkpoint.Sequence, covered: checkpoint.CoveredMessages, revision: checkpoint.Revision, active: active, state: state}, nil
 	case checkpointModeRollup:
-		if parent.lastSequence == 0 || checkpoint.CoveredMessages != parent.covered || checkpoint.BaseRevision != parent.revision || checkpoint.Revision != parent.revision || len(checkpoint.Operations) != 0 || checkpoint.StateSnapshot == nil {
+		if parent.lastSequence == 0 || checkpoint.CoveredMessages != parent.covered || checkpoint.BaseRevision != parent.revision || checkpoint.Revision != parent.revision+1 || checkpoint.StateSnapshot == nil {
 			return chainState{}, fmt.Errorf("rollup continuity is invalid: %w", ErrCorruptCheckpoint)
 		}
 		state, err := stateFromSnapshot(checkpoint.StateSnapshot)
 		if err != nil {
 			return chainState{}, err
 		}
-		if !stateEqual(state, parent.state) {
-			return chainState{}, fmt.Errorf("rollup changed materialized state: %w", ErrCorruptCheckpoint)
+		retained := cloneState(parent.state)
+		for _, operation := range checkpoint.Operations {
+			if _, exists := retained[operation.Path]; operation.Op != "delete" || !exists {
+				return chainState{}, fmt.Errorf("rollup may only discard existing keys: %w", ErrCorruptCheckpoint)
+			}
+		}
+		if err := applyOperations(retained, checkpoint.Operations); err != nil {
+			return chainState{}, err
+		}
+		if !stateEqual(state, retained) {
+			return chainState{}, fmt.Errorf("rollup rewrote retained facts: %w", ErrCorruptCheckpoint)
 		}
 		return chainState{lastSequence: checkpoint.Sequence, covered: checkpoint.CoveredMessages, revision: checkpoint.Revision, active: []persistedCheckpoint{cloneCheckpoint(checkpoint)}, state: state}, nil
 	default:
@@ -233,10 +249,8 @@ func (r *compactor) appendCheckpoint(ctx context.Context, id session.ID, checkpo
 	return nil
 }
 
-func materializeMessages(layout messageLayout, chain chainState) ([]model.Message, error) {
-	result := make([]model.Message, 0, len(layout.system)+layout.anchorEnd+len(chain.active)*2+len(layout.conversation)-chain.covered)
-	result = append(result, cloneMessages(layout.system)...)
-	result = append(result, cloneMessages(layout.conversation[:layout.anchorEnd])...)
+func memoryMessages(chain chainState) ([]model.Message, error) {
+	result := make([]model.Message, 0, len(chain.active)*2)
 	for _, checkpoint := range chain.active {
 		result = append(result, model.Message{Role: model.RoleAssistant, Content: content.FromText(summaryMessage(checkpoint.Summary))})
 		switch checkpoint.Mode {
@@ -256,6 +270,17 @@ func materializeMessages(layout messageLayout, chain chainState) ([]model.Messag
 			}
 		}
 	}
+	return result, nil
+}
+
+func materializeMessages(layout messageLayout, chain chainState) ([]model.Message, error) {
+	memory, err := memoryMessages(chain)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]model.Message, 0, len(layout.system)+len(memory)+len(layout.conversation)-chain.covered)
+	result = append(result, cloneMessages(layout.system)...)
+	result = append(result, memory...)
 	result = append(result, cloneMessages(layout.conversation[chain.covered:])...)
 	return result, nil
 }

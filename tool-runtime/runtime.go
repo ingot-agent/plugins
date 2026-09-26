@@ -23,9 +23,11 @@ import (
 
 const (
 	defaultMaxArgumentsBytes = 1024 * 1024
-	defaultMaxTextBytes      = 4 * 1024 * 1024
+	defaultMaxTextBytes      = 64 * 1024
 	defaultMaxInlinePart     = 16 * 1024 * 1024
 	defaultMaxInlineBytes    = 32 * 1024 * 1024
+	textTruncationMarker     = "\n[Tool output truncated. Use narrower queries, pagination, or direct large output to a local file.]\n"
+	minimumMaxTextBytes      = len(textTruncationMarker)
 )
 
 var (
@@ -33,7 +35,7 @@ var (
 	ErrInvalidConfig = errors.New("invalid tool.runtime config")
 	// ErrInvalidDefinition indicates a malformed or duplicate tool definition.
 	ErrInvalidDefinition = errors.New("invalid tool definition")
-	// ErrInvalidResult indicates invalid content or an oversized result.
+	// ErrInvalidResult indicates invalid content or oversized inline media.
 	ErrInvalidResult = errors.New("invalid tool result")
 	// ErrCallMutation indicates that an interceptor changed a validated Invocation
 	// (its execution Scope or its Call payload).
@@ -46,6 +48,8 @@ var (
 
 // Config bounds argument and result payloads. Text and inline limits apply to
 // totals across a result, while MaxInlinePartBytes also bounds each media part.
+// Oversized text is truncated to a UTF-8-safe head and tail with a notice;
+// MaxTextBytes includes the notice and must be large enough to contain it.
 type Config struct {
 	MaxArgumentsBytes  int `toml:"max_arguments_bytes"`
 	MaxTextBytes       int `toml:"max_text_bytes"`
@@ -150,8 +154,8 @@ func normalizeConfig(cfg Config) (Config, error) {
 	if cfg.MaxTextBytes == 0 {
 		cfg.MaxTextBytes = defaultMaxTextBytes
 	}
-	if cfg.MaxTextBytes < 1 {
-		return Config{}, fmt.Errorf("max_text_bytes must be positive: %w", ErrInvalidConfig)
+	if cfg.MaxTextBytes < minimumMaxTextBytes {
+		return Config{}, fmt.Errorf("max_text_bytes must be at least %d to contain the truncation notice: %w", minimumMaxTextBytes, ErrInvalidConfig)
 	}
 	if cfg.MaxInlinePartBytes == 0 {
 		cfg.MaxInlinePartBytes = defaultMaxInlinePart
@@ -291,7 +295,7 @@ func (r *runtime) Call(ctx context.Context, invocation tool.Invocation) (tool.Re
 	if err := r.validateResult(call.Name, result, configuration); err != nil {
 		return tool.Result{}, err
 	}
-	return tool.Result{Content: content.Clone(result.Content)}, nil
+	return tool.Result{Content: truncateText(result.Content, configuration.MaxTextBytes)}, nil
 }
 
 func isPreDispatchRejection(err error) bool {
@@ -308,14 +312,9 @@ func (r *runtime) validateResult(name string, result tool.Result, configuration 
 	if err := content.Validate(result.Content); err != nil {
 		return fmt.Errorf("tool %q returned invalid content: %w: %w", name, ErrInvalidResult, err)
 	}
-	textBytes := 0
 	inlineBytes := 0
 	for i, part := range result.Content {
 		if part.Kind == content.KindText {
-			textBytes += len(part.Text)
-			if textBytes > configuration.MaxTextBytes {
-				return fmt.Errorf("tool %q text result exceeds limit: %w", name, ErrInvalidResult)
-			}
 			continue
 		}
 		if part.Media.Source.Kind != content.SourceInline {

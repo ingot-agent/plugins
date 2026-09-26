@@ -34,6 +34,15 @@ func loadConfig(scope string) (Config, error) {
 	if err != nil {
 		return config, fmt.Errorf("read plugin config: %w", err)
 	}
+	var fields map[string]any
+	if err := toml.Unmarshal(data, &fields); err != nil {
+		return config, fmt.Errorf("decode plugin config: %w", err)
+	}
+	for _, legacy := range []string{"trigger_request_bytes", "target_request_bytes", "summary_chunk_bytes", "anchor_turns", "recent_turns", "anchor_rounds", "max_summary_chunks"} {
+		if _, exists := fields[legacy]; exists {
+			return config, fmt.Errorf("legacy field %q: migrate config to input-token watermarks and recent_rounds; remove anchor and max_summary_chunks (use memory token watermarks): %w", legacy, ErrInvalidConfig)
+		}
+	}
 	decoder := toml.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&config); err != nil {

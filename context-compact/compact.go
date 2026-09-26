@@ -8,16 +8,17 @@ import (
 	"github.com/ingot-agent/sdk/content"
 	"github.com/ingot-agent/sdk/contextwindow"
 	"github.com/ingot-agent/sdk/model"
+	"github.com/ingot-agent/sdk/usage"
 )
 
 func (r *compactor) Compact(ctx context.Context, input contextwindow.CompactionRequest) (contextwindow.CompactionResult, error) {
-	snapshot := &compactor{model: r.model, store: r.store, cfg: *r.config.Load(), gates: r.gates}
+	snapshot := &compactor{model: r.model, counter: r.counter, store: r.store, cfg: *r.config.Load(), gates: r.gates}
 	return snapshot.compact(ctx, input)
 }
 
 func (r *compactor) compact(ctx context.Context, input contextwindow.CompactionRequest) (contextwindow.CompactionResult, error) {
 	if ctx == nil {
-		return contextwindow.CompactionResult{}, fmt.Errorf("compact context: nil context: %w", ErrInvalidRequest)
+		return contextwindow.CompactionResult{}, fmt.Errorf("nil context: %w", ErrInvalidRequest)
 	}
 	if err := ctx.Err(); err != nil {
 		return contextwindow.CompactionResult{}, err
@@ -26,7 +27,7 @@ func (r *compactor) compact(ctx context.Context, input contextwindow.CompactionR
 		return contextwindow.CompactionResult{}, fmt.Errorf("session_id is required: %w", ErrInvalidRequest)
 	}
 	request := cloneRequest(input.Invocation)
-	layout, err := inspectRequest(request, r.cfg.anchorTurns, r.cfg.recentTurns)
+	layout, err := inspectRequest(request, r.cfg.recentRounds)
 	if err != nil {
 		return contextwindow.CompactionResult{}, err
 	}
@@ -39,111 +40,128 @@ func (r *compactor) compact(ctx context.Context, input contextwindow.CompactionR
 	}
 	defer release()
 
-	policy, err := r.policyDigest(request)
+	identity, err := r.countRequest(ctx, request, nil)
 	if err != nil {
-		return contextwindow.CompactionResult{}, fmt.Errorf("compute compaction policy: %w", err)
+		return contextwindow.CompactionResult{}, err
 	}
-	provider, modelName := r.summarySelection(request)
+	// Reuse the counter's resolved defaults when the summarizer inherits this
+	// provider. A different summary provider may have its own default model.
+	summaryBase := cloneRequest(request)
+	if summaryBase.Provider == "" {
+		summaryBase.Provider = identity.Provider
+	}
+	if summaryBase.Model == "" && (r.cfg.provider == "" || r.cfg.provider == identity.Provider) {
+		summaryBase.Model = identity.Model
+	}
+	policy, err := r.policyDigest(summaryBase, identity)
+	if err != nil {
+		return contextwindow.CompactionResult{}, err
+	}
+	provider, modelName := r.summarySelection(summaryBase)
 	chain, err := r.loadChain(ctx, input.SessionID, policy, provider, modelName, layout)
 	if err != nil {
 		return contextwindow.CompactionResult{}, err
 	}
-	messages, err := materializeMessages(layout, chain)
+	messages, current, err := r.materializedTokens(ctx, request, layout, chain, identity)
 	if err != nil {
 		return contextwindow.CompactionResult{}, err
 	}
-	view := cloneRequest(request)
-	view.Messages = messages
-	currentBytes, err := requestSize(view)
-	if err != nil {
-		return contextwindow.CompactionResult{}, err
-	}
-	if currentBytes < r.cfg.triggerRequestBytes {
-		return contextwindow.CompactionResult{Messages: cloneMessages(messages), Changed: chain.lastSequence != 0}, nil
-	}
+	compactHistory := current >= r.cfg.triggerInputTokens
+	budget := &callBudget{limit: r.cfg.maxSummaryPasses}
+	expandedEnd := 0
 
-	passes := 0
-	for currentBytes > r.cfg.targetRequestBytes {
+	for {
 		if err := ctx.Err(); err != nil {
 			return contextwindow.CompactionResult{}, err
 		}
-		if passes >= r.cfg.maxSummaryPasses {
-			return contextwindow.CompactionResult{}, fmt.Errorf("needed more than %d summary calls: %w", r.cfg.maxSummaryPasses, ErrContextUncompactable)
-		}
-		if len(chain.active) >= r.cfg.maxSummaryChunks && !(len(chain.active) == 1 && chain.active[0].Mode == checkpointModeRollup) {
-			previousBytes := currentBytes
-			checkpoint, next, err := r.prepareRollup(ctx, request, policy, layout, chain)
-			if err != nil {
-				return contextwindow.CompactionResult{}, err
-			}
-			messages, currentBytes, err = materializedSize(view, layout, next)
-			if err != nil {
-				return contextwindow.CompactionResult{}, err
-			}
-			if currentBytes >= previousBytes {
-				return contextwindow.CompactionResult{}, fmt.Errorf("rollup did not reduce canonical request bytes: %w", ErrContextUncompactable)
-			}
-			if err := r.appendCheckpoint(ctx, input.SessionID, checkpoint); err != nil {
-				return contextwindow.CompactionResult{}, err
-			}
-			chain = next
-			passes++
-			continue
-		}
-
-		start, end, err := selectSource(layout, chain.covered, r.cfg.summaryChunkBytes)
+		memory, stateTokens, err := r.memoryTokens(ctx, request, chain, identity)
 		if err != nil {
 			return contextwindow.CompactionResult{}, err
 		}
-		previousBytes := currentBytes
-		output, provider, modelName, err := r.summarizeSegment(ctx, request, chain.state, layout.conversation[start:end])
-		if err != nil {
-			return contextwindow.CompactionResult{}, err
+		rollup := memory >= r.cfg.memoryTriggerTokens || stateTokens >= r.cfg.stateTriggerTokens
+		if !rollup && (!compactHistory || current <= r.cfg.targetInputTokens) {
+			return contextwindow.CompactionResult{Messages: cloneMessages(messages), Changed: chain.lastSequence != 0}, nil
 		}
-		digest, err := messageDigest(layout.conversation[:end])
-		if err != nil {
-			return contextwindow.CompactionResult{}, err
+		var checkpoint persistedCheckpoint
+		var next chainState
+		if rollup {
+			checkpoint, next, err = r.prepareRollup(ctx, summaryBase, policy, layout, chain, budget)
+		} else {
+			var end int
+			_, end, err = r.selectSource(ctx, request, identity, layout, chain.covered)
+			if err == nil {
+				checkpoint, next, err = r.prepareSegment(ctx, summaryBase, policy, layout, chain, max(end, expandedEnd), budget)
+			}
 		}
-		checkpoint := persistedCheckpoint{
-			Sequence: chain.maxSequence + 1, ParentSequence: chain.lastSequence, Mode: checkpointModeSegment,
-			PolicyDigest: policy, CoveredMessages: end, SourceDigest: digest, Summary: output.Summary,
-			BaseRevision: chain.revision, Revision: chain.revision + 1,
-			Operations: cloneOperations(output.Operations), StateSnapshot: nil,
-			Provider: provider, Model: modelName,
-		}
-		next, err := extendChain(chain, checkpoint)
 		if err != nil {
 			return contextwindow.CompactionResult{}, err
 		}
 		next.maxSequence = checkpoint.Sequence
-		messages, currentBytes, err = materializedSize(view, layout, next)
+		candidate, candidateTokens, err := r.materializedTokens(ctx, request, layout, next, identity)
 		if err != nil {
 			return contextwindow.CompactionResult{}, err
 		}
-		if currentBytes >= previousBytes {
-			return contextwindow.CompactionResult{}, fmt.Errorf("summary segment did not reduce canonical request bytes: %w", ErrContextUncompactable)
+		if candidateTokens >= current {
+			// A short old round may cost more to summarize than to retain. Try
+			// including the next complete round before declaring it uncompactable.
+			if !rollup {
+				for _, round := range layout.rounds {
+					if round.start == checkpoint.CoveredMessages && !containsMedia(layout.conversation[round.start:round.end]) {
+						expandedEnd = round.end
+						break
+					}
+				}
+				if expandedEnd > checkpoint.CoveredMessages {
+					continue
+				}
+			}
+			return contextwindow.CompactionResult{}, fmt.Errorf("summary did not reduce input tokens: %w", ErrContextUncompactable)
+		}
+		memory, stateTokens, err = r.memoryTokens(ctx, request, next, identity)
+		if err != nil {
+			return contextwindow.CompactionResult{}, err
+		}
+		if rollup {
+			if memory > r.cfg.memoryTargetTokens || stateTokens > r.cfg.stateTargetTokens {
+				return contextwindow.CompactionResult{}, fmt.Errorf("rollup did not reach memory and state token targets: %w", ErrContextUncompactable)
+			}
+		}
+		if err := ctx.Err(); err != nil {
+			return contextwindow.CompactionResult{}, err
 		}
 		if err := r.appendCheckpoint(ctx, input.SessionID, checkpoint); err != nil {
 			return contextwindow.CompactionResult{}, err
 		}
-		chain = next
-		passes++
+		chain, messages, current = next, candidate, candidateTokens
+		expandedEnd = 0
 	}
-	return contextwindow.CompactionResult{Messages: cloneMessages(messages), Changed: true}, nil
 }
 
-func (r *compactor) prepareRollup(
-	ctx context.Context,
-	request model.Request,
-	policy string,
-	layout messageLayout,
-	chain chainState,
-) (persistedCheckpoint, chainState, error) {
+func (r *compactor) prepareSegment(ctx context.Context, request model.Request, policy string, layout messageLayout, chain chainState, end int, budget *callBudget) (persistedCheckpoint, chainState, error) {
+	output, provider, modelName, err := r.summarizeSegment(ctx, request, chain.state, layout.conversation[chain.covered:end], budget)
+	if err != nil {
+		return persistedCheckpoint{}, chainState{}, err
+	}
+	digest, err := messageDigest(layout.conversation[:end])
+	if err != nil {
+		return persistedCheckpoint{}, chainState{}, err
+	}
+	checkpoint := persistedCheckpoint{
+		Sequence: chain.maxSequence + 1, ParentSequence: chain.lastSequence, Mode: checkpointModeSegment,
+		PolicyDigest: policy, CoveredMessages: end, SourceDigest: digest, Summary: output.Summary,
+		BaseRevision: chain.revision, Revision: chain.revision + 1, Operations: cloneOperations(output.Operations),
+		Provider: provider, Model: modelName,
+	}
+	next, err := extendChain(chain, checkpoint)
+	return checkpoint, next, err
+}
+
+func (r *compactor) prepareRollup(ctx context.Context, request model.Request, policy string, layout messageLayout, chain chainState, budget *callBudget) (persistedCheckpoint, chainState, error) {
 	summaries := make([]string, len(chain.active))
 	for i, checkpoint := range chain.active {
 		summaries[i] = checkpoint.Summary
 	}
-	output, provider, modelName, err := r.summarizeRollup(ctx, request, chain.state, summaries)
+	output, provider, modelName, err := r.summarizeRollup(ctx, request, chain.state, summaries, budget)
 	if err != nil {
 		return persistedCheckpoint{}, chainState{}, err
 	}
@@ -151,73 +169,59 @@ func (r *compactor) prepareRollup(
 	if err != nil {
 		return persistedCheckpoint{}, chainState{}, err
 	}
+	retained := cloneState(chain.state)
+	if err := applyOperations(retained, output.Operations); err != nil {
+		return persistedCheckpoint{}, chainState{}, err
+	}
 	checkpoint := persistedCheckpoint{
 		Sequence: chain.maxSequence + 1, ParentSequence: chain.lastSequence, Mode: checkpointModeRollup,
 		PolicyDigest: policy, CoveredMessages: chain.covered, SourceDigest: digest, Summary: output.Summary,
-		BaseRevision: chain.revision, Revision: chain.revision, Operations: []patchOperation{},
-		StateSnapshot: stateSnapshot(chain.state), Provider: provider, Model: modelName,
+		BaseRevision: chain.revision, Revision: chain.revision + 1, Operations: cloneOperations(output.Operations),
+		StateSnapshot: stateSnapshot(retained), Provider: provider, Model: modelName,
 	}
 	next, err := extendChain(chain, checkpoint)
-	if err != nil {
-		return persistedCheckpoint{}, chainState{}, err
-	}
-	next.maxSequence = checkpoint.Sequence
-	return checkpoint, next, nil
+	return checkpoint, next, err
 }
 
-func requestSize(request model.Request) (int, error) {
-	raw, err := canonicalRequestBytes(request)
-	if err != nil {
-		return 0, fmt.Errorf("canonicalize compacted invocation: %w", err)
-	}
-	return len(raw), nil
-}
-
-func materializedSize(base model.Request, layout messageLayout, chain chainState) ([]model.Message, int, error) {
+func (r *compactor) materializedTokens(ctx context.Context, base model.Request, layout messageLayout, chain chainState, identity usage.CountResult) ([]model.Message, int64, error) {
 	messages, err := materializeMessages(layout, chain)
 	if err != nil {
 		return nil, 0, err
 	}
 	request := cloneRequest(base)
 	request.Messages = messages
-	size, err := requestSize(request)
-	return messages, size, err
+	count, err := r.countRequest(ctx, request, &identity)
+	return messages, count.InputTokens, err
 }
 
-func selectSource(layout messageLayout, covered, minimumBytes int) (int, int, error) {
-	if covered < layout.anchorEnd || covered >= layout.eligibleEnd {
-		return 0, 0, fmt.Errorf("no complete middle turn remains: %w", ErrContextUncompactable)
+// Recent rounds are a selection preference, never a checkpoint validity boundary.
+func (r *compactor) selectSource(ctx context.Context, request model.Request, identity usage.CountResult, layout messageLayout, covered int) (int, int, error) {
+	if covered >= layout.completeEnd || !isRoundBoundary(layout, covered) {
+		return 0, 0, fmt.Errorf("no complete round remains: %w", ErrContextUncompactable)
 	}
-	turnIndex := -1
-	for i, turn := range layout.turns {
-		if turn.start == covered {
-			turnIndex = i
-			break
-		}
-	}
-	if turnIndex < 0 {
-		return 0, 0, fmt.Errorf("covered message %d is not a turn boundary: %w", covered, ErrInvalidHistory)
+	limit := layout.eligibleEnd
+	if covered >= limit {
+		limit = layout.completeEnd
 	}
 	end := covered
-	for i := turnIndex; i < len(layout.turns); i++ {
-		turn := layout.turns[i]
-		if turn.end > layout.eligibleEnd {
+	for _, round := range layout.rounds {
+		if round.start < covered {
+			continue
+		}
+		if round.end > limit || containsMedia(layout.conversation[round.start:round.end]) {
 			break
 		}
-		if containsMedia(layout.conversation[turn.start:turn.end]) {
-			break
-		}
-		end = turn.end
-		raw, err := jsonMessages(layout.conversation[covered:end])
+		end = round.end
+		count, err := r.countMessages(ctx, request, layout.conversation[covered:end], identity)
 		if err != nil {
 			return 0, 0, err
 		}
-		if len(raw) >= minimumBytes {
+		if count >= r.cfg.summaryChunkTokens {
 			break
 		}
 	}
 	if end == covered {
-		return 0, 0, fmt.Errorf("no eligible complete turn remains: %w", ErrContextUncompactable)
+		return 0, 0, fmt.Errorf("no eligible text round remains: %w", ErrContextUncompactable)
 	}
 	return covered, end, nil
 }

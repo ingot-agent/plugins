@@ -33,7 +33,7 @@ var _ operation.Operation = (*setupOperation)(nil)
 func (*setupOperation) Definition() operation.Definition {
 	return operation.Definition{
 		Name:         setupOperationName,
-		Description:  "Tool invocation payload and output limits.",
+		Description:  "Tool payload limits and text output truncation.",
 		Group:        setupOperationGroup,
 		InputSchema:  json.RawMessage(`{"type":"object","additionalProperties":false,"properties":{}}`),
 		OutputSchema: json.RawMessage(`{"type":"object","additionalProperties":false,"required":["restart_required"],"properties":{"restart_required":{"type":"boolean"}}}`),
@@ -57,10 +57,10 @@ func (o *setupOperation) Invoke(ctx context.Context, request operation.Request) 
 	}
 	response, err := request.Interaction.Request(ctx, interaction.Request{
 		Name:        setupOperationName,
-		Description: "Tool invocation payload and output limits.",
+		Description: "Tool payload limits and text output truncation.",
 		Fields: []interaction.Field{
 			{Name: "max_arguments_bytes", Label: "Max Arguments Bytes", Kind: interaction.FieldInteger, Required: false, Default: &interaction.Value{Kind: interaction.ValueInteger, Integer: int64(effectiveCurrent.MaxArgumentsBytes)}},
-			{Name: "max_text_bytes", Label: "Max Text Bytes", Kind: interaction.FieldInteger, Required: false, Default: &interaction.Value{Kind: interaction.ValueInteger, Integer: int64(effectiveCurrent.MaxTextBytes)}},
+			{Name: "max_text_bytes", Label: "Max Text Bytes (Including Truncation Notice)", Kind: interaction.FieldInteger, Required: false, Default: &interaction.Value{Kind: interaction.ValueInteger, Integer: int64(effectiveCurrent.MaxTextBytes)}},
 			{Name: "max_inline_part_bytes", Label: "Max Inline Part Bytes", Kind: interaction.FieldInteger, Required: false, Default: &interaction.Value{Kind: interaction.ValueInteger, Integer: int64(effectiveCurrent.MaxInlinePartBytes)}},
 			{Name: "max_inline_bytes", Label: "Max Inline Bytes", Kind: interaction.FieldInteger, Required: false, Default: &interaction.Value{Kind: interaction.ValueInteger, Integer: int64(effectiveCurrent.MaxInlineBytes)}},
 		},
