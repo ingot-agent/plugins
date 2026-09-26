@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"math"
-	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -78,9 +77,7 @@ func TestCountResolvesCompleteRequestAndPreservesOwnership(t *testing.T) {
 		received.Tools[0].InputSchema[0] = 'X'
 		return requestWithDefaults(request, "deepseek", "deepseek-chat"), nil
 	})
-	exports, cleanup, err := New(context.Background(), withState(t, Config{Routes: []Route{{
-		Provider: "deepseek", ModelPattern: `deepseek-.*`, Profile: unicodeEstimateSource,
-	}}}, Dependencies{Resolver: resolver}))
+	exports, cleanup, err := New(context.Background(), withState(t, Config{}, Dependencies{Resolver: resolver}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -115,30 +112,28 @@ func TestUnicodeEstimateProfileFixedVector(t *testing.T) {
 	}
 }
 
-func TestRoutesUseProviderExactModelFullMatchAndFirstMatch(t *testing.T) {
+func TestAllModelsUseUnicodeEstimateEvenWithLegacyRoutes(t *testing.T) {
 	t.Parallel()
-	first := &testProfile{source: "first", accuracy: usage.AccuracyEstimate}
-	second := &testProfile{source: "second", accuracy: usage.AccuracyEstimate}
-	routes := []compiledRoute{
-		{provider: "p", pattern: mustRegexp(t, `model-.*`), profile: first},
-		{provider: "p", pattern: mustRegexp(t, `.*`), profile: second},
+	legacy := Config{Routes: []Route{{Provider: "deepseek", ModelPattern: "(", Profile: deepSeekV4Source}}}
+	exports, cleanup, err := New(context.Background(), withState(t, legacy, Dependencies{Resolver: resolverFunc(passthroughResolver)}))
+	if err != nil {
+		t.Fatal(err)
 	}
-	selected, index, ok := selectProfile(routes, "p", "model-one")
-	if !ok || index != 0 || selected.Source() != "first" {
-		t.Fatalf("selected=%v index=%d ok=%v", selected, index, ok)
-	}
-	if _, _, ok = selectProfile(routes, "other", "model-one"); ok {
-		t.Fatal("provider match was not exact")
-	}
-	partial := []compiledRoute{{provider: "p", pattern: mustRegexp(t, `model`), profile: first}}
-	if _, _, ok = selectProfile(partial, "p", "model-one"); ok {
-		t.Fatal("model regexp matched only a substring")
+	defer cleanup(context.Background())
+	for _, target := range []struct{ provider, model string }{
+		{"deepseek", "deepseek-v4-flash"},
+		{"openai", "gpt-any"},
+		{"custom", "unknown-model"},
+	} {
+		request := usage.CountRequest{Invocation: model.Request{Provider: target.provider, Model: target.model, Messages: []model.Message{{Role: model.RoleUser, Content: textContent("hello")}}}}
+		result, err := exports.Counter.CountInput(context.Background(), request)
+		if err != nil || result.Source != unicodeEstimateSource || result.Accuracy != usage.AccuracyEstimate || result.Provider != target.provider || result.Model != target.model || result.InputTokens != 10 {
+			t.Fatalf("target=%+v result=%+v error=%v", target, result, err)
+		}
 	}
 }
 
-// TestNewAllowsUnconfiguredRoutes proves ADR 0003 §2: a Plugin with no routes
-// yet still constructs so the user can add them through the setup Operation.
-func TestNewAllowsUnconfiguredRoutes(t *testing.T) {
+func TestNewCountsWithoutConfiguration(t *testing.T) {
 	t.Parallel()
 	exports, cleanup, err := New(context.Background(), withState(t, Config{}, Dependencies{Resolver: resolverFunc(passthroughResolver)}))
 	if err != nil {
@@ -148,9 +143,9 @@ func TestNewAllowsUnconfiguredRoutes(t *testing.T) {
 	if exports.Counter == nil || len(exports.Operations) != 1 {
 		t.Fatalf("exports = %#v", exports)
 	}
-	// Counting still fails closed until a route matches.
-	if _, err := exports.Counter.CountInput(context.Background(), usage.CountRequest{Invocation: model.Request{Provider: "p", Model: "m"}}); !errors.Is(err, usage.ErrUnsupportedModel) {
-		t.Fatalf("unconfigured counter error = %v", err)
+	result, err := exports.Counter.CountInput(context.Background(), usage.CountRequest{Invocation: model.Request{Provider: "p", Model: "m"}})
+	if err != nil || result.Source != unicodeEstimateSource {
+		t.Fatalf("unconfigured counter result = %+v, error = %v", result, err)
 	}
 }
 
@@ -165,10 +160,7 @@ func TestNewRejectsInvalidConfigAndDependencies(t *testing.T) {
 	}{
 		{name: "nil resolver", cfg: validConfig()},
 		{name: "typed nil resolver", cfg: validConfig(), deps: Dependencies{Resolver: typedNil}},
-		{name: "empty route", cfg: Config{Routes: []Route{{}}}, deps: Dependencies{Resolver: validResolver}},
-		{name: "invalid regexp", cfg: Config{Routes: []Route{{Provider: "p", ModelPattern: "(", Profile: unicodeEstimateSource}}}, deps: Dependencies{Resolver: validResolver}},
-		{name: "unknown profile", cfg: Config{Routes: []Route{{Provider: "p", ModelPattern: ".*", Profile: "missing"}}}, deps: Dependencies{Resolver: validResolver}},
-		{name: "negative cache", cfg: Config{Routes: validConfig().Routes, CacheEntries: -1}, deps: Dependencies{Resolver: validResolver}},
+		{name: "negative cache", cfg: Config{CacheEntries: -1}, deps: Dependencies{Resolver: validResolver}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -180,7 +172,7 @@ func TestNewRejectsInvalidConfigAndDependencies(t *testing.T) {
 	}
 }
 
-func TestUnsupportedModelAndResolverErrorsRemainClassified(t *testing.T) {
+func TestResolverErrorsRemainClassified(t *testing.T) {
 	t.Parallel()
 	resolverErr := errors.New("resolver failed")
 	exports, cleanup, err := New(context.Background(), withState(t, validConfig(), Dependencies{Resolver: resolverFunc(func(context.Context, model.Request) (model.Request, error) {
@@ -201,35 +193,54 @@ func TestUnsupportedModelAndResolverErrorsRemainClassified(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer cleanup(context.Background())
-	if _, err = exports.Counter.CountInput(context.Background(), usage.CountRequest{}); !errors.Is(err, usage.ErrUnsupportedModel) {
-		t.Fatalf("unsupported error=%v", err)
+	result, err := exports.Counter.CountInput(context.Background(), usage.CountRequest{})
+	if err != nil || result.Model != "other" || result.Source != unicodeEstimateSource {
+		t.Fatalf("other model result=%+v error=%v", result, err)
 	}
 }
 
-func TestCountRejectsMediaInsteadOfSilentlyCountingZero(t *testing.T) {
-	profile := &testProfile{source: "text-only", accuracy: usage.AccuracyEstimate, count: 1}
-	counter := newCounter(
-		resolverFunc(passthroughResolver),
-		[]compiledRoute{{provider: "p", pattern: mustRegexp(t, `model`), profile: profile}},
-		1,
-	)
+func TestCountSkipsNonTextParts(t *testing.T) {
+	counter := newCounter(resolverFunc(passthroughResolver), unicodeEstimateProfile{}, 1)
 	inline := []byte("image")
 	request := usage.CountRequest{Invocation: model.Request{
 		Provider: "p", Model: "model",
-		Messages: []model.Message{{Role: model.RoleUser, Content: content.Content{
-			content.Text("describe"),
-			content.Inline(content.KindImage, "image/png", "x.png", inline),
-		}}},
+		Messages: []model.Message{
+			{Role: model.RoleUser, Content: content.Content{
+				content.Text("hello"),
+				content.Inline(content.KindImage, "image/png", "x.png", inline),
+				content.Text("世界"),
+			}},
+			{Role: model.RoleUser, Content: content.Content{
+				content.Inline(content.KindAudio, "audio/wav", "clip.wav", []byte("audio")),
+			}},
+		},
 	}}
-	_, err := counter.CountInput(context.Background(), request)
-	if !errors.Is(err, usage.ErrUnsupportedModel) {
-		t.Fatalf("error=%v", err)
-	}
-	if profile.calls.Load() != 0 {
-		t.Fatalf("text profile was called %d times", profile.calls.Load())
+	result, err := counter.CountInput(context.Background(), request)
+	if err != nil || result.InputTokens != 17 || result.Source != unicodeEstimateSource {
+		t.Fatalf("result=%+v error=%v", result, err)
 	}
 	if string(inline) != "image" {
 		t.Fatalf("caller media was mutated: %q", inline)
+	}
+}
+
+func TestMediaDoesNotChangeTextEstimateCacheKey(t *testing.T) {
+	profile := &testProfile{source: unicodeEstimateSource, accuracy: usage.AccuracyEstimate, count: 10}
+	counter := newCounter(resolverFunc(passthroughResolver), profile, 2)
+	for _, payload := range []string{"first", "second"} {
+		request := usage.CountRequest{Invocation: model.Request{Provider: "p", Model: "model", Messages: []model.Message{{
+			Role: model.RoleUser,
+			Content: content.Content{
+				content.Text("same"),
+				content.Inline(content.KindImage, "image/png", "x.png", []byte(payload)),
+			},
+		}}}}
+		if _, err := counter.CountInput(context.Background(), request); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if profile.calls.Load() != 1 {
+		t.Fatalf("profile called %d times, want 1", profile.calls.Load())
 	}
 }
 
@@ -241,6 +252,7 @@ func TestInvalidRequestsAreRejectedWithoutLeakingContent(t *testing.T) {
 	tests := []model.Request{
 		{Messages: []model.Message{{Role: "unknown"}}},
 		{Messages: []model.Message{{Role: model.RoleUser, Content: textContent(invalidUTF8)}}},
+		{Messages: []model.Message{{Role: model.RoleUser, Content: content.Content{{Kind: content.KindImage, Text: "invalid"}}}}},
 		{Messages: []model.Message{{Role: model.RoleAssistant, Content: textContent("TOP-SECRET"), ToolCalls: []tool.Call{{ID: "", Name: "tool", Arguments: json.RawMessage(`{}`)}}}}},
 		{Messages: []model.Message{{Role: model.RoleAssistant, ToolCalls: []tool.Call{{ID: "call", Name: "tool", Arguments: json.RawMessage(`{`)}}}}},
 		{Tools: []tool.Definition{{Name: "tool", InputSchema: json.RawMessage(`{`)}}},
@@ -266,7 +278,7 @@ func TestInvalidRequestsAreRejectedWithoutLeakingContent(t *testing.T) {
 func TestCacheHitEvictionAndClosedState(t *testing.T) {
 	t.Parallel()
 	profile := &testProfile{source: "test-v1", accuracy: usage.AccuracyExact, count: 42}
-	counter := newCounter(resolverFunc(passthroughResolver), []compiledRoute{{provider: "p", pattern: mustRegexp(t, `.*`), profile: profile}}, 1)
+	counter := newCounter(resolverFunc(passthroughResolver), profile, 1)
 	first := usage.CountRequest{Invocation: validRequest("one")}
 	result, err := counter.CountInput(context.Background(), first)
 	if err != nil || result.InputTokens != 42 || result.Accuracy != usage.AccuracyExact {
@@ -300,7 +312,7 @@ func TestProfileFailuresAndNegativeCountsAreClassified(t *testing.T) {
 		{source: "error-v1", accuracy: usage.AccuracyEstimate, err: wantErr},
 		{source: "negative-v1", accuracy: usage.AccuracyEstimate, count: -1},
 	} {
-		counter := newCounter(resolverFunc(passthroughResolver), []compiledRoute{{provider: "p", pattern: mustRegexp(t, `.*`), profile: profile}}, 1)
+		counter := newCounter(resolverFunc(passthroughResolver), profile, 1)
 		_, err := counter.CountInput(context.Background(), usage.CountRequest{Invocation: validRequest("secret-prompt")})
 		if !errors.Is(err, ErrCountFailed) {
 			t.Fatalf("source=%q error=%v", profile.source, err)
@@ -320,7 +332,7 @@ func TestSameKeySingleFlightAndCanceledWaiter(t *testing.T) {
 		source: "blocking-v1", accuracy: usage.AccuracyEstimate, count: 7,
 		entered: make(chan struct{}, 1), release: make(chan struct{}),
 	}
-	counter := newCounter(resolverFunc(passthroughResolver), []compiledRoute{{provider: "p", pattern: mustRegexp(t, `.*`), profile: profile}}, 2)
+	counter := newCounter(resolverFunc(passthroughResolver), profile, 2)
 	request := usage.CountRequest{Invocation: validRequest("same")}
 	firstDone := make(chan error, 1)
 	go func() {
@@ -359,7 +371,7 @@ func TestSameKeySingleFlightAndCanceledWaiter(t *testing.T) {
 func TestDifferentKeysCountConcurrently(t *testing.T) {
 	t.Parallel()
 	profile := &testProfile{source: "parallel-v1", accuracy: usage.AccuracyEstimate, count: 1, entered: make(chan struct{}, 2), release: make(chan struct{})}
-	counter := newCounter(resolverFunc(passthroughResolver), []compiledRoute{{provider: "p", pattern: mustRegexp(t, `.*`), profile: profile}}, 2)
+	counter := newCounter(resolverFunc(passthroughResolver), profile, 2)
 	var wait sync.WaitGroup
 	wait.Add(2)
 	for _, content := range []string{"one", "two"} {
@@ -383,7 +395,7 @@ func TestDifferentKeysCountConcurrently(t *testing.T) {
 }
 
 func validConfig() Config {
-	return Config{Routes: []Route{{Provider: "p", ModelPattern: "model", Profile: unicodeEstimateSource}}}
+	return Config{CacheEntries: defaultCacheEntries}
 }
 
 func validRequest(content string) model.Request {
@@ -402,13 +414,4 @@ func requestWithDefaults(request model.Request, provider, modelName string) mode
 	request.Provider = provider
 	request.Model = modelName
 	return request
-}
-
-func mustRegexp(t *testing.T, pattern string) *regexp.Regexp {
-	t.Helper()
-	compiled, err := regexp.Compile(pattern)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return compiled
 }

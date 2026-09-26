@@ -5,9 +5,9 @@ import (
 	"testing"
 
 	"github.com/ingot-agent/ingot-abi"
+	usagedefault "github.com/ingot-agent/plugins/usage-default"
 	"github.com/ingot-agent/sdk/model"
 	"github.com/ingot-agent/sdk/usage"
-	usagedefault "github.com/ingot-agent/plugins/usage-default"
 )
 
 type contractResolver struct{}
@@ -26,9 +26,7 @@ func TestPublicComponentContract(t *testing.T) {
 	t.Parallel()
 	var constructor func(context.Context, usagedefault.Dependencies) (usagedefault.Exports, ingotabi.Cleanup, error) = usagedefault.New
 	_ = constructor
-	exports, cleanup, err := usagedefault.New(context.Background(), withState(t, usagedefault.Config{
-		Routes: []usagedefault.Route{{Provider: "provider", ModelPattern: "model", Profile: "unicode-estimate-v1"}},
-	}, usagedefault.Dependencies{Resolver: contractResolver{}}))
+	exports, cleanup, err := usagedefault.New(context.Background(), withState(t, usagedefault.Config{}, usagedefault.Dependencies{Resolver: contractResolver{}}))
 	if err != nil {
 		t.Fatal(err)
 	}

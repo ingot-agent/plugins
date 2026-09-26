@@ -81,7 +81,7 @@ dependencies, operations/tools, state, defaults and limitations.
 | [tool-runtime](tool-runtime/README.md) | `tool.runtime` | Lookup, JSON schema validation and interception |
 | [tool-shell](tool-shell/README.md) | `tool.shell` | Session-workspace shell execution |
 | [tool-subagent](tool-subagent/README.md) | `tool.subagent` | Child-agent discovery, creation and control |
-| [usage-default](usage-default/README.md) | `usage.default` | Model-aware token counting and accuracy reporting |
+| [usage-default](usage-default/README.md) | `usage.default` | Unicode input-token estimation and accuracy reporting |
 
 ## Repository boundary and validation
 

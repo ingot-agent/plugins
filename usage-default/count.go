@@ -20,7 +20,6 @@ func (c *counter) CountInput(ctx context.Context, request usage.CountRequest) (u
 	if err := ctx.Err(); err != nil {
 		return usage.CountResult{}, err
 	}
-	configuration := c.config.Load()
 	owned := cloneRequest(request.Invocation)
 	if err := validateRequest(owned, false); err != nil {
 		return usage.CountResult{}, err
@@ -33,16 +32,20 @@ func (c *counter) CountInput(ctx context.Context, request usage.CountRequest) (u
 	if err := validateRequest(resolved, true); err != nil {
 		return usage.CountResult{}, err
 	}
-	selected, routeIndex, ok := selectProfile(configuration.routes, resolved.Provider, resolved.Model)
-	if !ok {
-		return usage.CountResult{}, fmt.Errorf("provider %q model %q has no matching route: %w", resolved.Provider, resolved.Model, ErrUnsupportedModel)
+	for i := range resolved.Messages {
+		parts := resolved.Messages[i].Content
+		textParts := make(content.Content, 0, len(parts))
+		for _, part := range parts {
+			if part.Kind == content.KindText {
+				textParts = append(textParts, part)
+			}
+		}
+		resolved.Messages[i].Content = textParts
 	}
-	if hasMedia(resolved) {
-		return usage.CountResult{}, fmt.Errorf("provider %q model %q profile %q has no reliable multimodal counting strategy: %w", resolved.Provider, resolved.Model, selected.Source(), ErrUnsupportedModel)
-	}
+	selected := c.profile
 	key, err := requestCacheKey(selected.Source(), resolved)
 	if err != nil {
-		return usage.CountResult{}, fmt.Errorf("build count cache key for route %d: %w: %w", routeIndex, ErrCountFailed, err)
+		return usage.CountResult{}, fmt.Errorf("build count cache key: %w: %w", ErrCountFailed, err)
 	}
 
 	c.mu.Lock()
@@ -99,17 +102,6 @@ func (c *counter) CountInput(ctx context.Context, request usage.CountRequest) (u
 	close(pending.done)
 	c.mu.Unlock()
 	return result, countErr
-}
-
-func hasMedia(request model.Request) bool {
-	for _, message := range request.Messages {
-		for _, part := range message.Content {
-			if part.Kind != content.KindText {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 func (c *counter) addCache(key string, result usage.CountResult) {
