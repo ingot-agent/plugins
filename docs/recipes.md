@@ -115,11 +115,11 @@ ingot --home ./.ingot project resolve -f ../plugins/docs/recipes/base-chat.toml
 ingot --home ./.ingot project show -f ../plugins/docs/recipes/base-chat.toml
 ingot --home ./.ingot build chat -f ../plugins/docs/recipes/base-chat.toml --locked
 ingot --home ./.ingot runtime command set chat -- web
-ingot --home ./.ingot start chat --foreground
+ingot --home ./.ingot start chat
 ```
 
 成功后打开 `http://127.0.0.1:7316/`。前台终端保持运行，`Ctrl+C` 停止；
-后续也可以执行 `ingot --home ./.ingot start chat` 后台启动，并用
+后续也可以执行 `ingot --home ./.ingot start chat -d` 后台启动，并用
 `ingot --home ./.ingot stop chat` 停止、`ingot --home ./.ingot logs chat` 看日志。
 
 Recipe 旁会产生对应的 lock 文件及写入锁文件。这些是本地验证产物，包含
