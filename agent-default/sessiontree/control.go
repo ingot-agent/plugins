@@ -251,12 +251,29 @@ func (t *tree) Settle(ctx context.Context, handle sessioncontrol.Handle, confirm
 }
 
 func (t *tree) ValidateTools(definitions []tool.Definition) error {
-	if !t.config.enabled {
-		return nil
-	}
 	available := make(map[string]struct{}, len(definitions))
 	for _, definition := range definitions {
 		available[definition.Name] = struct{}{}
+	}
+	if t.config.builtin {
+		if _, ok := available[submitToolName]; !ok {
+			// The tool plugin is not installed: preserve the base Agent composition.
+			return nil
+		}
+		if t.repository == nil || t.workspace == nil {
+			return fmt.Errorf("built-in child agents require child Session storage and workspace management: %w", agent.ErrChildUnsupported)
+		}
+		config, err := builtinConfiguration(available)
+		if err != nil {
+			return err
+		}
+		if err := t.repository.RecoverChildSessions(t.startupCtx, agent.ChildRecoveryRequest{Reason: "runtime_restart"}); err != nil {
+			return fmt.Errorf("recover child sessions: %w", err)
+		}
+		t.config = config
+	}
+	if !t.config.enabled {
+		return nil
 	}
 	for name, entry := range t.config.definitions {
 		for _, toolName := range entry.definition.Tools {

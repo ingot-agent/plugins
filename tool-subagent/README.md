@@ -2,7 +2,7 @@
 
 `tool.subagent` 将 SDK `agent.Children` 能力投影成模型可以调用的七个工具。模块路径为 `github.com/ingot-agent/plugins/tool-subagent`，插件 ID 为 `tool.subagent`，组件为 `default`（包 `.`），兼容 Ingot `>=0.3.0 <0.4.0`，见 [manifest](ingot.plugin.toml)。
 
-唯一依赖为 `agent.Children`，导出 `[]tool.Tool`。该插件不持有 Session 存储、不调度子 Agent、不分配 Workspace，也没有私有 `config.toml` 或配置 Operation。Agent 类型、授权关系、并发和数量限制由所选 `agent.Children` 实现决定；官方实现见 [agent.default](../agent-default/README.md)。
+唯一依赖为 `agent.Children`，导出 `[]tool.Tool`。该插件不持有 Session 存储、不调度子 Agent、不分配 Workspace，也没有私有 `config.toml` 或配置 Operation。Agent 类型、授权关系、并发和数量限制由所选 `agent.Children` 实现决定。当前 `agent.default` 在没有 `subagents.toml` 时，只要组合装有本插件的 `submit_agent_result`、子 Session 存储及 Workspace 管理能力，就默认提供 `coder`、`explorer`、`reviewer` 三种类型；类型的工具白名单只包含已安装的工具。`coder` 可使用已安装的读、搜、编辑、shell 工具，另两种类型只允许读、搜；三者都必须调用 `submit_agent_result` 完成，均不能派发下一级。显式 `subagents.toml` 完整覆盖默认定义，包含空定义时也可禁用。详见 [agent.default](../agent-default/README.md#child-agent-configuration)。
 
 ## 工具接口
 
@@ -22,7 +22,7 @@
 {"agent_type":"reviewer","task":"检查本次修改的兼容性","workspace_root":"/absolute/path/to/project","wait":false}
 ```
 
-`reviewer` 仅是示例，先查询 `list_agent_types` 使用真实配置的类型。Workspace Root 直接作为 `workspace.Binding` 交给 Children 实现做规范化和验证；工具本身不会创建 Git worktree 或复制代码。子 Agent 可以共享同一个目录，冲突控制需要任务编排方处理。
+`reviewer` 是 `agent.default` 在缺少 `subagents.toml` 时提供的内建类型之一；显式配置可以覆盖或禁用它。先查询 `list_agent_types` 使用当前真正允许的类型。Workspace Root 直接作为 `workspace.Binding` 交给 Children 实现做规范化和验证；工具本身不会创建 Git worktree 或复制代码。子 Agent 可以共享同一个目录，冲突控制需要任务编排方处理。
 
 未提供 `wait_agent.timeout_ms` 时仅由父 context 或子执行完成结束等待。单次等待超时返回 `wait_timeout`，**不会取消子 Agent**；需要取消时显式调用 `cancel_agent`。
 

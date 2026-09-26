@@ -52,6 +52,7 @@ type definitionEntry struct {
 
 type configuration struct {
 	enabled     bool
+	builtin     bool
 	rootAllowed []string
 	definitions map[string]definitionEntry
 }
@@ -62,7 +63,9 @@ func loadConfiguration(root string) (configuration, error) {
 	}
 	raw, err := os.ReadFile(filepath.Join(root, configFileName))
 	if errors.Is(err, os.ErrNotExist) {
-		return configuration{definitions: map[string]definitionEntry{}}, nil
+		// Tool availability is only known when the Agent Runtime is constructed.
+		// Defer selecting built-ins until ValidateTools sees the composed graph.
+		return configuration{builtin: true, definitions: map[string]definitionEntry{}}, nil
 	}
 	if err != nil {
 		return configuration{}, fmt.Errorf("read %s: %w", configFileName, err)
@@ -73,6 +76,10 @@ func loadConfiguration(root string) (configuration, error) {
 	if err := decoder.Decode(&document); err != nil {
 		return configuration{}, fmt.Errorf("decode %s: %w", configFileName, err)
 	}
+	return configurationFromDocument(document)
+}
+
+func configurationFromDocument(document fileConfig) (configuration, error) {
 	if document.Version != configVersion {
 		return configuration{}, fmt.Errorf("subagents_config_version must be %d", configVersion)
 	}

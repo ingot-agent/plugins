@@ -108,9 +108,29 @@ Inline non-text content is materialized into `asset.Store` before persistence.
 
 The separate `subagents.toml` in the same plugin state scope is read once by the
 session-tree component. It is not edited by `/agent-default config`, and changing
-it requires restarting/reconstructing the runtime. Missing file or an empty
-`agents` list disables child-agent support; child-management calls then return
-`agent.ErrChildUnsupported`.
+it requires restarting/reconstructing the runtime. **When the file is absent**
+and the composed tool runtime provides `submit_agent_result` (from `tool-subagent`),
+three built-in root types are enabled if the composition also provides child
+Session storage and a workspace manager (for example `session-sqlite`):
+
+| Type | Purpose | Allowed tools when installed |
+| --- | --- | --- |
+| `coder` | Bounded implementation tasks | `read_file`, `search`, `edit_file`, `shell_exec`, `submit_agent_result` |
+| `explorer` | Read-only investigation | `read_file`, `search`, `submit_agent_result` |
+| `reviewer` | Read-only code review | `read_file`, `search`, `submit_agent_result` |
+
+Unavailable optional tools are omitted from each built-in allowlist; all types
+always have `submit_agent_result`, and none may spawn further children. Install
+`tool-edit` for reading/searching/editing and `tool-shell` for shell commands;
+with only `tool-subagent`, the built-ins have no inspection or editing tools.
+Shell commands run with host privileges, so `coder` is **not** a security sandbox;
+use `interceptor-approval` for interactive approval if needed. Without
+`submit_agent_result`, the missing file leaves child support disabled, preserving
+compositions that do not include `tool-subagent`. A missing storage or workspace
+capability with `tool-subagent` installed is a startup error, not silent fallback.
+
+A **present** file replaces the built-ins completely (even if it contains an
+empty `agents` list). Use this to disable or customize the default types:
 
 ```toml
 subagents_config_version = 1

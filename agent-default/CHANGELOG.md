@@ -6,6 +6,10 @@ All notable changes to this plugin are documented in this file.
 
 ### Added
 
+- Enable three built-in child types (`coder`, `explorer`, `reviewer`) when no
+  `subagents.toml` exists and the composed tool runtime includes
+  `submit_agent_result`; filter their tool allowlists by installed tools.
+  An explicit config file still overrides or disables the defaults.
 - Add the `session-tree` component for configured single-Turn child Sessions,
   persistent state recovery, ancestry authorization, queueing, cancellation,
   interruption, and bounded settlement.
