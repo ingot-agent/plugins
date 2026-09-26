@@ -137,3 +137,12 @@ See [responses.go](responses.go), [protocol.go](protocol.go), [stream.go](stream
 and [setup_internal_test.go](setup_internal_test.go) verify mapping, SSE behavior,
 unsupported inputs, live snapshots, and secret-preserving setup using local test
 endpoints. See [CONTRIBUTING](../CONTRIBUTING.md) for workspace instructions.
+
+## Transient failures
+
+The adapter marks dispatch/response-read network interruptions and HTTP 408,
+429, 500, 502, 503, and 504 as retryable for callers that support retries.
+It parses `Retry-After` (seconds or HTTP-date) as a bounded delay hint. Invalid
+requests, decoding errors, and cancellation are not marked. In streaming mode,
+the caller must additionally check that no events were delivered before replay.
+A retry may still incur duplicate provider charges.
