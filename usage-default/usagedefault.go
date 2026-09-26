@@ -1,5 +1,5 @@
-// Package usagedefault implements model-aware input counting with configured
-// provider/model routing and bounded in-memory caching.
+// Package usagedefault estimates model input tokens with a Unicode heuristic
+// and bounded in-memory caching.
 package usagedefault
 
 import (
@@ -8,9 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
-	"regexp"
 	"sync"
-	"unicode/utf8"
+	"sync/atomic"
 
 	"github.com/ingot-agent/ingot-abi"
 	"github.com/ingot-agent/ingot-abi/state"
@@ -22,12 +21,11 @@ import (
 const defaultCacheEntries = 1024
 
 var (
-	// ErrInvalidConfig indicates invalid routes, cache limits, or dependencies.
+	// ErrInvalidConfig indicates invalid cache limits or dependencies.
 	ErrInvalidConfig = errors.New("invalid usage.default config")
 	// ErrInvalidRequest indicates malformed model invocation data.
 	ErrInvalidRequest = errors.New("invalid usage count request")
-	// ErrUnsupportedModel aliases the SDK classification used when no route or
-	// profile supports a resolved provider/model pair.
+	// ErrUnsupportedModel aliases the SDK classification for unsupported content.
 	ErrUnsupportedModel = usage.ErrUnsupportedModel
 	// ErrCountFailed indicates that a selected profile could not produce a
 	// valid count.
@@ -36,13 +34,14 @@ var (
 	ErrClosed = errors.New("usage counter is closed")
 )
 
-// Config controls provider/model routes and the bounded result cache.
+// Config controls the bounded result cache. Routes is read only for
+// compatibility with existing plugin state and is ignored by the counter.
 type Config struct {
 	Routes       []Route `toml:"routes"`
 	CacheEntries int     `toml:"cache_entries"`
 }
 
-// Route selects one built-in profile for a provider and full model regexp.
+// Route is the legacy on-disk route format.
 type Route struct {
 	Provider     string `toml:"provider"`
 	ModelPattern string `toml:"model_pattern"`
@@ -63,12 +62,6 @@ type Exports struct {
 	Operations []operation.Operation
 }
 
-type compiledRoute struct {
-	provider string
-	pattern  *regexp.Regexp
-	profile  profile
-}
-
 type cacheEntry struct {
 	key    string
 	result usage.CountResult
@@ -82,8 +75,8 @@ type flight struct {
 
 type counter struct {
 	resolver model.RequestResolver
-	routes   []compiledRoute
-	capacity int
+	profile  profile
+	config   atomic.Pointer[counterConfig]
 
 	mu       sync.Mutex
 	closed   bool
@@ -92,9 +85,12 @@ type counter struct {
 	inflight map[string]*flight
 }
 
-// New loads this Plugin's own configuration from its state scope, validates
-// all routes, and constructs an independent counter instance. A missing
-// configuration file is the normal Unconfigured state; defaults apply.
+type counterConfig struct {
+	capacity int
+}
+
+// New loads this Plugin's own configuration and constructs a Unicode-estimate
+// counter for every resolved provider and model.
 func New(ctx context.Context, deps Dependencies) (Exports, ingotabi.Cleanup, error) {
 	if ctx == nil {
 		return Exports{}, nil, fmt.Errorf("construct usage.default: nil context: %w", ErrInvalidConfig)
@@ -114,20 +110,6 @@ func New(ctx context.Context, deps Dependencies) (Exports, ingotabi.Cleanup, err
 	if err != nil {
 		return Exports{}, nil, fmt.Errorf("construct usage.default: %w: %w", err, ErrInvalidConfig)
 	}
-	profiles, err := builtInProfiles()
-	if err != nil {
-		return Exports{}, nil, fmt.Errorf("initialize built-in profiles: %w: %w", ErrInvalidConfig, err)
-	}
-	// An Unconfigured Plugin has no routes yet. It still constructs so the user
-	// can add routes through the setup Operation; a count then fails with
-	// ErrUnsupportedModel until a route matches.
-	var routes []compiledRoute
-	if len(cfg.Routes) > 0 {
-		routes, err = compileRoutes(cfg.Routes, profiles)
-		if err != nil {
-			return Exports{}, nil, err
-		}
-	}
 	capacity := cfg.CacheEntries
 	if capacity < 0 {
 		return Exports{}, nil, fmt.Errorf("cache_entries must not be negative: %w", ErrInvalidConfig)
@@ -135,9 +117,7 @@ func New(ctx context.Context, deps Dependencies) (Exports, ingotabi.Cleanup, err
 	if capacity == 0 {
 		capacity = defaultCacheEntries
 	}
-	active := cloneConfig(cfg)
-	active.CacheEntries = capacity
-	instance := newCounter(deps.Resolver, routes, capacity)
+	instance := newCounter(deps.Resolver, unicodeEstimateProfile{}, capacity)
 	cleanup := ingotabi.Cleanup(func(cleanupCtx context.Context) error {
 		if cleanupCtx == nil {
 			return errors.New("cleanup usage.default: nil context")
@@ -148,55 +128,27 @@ func New(ctx context.Context, deps Dependencies) (Exports, ingotabi.Cleanup, err
 		instance.close()
 		return nil
 	})
-	return Exports{Counter: instance, Operations: []operation.Operation{&setupOperation{scope: deps.State, providerSources: append([]model.ProviderSource(nil), deps.ProviderSources...), active: active}}}, cleanup, nil
+	return Exports{Counter: instance, Operations: []operation.Operation{&setupOperation{scope: deps.State, counter: instance}}}, cleanup, nil
 }
 
-func newCounter(resolver model.RequestResolver, routes []compiledRoute, capacity int) *counter {
-	return &counter{
+func newCounter(resolver model.RequestResolver, selected profile, capacity int) *counter {
+	instance := &counter{
 		resolver: resolver,
-		routes:   routes,
-		capacity: capacity,
+		profile:  selected,
 		cache:    make(map[string]*list.Element, capacity),
 		recent:   list.New(),
 		inflight: make(map[string]*flight),
 	}
+	instance.config.Store(&counterConfig{capacity: capacity})
+	return instance
 }
 
-func compileRoutes(routes []Route, profiles map[string]profile) ([]compiledRoute, error) {
-	if len(routes) == 0 {
-		return nil, fmt.Errorf("routes must not be empty: %w", ErrInvalidConfig)
-	}
-	result := make([]compiledRoute, len(routes))
-	for i, route := range routes {
-		if route.Provider == "" || route.ModelPattern == "" || route.Profile == "" {
-			return nil, fmt.Errorf("routes[%d] requires provider, model_pattern, and profile: %w", i, ErrInvalidConfig)
-		}
-		if !utf8.ValidString(route.Provider) || !utf8.ValidString(route.ModelPattern) || !utf8.ValidString(route.Profile) {
-			return nil, fmt.Errorf("routes[%d] contains invalid UTF-8: %w", i, ErrInvalidConfig)
-		}
-		selected, ok := profiles[route.Profile]
-		if !ok {
-			return nil, fmt.Errorf("routes[%d] profile %q is unknown: %w", i, route.Profile, ErrInvalidConfig)
-		}
-		if selected.Source() == "" || !utf8.ValidString(selected.Source()) || !validAccuracy(selected.Accuracy()) {
-			return nil, fmt.Errorf("routes[%d] profile %q has invalid metadata: %w", i, route.Profile, ErrInvalidConfig)
-		}
-		pattern, err := regexp.Compile(route.ModelPattern)
-		if err != nil {
-			return nil, fmt.Errorf("routes[%d] model_pattern: %w: %w", i, ErrInvalidConfig, err)
-		}
-		result[i] = compiledRoute{provider: route.Provider, pattern: pattern, profile: selected}
-	}
-	return result, nil
-}
-
-func validAccuracy(value usage.Accuracy) bool {
-	switch value {
-	case usage.AccuracyExact, usage.AccuracyUpperBound, usage.AccuracyEstimate:
-		return true
-	default:
-		return false
-	}
+func (c *counter) applyConfig(capacity int) {
+	c.config.Store(&counterConfig{capacity: capacity})
+	c.mu.Lock()
+	clear(c.cache)
+	c.recent.Init()
+	c.mu.Unlock()
 }
 
 func (c *counter) close() {
@@ -205,19 +157,6 @@ func (c *counter) close() {
 	c.closed = true
 	clear(c.cache)
 	c.recent.Init()
-}
-
-func selectProfile(routes []compiledRoute, provider, modelName string) (profile, int, bool) {
-	for i, route := range routes {
-		if route.provider != provider {
-			continue
-		}
-		match := route.pattern.FindStringIndex(modelName)
-		if match != nil && match[0] == 0 && match[1] == len(modelName) {
-			return route.profile, i, true
-		}
-	}
-	return nil, -1, false
 }
 
 func isNil(value any) bool {

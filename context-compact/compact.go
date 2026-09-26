@@ -12,6 +12,11 @@ import (
 )
 
 func (r *compactor) Compact(ctx context.Context, input contextwindow.CompactionRequest) (contextwindow.CompactionResult, error) {
+	snapshot := &compactor{model: r.model, store: r.store, cfg: *r.config.Load(), gates: r.gates}
+	return snapshot.compact(ctx, input)
+}
+
+func (r *compactor) compact(ctx context.Context, input contextwindow.CompactionRequest) (contextwindow.CompactionResult, error) {
 	if ctx == nil {
 		return contextwindow.CompactionResult{}, fmt.Errorf("nil context: %w", ErrInvalidRequest)
 	}

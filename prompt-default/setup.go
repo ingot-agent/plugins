@@ -24,8 +24,8 @@ const (
 // scope. The Plugin owns validation and persistence; the Host never decodes
 // plugin configuration.
 type setupOperation struct {
-	scope  state.Scope
-	active normalizedConfig
+	scope    state.Scope
+	renderer *renderer
 }
 
 var _ operation.Operation = (*setupOperation)(nil)
@@ -97,11 +97,8 @@ func (o *setupOperation) Invoke(ctx context.Context, request operation.Request) 
 	if err := saveConfig(o.scope.Dir(), updated); err != nil {
 		return operation.Result{}, err
 	}
-	output, err := json.Marshal(map[string]any{"restart_required": normalized != o.active})
-	if err != nil {
-		return operation.Result{}, err
-	}
-	return operation.Result{Output: output}, nil
+	o.renderer.config.Store(&normalized)
+	return operation.Result{Output: json.RawMessage(`{"restart_required":false}`)}, nil
 }
 
 func answerInteger(response interaction.Response, name string) (int64, bool) {

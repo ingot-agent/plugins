@@ -1,0 +1,38 @@
+# Current checkout recipe; see ../recipes.md. Paths are relative to this file.
+plugins_version = 1
+
+[[plugins]]
+module = "github.com/ingot-agent/plugins/asset-local"
+path = "../../asset-local"
+
+[[plugins]]
+module = "github.com/ingot-agent/plugins/http-default"
+path = "../../http-default"
+
+[[plugins]]
+module = "github.com/ingot-agent/plugins/model-openai-compatible"
+path = "../../model-openai-compatible"
+
+[[plugins]]
+module = "github.com/ingot-agent/plugins/model-runtime"
+path = "../../model-runtime"
+
+[[plugins]]
+module = "github.com/ingot-agent/plugins/tool-runtime"
+path = "../../tool-runtime"
+
+[[plugins]]
+module = "github.com/ingot-agent/plugins/prompt-default"
+path = "../../prompt-default"
+
+[[plugins]]
+module = "github.com/ingot-agent/plugins/session-sqlite"
+path = "../../session-sqlite"
+
+[[plugins]]
+module = "github.com/ingot-agent/plugins/agent-default"
+path = "../../agent-default"
+
+[[plugins]]
+module = "github.com/ingot-agent/plugins/app-webui"
+path = "../../app-webui"

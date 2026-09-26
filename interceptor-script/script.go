@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -83,6 +84,17 @@ type normalizedHook struct {
 	maxOutput   int
 }
 
+type hookSnapshot struct {
+	tool   []normalizedHook
+	model  []normalizedHook
+	stream []normalizedHook
+	agent  []normalizedHook
+}
+
+type hookRuntime struct {
+	current atomic.Pointer[hookSnapshot]
+}
+
 // New loads this Plugin's own hook declarations from its state scope and
 // exports target-specific wrappers in declaration order. A missing
 // configuration file is the normal Unconfigured state: no hooks are active.
@@ -100,32 +112,36 @@ func New(ctx context.Context, deps Dependencies) (Exports, ingotabi.Cleanup, err
 	if err != nil {
 		return Exports{}, nil, fmt.Errorf("construct interceptor.script: %w: %w", err, ErrInvalidConfig)
 	}
-	seen := make(map[string]struct{}, len(cfg.Hooks))
-	normalizedHooks := make([]normalizedHook, 0, len(cfg.Hooks))
-	var exports Exports
-	for i, candidate := range cfg.Hooks {
-		hook, err := normalizeHook(candidate)
-		if err != nil {
-			return Exports{}, nil, fmt.Errorf("hooks[%d]: %w", i, err)
-		}
-		if _, exists := seen[hook.name]; exists {
-			return Exports{}, nil, fmt.Errorf("hooks[%d] duplicate name %q: %w", i, hook.name, ErrInvalidConfig)
-		}
-		seen[hook.name] = struct{}{}
-		normalizedHooks = append(normalizedHooks, hook)
+	normalizedHooks, err := normalizeHooks(cfg)
+	if err != nil {
+		return Exports{}, nil, err
+	}
+	runtime := &hookRuntime{}
+	runtime.current.Store(prepareHookSnapshot(normalizedHooks))
+	return Exports{
+		ToolInterceptors:   []tool.Interceptor{&toolDispatcher{runtime: runtime}},
+		ModelInterceptors:  []model.Interceptor{&modelDispatcher{runtime: runtime}},
+		StreamInterceptors: []model.StreamInterceptor{&streamDispatcher{runtime: runtime}},
+		AgentInterceptors:  []agent.Interceptor{&agentDispatcher{runtime: runtime}},
+		Operations:         []operation.Operation{&setupOperation{scope: deps.State, runtime: runtime}},
+	}, nil, nil
+}
+
+func prepareHookSnapshot(hooks []normalizedHook) *hookSnapshot {
+	snapshot := &hookSnapshot{}
+	for _, hook := range hooks {
 		switch hook.target {
 		case "tool":
-			exports.ToolInterceptors = append(exports.ToolInterceptors, &toolHook{hook: hook})
+			snapshot.tool = append(snapshot.tool, hook)
 		case "model":
-			exports.ModelInterceptors = append(exports.ModelInterceptors, &modelHook{hook: hook})
+			snapshot.model = append(snapshot.model, hook)
 		case "model-stream":
-			exports.StreamInterceptors = append(exports.StreamInterceptors, &streamHook{hook: hook})
+			snapshot.stream = append(snapshot.stream, hook)
 		case "agent":
-			exports.AgentInterceptors = append(exports.AgentInterceptors, &agentHook{hook: hook})
+			snapshot.agent = append(snapshot.agent, hook)
 		}
 	}
-	exports.Operations = []operation.Operation{&setupOperation{scope: deps.State, active: normalizedHooks}}
-	return exports, nil, nil
+	return snapshot
 }
 
 func normalizeHook(cfg Hook) (normalizedHook, error) {
@@ -201,6 +217,63 @@ type modelHook struct{ hook normalizedHook }
 type streamHook struct{ hook normalizedHook }
 type agentHook struct{ hook normalizedHook }
 
+type toolDispatcher struct{ runtime *hookRuntime }
+type modelDispatcher struct{ runtime *hookRuntime }
+type streamDispatcher struct{ runtime *hookRuntime }
+type agentDispatcher struct{ runtime *hookRuntime }
+
+func (d *toolDispatcher) Invoke(ctx context.Context, request tool.Invocation, next pipeline.Next[tool.Invocation, tool.Result]) (tool.Result, error) {
+	if next == nil {
+		return tool.Result{}, errors.New("script tool interceptor: nil next")
+	}
+	hooks := d.runtime.current.Load().tool
+	interceptors := make([]tool.Interceptor, len(hooks))
+	for i, hook := range hooks {
+		interceptors[i] = &toolHook{hook: hook}
+	}
+	return pipeline.Compose[tool.Invocation, tool.Result](next, interceptors...)(ctx, request)
+}
+
+func (d *modelDispatcher) Invoke(ctx context.Context, request model.Request, next pipeline.Next[model.Request, model.Response]) (model.Response, error) {
+	if next == nil {
+		return model.Response{}, errors.New("script model interceptor: nil next")
+	}
+	hooks := d.runtime.current.Load().model
+	interceptors := make([]model.Interceptor, len(hooks))
+	for i, hook := range hooks {
+		interceptors[i] = &modelHook{hook: hook}
+	}
+	return pipeline.Compose[model.Request, model.Response](next, interceptors...)(ctx, request)
+}
+
+func (d *streamDispatcher) InvokeStream(ctx context.Context, request model.Request, handler model.StreamHandler, next model.StreamNext) (model.Response, error) {
+	if next == nil {
+		return model.Response{}, errors.New("script stream interceptor: nil next")
+	}
+	selected := next
+	hooks := d.runtime.current.Load().stream
+	for i := len(hooks) - 1; i >= 0; i-- {
+		hook := &streamHook{hook: hooks[i]}
+		following := selected
+		selected = func(callCtx context.Context, call model.Request, callHandler model.StreamHandler) (model.Response, error) {
+			return hook.InvokeStream(callCtx, call, callHandler, following)
+		}
+	}
+	return selected(ctx, request, handler)
+}
+
+func (d *agentDispatcher) Invoke(ctx context.Context, request agent.Turn, next pipeline.Next[agent.Turn, agent.Result]) (agent.Result, error) {
+	if next == nil {
+		return agent.Result{}, errors.New("script agent interceptor: nil next")
+	}
+	hooks := d.runtime.current.Load().agent
+	interceptors := make([]agent.Interceptor, len(hooks))
+	for i, hook := range hooks {
+		interceptors[i] = &agentHook{hook: hook}
+	}
+	return pipeline.Compose[agent.Turn, agent.Result](next, interceptors...)(ctx, request)
+}
+
 func (h *toolHook) Invoke(ctx context.Context, request tool.Invocation, next pipeline.Next[tool.Invocation, tool.Result]) (tool.Result, error) {
 	if next == nil {
 		return tool.Result{}, errors.New("script tool interceptor: nil next")
@@ -266,6 +339,10 @@ func (h *agentHook) Invoke(ctx context.Context, request agent.Turn, next pipelin
 }
 
 var (
+	_ tool.Interceptor        = (*toolDispatcher)(nil)
+	_ model.Interceptor       = (*modelDispatcher)(nil)
+	_ model.StreamInterceptor = (*streamDispatcher)(nil)
+	_ agent.Interceptor       = (*agentDispatcher)(nil)
 	_ tool.Interceptor        = (*toolHook)(nil)
 	_ model.Interceptor       = (*modelHook)(nil)
 	_ model.StreamInterceptor = (*streamHook)(nil)

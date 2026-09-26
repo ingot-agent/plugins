@@ -6,6 +6,8 @@ All notable changes to this plugin are documented in this file.
 
 ### Changed
 
+- Apply shell, timeout, output, and environment updates to the running tool
+  immediately and return `restart_required:false`.
 - Expose configuration as `/tool-shell config` using a stable plugin Group and local operation Name.
 - Distinguish inherit-all, inherit-none, and selected environment inheritance,
   preserving nil and explicit empty configuration states.

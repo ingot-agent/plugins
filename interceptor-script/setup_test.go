@@ -9,6 +9,7 @@ import (
 
 	"github.com/ingot-agent/sdk/interaction"
 	"github.com/ingot-agent/sdk/operation"
+	"github.com/ingot-agent/sdk/tool"
 )
 
 type setupChannel struct {
@@ -143,6 +144,60 @@ func TestSetupRenamesHookAndAppliesExplicitEnvironmentActions(t *testing.T) {
 	want := map[string]string{"RENAMED": "secret", "REPLACE": "new", "CLEAR": "", "EMPTY": ""}
 	if !reflect.DeepEqual(stored.Hooks[0].Environment, want) {
 		t.Fatalf("environment = %#v, want %#v", stored.Hooks[0].Environment, want)
+	}
+	dispatcher := exports.ToolInterceptors[0].(*toolDispatcher)
+	running := dispatcher.runtime.current.Load()
+	if len(running.tool) != 1 || running.tool[0].name != "renamed" || running.tool[0].environment[0] != "CLEAR=" {
+		t.Fatalf("running hooks = %#v", running.tool)
+	}
+}
+
+func TestSetupAddsHookToInitiallyEmptyRuntime(t *testing.T) {
+	scope := testStateScope{dir: writeTestConfig(t, Config{})}
+	exports, _, err := New(context.Background(), Dependencies{State: scope})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dispatcher := exports.ToolInterceptors[0].(*toolDispatcher)
+	if hooks := dispatcher.runtime.current.Load().tool; len(hooks) != 0 {
+		t.Fatalf("initial hooks = %#v", hooks)
+	}
+
+	hook := helperHook(t, "reject")
+	args := make([]interaction.Value, 0, len(hook.Args))
+	for _, argument := range hook.Args {
+		args = append(args, interaction.StringValue(argument))
+	}
+	coverDir := hook.Environment["GOCOVERDIR"]
+	channel := &setupChannel{respond: func(interaction.Request) (interaction.Response, error) {
+		return interaction.Response{Values: []interaction.Answer{{Name: "hooks", Value: interaction.ListValue([]interaction.Value{
+			interaction.ObjectValue([]interaction.Entry{
+				{Name: "source", Value: interaction.StringValue("")},
+				{Name: "name", Value: interaction.StringValue(hook.Name)},
+				{Name: "target", Value: interaction.StringValue(hook.Target)},
+				{Name: "executable", Value: interaction.StringValue(hook.Executable)},
+				{Name: "args", Value: interaction.ListValue(args)},
+				{Name: "timeout_seconds", Value: interaction.IntegerValue(int64(hook.TimeoutSeconds))},
+				{Name: "environment", Value: interaction.ListValue([]interaction.Value{
+					setupEnvironmentValue("", "GOCOVERDIR", environmentValueReplace, &coverDir),
+				})},
+			}),
+		})}}}, nil
+	}}
+	if _, err := exports.Operations[0].Invoke(context.Background(), operation.Request{Interaction: channel}); err != nil {
+		t.Fatal(err)
+	}
+	if hooks := dispatcher.runtime.current.Load().tool; len(hooks) != 1 || hooks[0].name != hook.Name {
+		t.Fatalf("running hooks = %#v", hooks)
+	}
+
+	called := false
+	_, err = exports.ToolInterceptors[0].Invoke(context.Background(), tool.Invocation{Call: tool.Call{Arguments: json.RawMessage(`{}`)}}, func(context.Context, tool.Invocation) (tool.Result, error) {
+		called = true
+		return tool.Result{}, nil
+	})
+	if !errors.Is(err, ErrHookRejected) || called {
+		t.Fatalf("error = %v, called = %v", err, called)
 	}
 }
 

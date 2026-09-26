@@ -32,16 +32,20 @@ func (c *counter) CountInput(ctx context.Context, request usage.CountRequest) (u
 	if err := validateRequest(resolved, true); err != nil {
 		return usage.CountResult{}, err
 	}
-	selected, routeIndex, ok := selectProfile(c.routes, resolved.Provider, resolved.Model)
-	if !ok {
-		return usage.CountResult{}, fmt.Errorf("provider %q model %q has no matching route: %w", resolved.Provider, resolved.Model, ErrUnsupportedModel)
+	for i := range resolved.Messages {
+		parts := resolved.Messages[i].Content
+		textParts := make(content.Content, 0, len(parts))
+		for _, part := range parts {
+			if part.Kind == content.KindText {
+				textParts = append(textParts, part)
+			}
+		}
+		resolved.Messages[i].Content = textParts
 	}
-	if hasMedia(resolved) {
-		return usage.CountResult{}, fmt.Errorf("provider %q model %q profile %q has no reliable multimodal counting strategy: %w", resolved.Provider, resolved.Model, selected.Source(), ErrUnsupportedModel)
-	}
+	selected := c.profile
 	key, err := requestCacheKey(selected.Source(), resolved)
 	if err != nil {
-		return usage.CountResult{}, fmt.Errorf("build count cache key for route %d: %w: %w", routeIndex, ErrCountFailed, err)
+		return usage.CountResult{}, fmt.Errorf("build count cache key: %w: %w", ErrCountFailed, err)
 	}
 
 	c.mu.Lock()
@@ -100,21 +104,10 @@ func (c *counter) CountInput(ctx context.Context, request usage.CountRequest) (u
 	return result, countErr
 }
 
-func hasMedia(request model.Request) bool {
-	for _, message := range request.Messages {
-		for _, part := range message.Content {
-			if part.Kind != content.KindText {
-				return true
-			}
-		}
-	}
-	return false
-}
-
 func (c *counter) addCache(key string, result usage.CountResult) {
 	element := c.recent.PushFront(cacheEntry{key: key, result: result})
 	c.cache[key] = element
-	if c.recent.Len() <= c.capacity {
+	if c.recent.Len() <= c.config.Load().capacity {
 		return
 	}
 	oldest := c.recent.Back()

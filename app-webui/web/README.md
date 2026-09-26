@@ -4,7 +4,7 @@ Vue 3 / TypeScript / Vite / Tailwind CSS 4 单页工作区。使用 Pinia、Vue 
 
 ## 开发与构建
 
-推荐 Node 24。在本目录执行：
+`package.json` 要求 Node `>=22.12`，推荐 Node 24；需要 npm 与 Go（浏览器 fixture 会运行 Go 测试）。在本目录执行：
 
 ```sh
 npm ci
@@ -13,13 +13,23 @@ npm run dev
 
 Vite 监听 `127.0.0.1:5173`，将 `/api` 代理到 `http://127.0.0.1:7316`。先启动已组合的 Web 后端，或使用下方测试服务。其他后端地址使用 `INGOT_API_URL=http://127.0.0.1:PORT npm run dev`。
 
+上述行内环境变量写法适用于 POSIX Shell。PowerShell 中改为：
+
+```powershell
+$env:INGOT_API_URL = 'http://127.0.0.1:7316'
+npm run dev
+```
+
 ```sh
 npm run lint
+npm run typecheck
 npm test
 npm run build
 ```
 
-`build` 先做 Vue/TypeScript 类型检查，再写入 `../app/webdist/`。源代码、lockfile 和这个嵌入目录一起提交；Go 用户无需安装 Node。`npm run check:dist` 重建并检查该目录的 Git 状态，供干净 checkout 的 CI 检查产物是否过期；本地尚未提交产物时出现差异是预期的。
+`build` 先做 Vue/TypeScript 类型检查，再清空并重新写入 `../app/webdist/`。源代码、lockfile 和这个嵌入目录一起提交；Go 用户无需安装 Node。`npm run check:dist` 重建并检查该目录相对于 Git 的已暂存、未暂存及未跟踪差异，供干净 checkout 的 CI 检查产物是否过期；本地尚未提交产物时出现差异是预期的。只修改前端源文件不会改变已经嵌入现有 Runtime Image 的 UI，需重新构建该本地模块对应的 Runtime Image 并重启。
+
+`npm run preview` 用于本地预览已构建产物。Vite 本身不提供 Agent 能力，涉及会话、执行和配置时仍需要 Go 后端；生产 UI 由 Go 服务同源提供。
 
 ## 浏览器回归
 
@@ -36,6 +46,8 @@ Playwright 启动两个真实 Go HTTP/SSE 服务（`17316` 流式、`17317` Run-
 `INGOT_WEBUI_FIXTURE_GOWORK=/absolute/path/to/go.work npm run test:e2e`；该选项只影响
 测试子进程，不改变插件的发布依赖。
 
+PowerShell 对应设置为 `$env:INGOT_WEBUI_FIXTURE_GOWORK = 'D:\absolute\path\go.work'`；测试结束后可用 `Remove-Item Env:INGOT_WEBUI_FIXTURE_GOWORK` 恢复默认。不要将本机路径提交进模块或 package.json。
+
 使用已有 Chromium 时可指定 `INGOT_TEST_CHROMIUM=/absolute/path/to/chrome npm run test:e2e`。手动预览测试数据：
 
 ```sh
@@ -43,6 +55,8 @@ INGOT_WEBUI_FIXTURE_ADDR=127.0.0.1:7316 node scripts/fixture.mjs
 ```
 
 打开 `http://127.0.0.1:7316/`；输入含 `approve`、`ask`、`hold`、`fail` 分别触发审批、自由输入、等待取消和失败。其他输入返回固定文本。这不是生产 Agent，数据只存在于进程内；重新构建嵌入文件后需要重启测试服务。
+
+fixture 通过 `go test -run '^TestBrowserFixture$' -count=1 -timeout 0 -v ./app` 启动；Playwright 自己负责启动两个 fixture，不会复用端口上已有的服务。若端口被占用、Go 依赖不可获得或 Chromium 未安装，先解决对应环境问题；修改 Web 界面后必须先执行 `npm run build`，浏览器测试读取的是 Go 嵌入产物而不是 Vite 开发服务器。
 
 ## 状态边界
 

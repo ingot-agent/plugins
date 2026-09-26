@@ -15,6 +15,8 @@ All notable changes to this plugin are documented in this file.
 - Bound summary inputs with ordered UTF-8 fragment extraction and merging, sharing
   one model-call budget across all stages. Persist only complete round coverage.
 - Write v2 checkpoints; ignore known v1 chains while preserving sequence order.
+- Apply compaction policy updates to the running compactor immediately and
+  return `restart_required:false`.
 - Consume provider entries with required Complete and optional Stream callbacks;
   remove dependency on the former provider execution interfaces.
 - Discover provider choices through live `model.ProviderSource` snapshots,
@@ -22,8 +24,8 @@ All notable changes to this plugin are documented in this file.
 - Expose configuration as `/context-compact config` using a stable plugin Group and local operation Name.
 - Validate setup with the same normalization used at construction and present
   the available providers as a closed choice.
-- Reject stale configuration writes and report restart requirements against
-  the running configuration.
+- Reject stale configuration writes and revalidate provider selections at the
+  commit boundary.
 
 ## 0.1.0 - 2026-09-13
 

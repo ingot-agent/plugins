@@ -23,8 +23,8 @@ const (
 // structured interaction request and persists the answer in its own state
 // scope. The Host never decodes plugin configuration.
 type setupOperation struct {
-	scope  state.Scope
-	active Config
+	scope state.Scope
+	store *store
 }
 
 var _ operation.Operation = (*setupOperation)(nil)
@@ -116,14 +116,31 @@ func (o *setupOperation) Invoke(ctx context.Context, request operation.Request) 
 	if err := ctx.Err(); err != nil {
 		return operation.Result{}, err
 	}
-	if err := saveConfig(o.scope.Dir(), updated); err != nil {
+	o.store.configMu.Lock()
+	if err := ctx.Err(); err != nil {
+		o.store.configMu.Unlock()
 		return operation.Result{}, err
 	}
+	o.store.mu.Lock()
+	totalBytes := o.store.total
+	o.store.mu.Unlock()
+	if totalBytes > uint64(effective.MaxTotalBytes) {
+		o.store.configMu.Unlock()
+		return operation.Result{}, fmt.Errorf("stored assets exceed configured capacity: %w", ErrCapacity)
+	}
+	if err := saveConfig(o.scope.Dir(), updated); err != nil {
+		o.store.configMu.Unlock()
+		return operation.Result{}, err
+	}
+	o.store.maxObject = uint64(effective.MaxObjectBytes)
+	o.store.maxTotal = uint64(effective.MaxTotalBytes)
+	o.store.limiter.setLimit(effective.IOConcurrency)
+	o.store.configMu.Unlock()
 	output, err := json.Marshal(map[string]any{
 		"max_object_bytes": updated.MaxObjectBytes,
 		"max_total_bytes":  updated.MaxTotalBytes,
 		"io_concurrency":   updated.IOConcurrency,
-		"restart_required": effective != o.active,
+		"restart_required": false,
 	})
 	if err != nil {
 		return operation.Result{}, err

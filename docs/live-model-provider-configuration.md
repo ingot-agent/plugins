@@ -1,5 +1,8 @@
 # Live model provider configuration
 
+This document describes the model-specific part of the repository-wide
+[live official plugin configuration](live-plugin-configuration.md) contract.
+
 The configuration Operations of `model-openai-compatible`,
 `model-openai-responses`, and `model-runtime` apply successful changes to the
 running process. Adding a provider to an already-loaded plugin makes it
@@ -69,9 +72,12 @@ fail until it is configured again; explicit valid requests and configuration
 remain available. Invalid or duplicate directory entries require repair before
 the directory can be used.
 
-Provider choices in `model-runtime`, `agent-default`, and `context-compact`,
-and suggestions in `usage-default`, use current source snapshots. Existing
-forms remain immutable; closed choices are revalidated at submission. Model
+Provider choices in `model-runtime`, `agent-default`, and `context-compact`
+use current source snapshots. `usage-default` estimates input tokens with
+`unicode-estimate-v1` for every resolved model and has no provider route
+configuration. Non-text content is skipped by this estimate. Existing forms
+remain immutable; closed choices are revalidated
+at submission. Model
 and reasoning-effort choices in `model-runtime` use provider capability
 directories, while changes to other plugins' configuration are not applied
 live. Existing explicit agent or context provider or model overrides continue
@@ -79,11 +85,11 @@ to take precedence over runtime defaults.
 
 ## Configuration boundaries
 
-Configuration through the existing Operations needs no restart. This covers
-already-loaded plugins. Installing new plugin binaries follows the existing
-runtime image build and startup workflow. Editing state files directly does
-not trigger live reload. Provider state file formats and names are unchanged.
-Model enumeration and a new model-picker UI are outside this change.
+Model configuration through the existing Operations needs no restart. This
+covers already-loaded plugins. Installing new plugin binaries follows the
+existing runtime image build and startup workflow. Editing state files directly
+does not trigger live reload. Provider state file formats and names are
+unchanged. Model enumeration and a new model-picker UI are outside this change.
 
 ## Verification
 
@@ -109,7 +115,10 @@ and removes its workspace afterward. It preserves the repository's `go.work`
 and module dependency files. Caller settings such as `GOCACHE` remain in effect.
 No Core checkout or build is required.
 
-The six plugins pin SDK `v0.2.10` and build independently with `GOWORK=off`.
-The temporary workspace is only needed when testing further SDK changes from
+Five of these model-related plugins declare SDK `v0.2.10`; `agent-default`
+now declares `v0.2.11` for its child-agent contracts. Check each `go.mod` and
+the selected module graph: a composition uses one SDK version, and all modules
+must pass independent checks with `GOWORK=off`.
+The temporary workspace is used when testing further SDK changes from
 a local checkout. It leaves dependency files unchanged; do not add local
 `replace` directives or external SDK paths to the repository's `go.work`.

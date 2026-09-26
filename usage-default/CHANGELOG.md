@@ -6,15 +6,13 @@ All notable changes to this plugin are documented in this file.
 
 ### Changed
 
-- Consume provider entries with required Complete and optional Stream callbacks;
-  remove dependency on the former provider execution interfaces.
-- Refresh provider suggestions through live `model.ProviderSource` snapshots
-  when configuration is opened, while retaining routes for future providers.
-- Expose configuration as `/usage-default config` using a stable plugin Group and local operation Name.
-- Populate route forms with the saved provider, model pattern, and profile mappings.
-- Offer current providers as open suggestions for future-compatible routes,
-  reject stale writes, and report restart requirements against the running
-  configuration.
+- Use `unicode-estimate-v1` for every resolved provider and model without a
+  route table. Existing routes remain readable but are ignored and removed
+  when configuration is saved.
+- Skip non-text content parts when estimating input tokens, while continuing
+  to count text and message framing in multimodal requests.
+- Expose only cache size in `/usage-default config`; apply changes immediately,
+  reject stale writes, and return `restart_required:false`.
 
 ## 0.1.0 - 2026-09-13
 

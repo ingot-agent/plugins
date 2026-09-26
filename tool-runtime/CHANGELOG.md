@@ -12,8 +12,7 @@ All notable changes to this plugin are documented in this file.
   limit includes the notice and must be large enough to contain it. Inline
   media limits remain errors; discarded text is not saved automatically.
 - Expose configuration as `/tool-runtime config` using a stable plugin Group and local operation Name.
-- Reject non-positive limits during setup, prevent stale writes, and report
-  restart requirements against the running configuration.
+- Reject non-positive limits during setup and prevent stale writes.
 
 ## 0.1.0 - 2026-09-13
 

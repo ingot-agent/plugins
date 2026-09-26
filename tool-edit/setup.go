@@ -26,7 +26,7 @@ const setupOperationGroup = "tool-edit"
 // the decision of whether a change needs a restart.
 type setupOperation struct {
 	scope  state.Scope
-	active normalizedConfig
+	config *liveConfig
 }
 
 var _ operation.Operation = (*setupOperation)(nil)
@@ -118,12 +118,11 @@ func (o *setupOperation) Invoke(ctx context.Context, request operation.Request) 
 	if err := saveConfig(o.scope.Dir(), updated); err != nil {
 		return operation.Result{}, err
 	}
-	// The limits are captured at construction, so a change only takes effect
-	// after the runtime restarts.
+	o.config.current.Store(&normalized)
 	output, err := json.Marshal(map[string]any{
 		"max_file_bytes":   updated.MaxFileBytes,
 		"max_scan_bytes":   updated.MaxScanBytes,
-		"restart_required": normalized != o.active,
+		"restart_required": false,
 	})
 	if err != nil {
 		return operation.Result{}, err

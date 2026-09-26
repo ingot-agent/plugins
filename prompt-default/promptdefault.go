@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"unicode/utf8"
 
 	"github.com/ingot-agent/ingot-abi"
@@ -57,9 +58,7 @@ type Exports struct {
 }
 
 type renderer struct {
-	systemPrompt string
-	maxBlock     int
-	maxSystem    int
+	config       atomic.Pointer[normalizedConfig]
 	contributors []prompt.Contributor
 }
 
@@ -97,9 +96,11 @@ func New(ctx context.Context, deps Dependencies) (Exports, ingotabi.Cleanup, err
 		}
 		contributors[i] = contributor
 	}
+	instance := &renderer{contributors: contributors}
+	instance.config.Store(&normalized)
 	return Exports{
-		Renderer:   &renderer{systemPrompt: normalized.systemPrompt, maxBlock: normalized.maxBlock, maxSystem: normalized.maxSystem, contributors: contributors},
-		Operations: []operation.Operation{&setupOperation{scope: deps.State, active: normalized}},
+		Renderer:   instance,
+		Operations: []operation.Operation{&setupOperation{scope: deps.State, renderer: instance}},
 	}, nil, nil
 }
 
@@ -138,6 +139,7 @@ func (r *renderer) Render(ctx context.Context, request prompt.Request) ([]model.
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	configuration := *r.config.Load()
 	if err := content.Validate(request.Input); err != nil {
 		return nil, fmt.Errorf("input: %w: %w", ErrInvalidRequest, err)
 	}
@@ -166,14 +168,14 @@ func (r *renderer) Render(ctx context.Context, request prompt.Request) ([]model.
 			if err := content.Validate(block.Content); err != nil {
 				return nil, fmt.Errorf("contributor %d block %d content: %w: %w", i, j, ErrInvalidBlock, err)
 			}
-			if contentBytes(block.Content) > r.maxBlock {
+			if contentBytes(block.Content) > configuration.maxBlock {
 				return nil, fmt.Errorf("contributor %d block %d content: %w", i, j, ErrInvalidBlock)
 			}
 			blocks = append(blocks, prompt.Block{Name: block.Name, Content: content.Clone(block.Content)})
 		}
 	}
 
-	system, err := r.formatSystem(blocks)
+	system, err := r.formatSystem(blocks, configuration)
 	if err != nil {
 		return nil, err
 	}
@@ -186,11 +188,11 @@ func (r *renderer) Render(ctx context.Context, request prompt.Request) ([]model.
 	return result, nil
 }
 
-func (r *renderer) formatSystem(blocks []prompt.Block) (content.Content, error) {
+func (r *renderer) formatSystem(blocks []prompt.Block, configuration normalizedConfig) (content.Content, error) {
 	result := make(content.Content, 0, len(blocks)*2+1)
 	total := 0
-	if r.systemPrompt != "" {
-		value := r.systemPrompt
+	if configuration.systemPrompt != "" {
+		value := configuration.systemPrompt
 		if len(blocks) != 0 {
 			value += "\n\n"
 		}
@@ -202,13 +204,13 @@ func (r *renderer) formatSystem(blocks []prompt.Block) (content.Content, error) 
 		if i > 0 {
 			title = "\n\n" + title
 		}
-		if total > r.maxSystem-len(title) {
+		if total > configuration.maxSystem-len(title) {
 			return nil, ErrSystemLimit
 		}
 		result = append(result, content.Text(title))
 		total += len(title)
 		blockBytes := contentBytes(block.Content)
-		if blockBytes > r.maxSystem-total {
+		if blockBytes > configuration.maxSystem-total {
 			return nil, ErrSystemLimit
 		}
 		result = append(result, content.Clone(block.Content)...)

@@ -1,30 +1,30 @@
 # app.backend
 
-`app.backend` 是 ingot 的浏览器应用，包含 Vue 3 + Tailwind CSS 前端及轻量 HTTP/SSE 应用边界。插件目录名为 `app-webui`，manifest ID 保持 `app.backend`。它是一个包含两个组件的复合插件：
+`app.backend` 是 Ingot 的浏览器应用，包含 Vue 3 + Tailwind CSS 前端及 HTTP/SSE 应用边界。插件目录名为 `app-webui`，Go 模块为 `github.com/ingot-agent/plugins/app-webui`，manifest ID 为 `app.backend`，配置命令 Group 为 `app-webui`；这些标识各有用途，不能互换。[manifest](ingot.plugin.toml) 声明兼容 Ingot `>=0.3.0 <0.4.0`。它是一个包含两个组件的复合插件：
 
-- `host` 持有进程内的 `EventHub`、全局 `interaction.Channel`、显式作用域的 `interaction.ExecutionBinder` 和 `observation.Observer`。该组件没有依赖，因此 Agent 可以使用这些能力而不会在组件图中形成环。
-- `app` 持有 HTTP 服务器、Controller、运行中的 Turn，以及保留的 Operation 结果。它依赖 `agent.History`、`session.Store`、`session.Manager` 和 `session.Query`。相互独立且可选的 `agent.Runtime` 与 `agent.StreamingRuntime` 至少需要提供一个。`asset.Store` 是可选依赖，Operation 通过 `[]operation.Operation` 收集。
+- `host`（包 `./host`）依赖 ABI `state.Scope`，持有进程内的 `EventHub`，导出 `appbackend.Runtime`、全局 `interaction.Channel`、显式作用域的 `interaction.ExecutionBinder` 和 `observation.Observer`。该组件不依赖 Agent，因此 Agent 可以使用这些能力而不会在组件图中形成环。
+- `app`（包 `./app`）是没有能力导出的图叶节点，持有 HTTP 服务器、Controller、运行中的 Turn，以及保留的 Operation 结果。它依赖 host 的 `appbackend.Runtime`、`agent.History`、`session.Store`、`session.Manager`、`session.Query`、`workspace.Manager`、`workspace.Resolver`，以及 ABI `invocation.Invocation`、`lifecycle.Controller` 和 `state.Scope`。相互独立且可选的 `agent.Runtime` 与 `agent.StreamingRuntime` 至少需要提供一个。`asset.Store` 是可选依赖，Operation 通过 `[]operation.Operation` 收集；应用自身另外注册 `/app-webui config`。
 
-当前实现使用 `ingot-abi v0.1.0` 和正式发布的 `sdk v0.2.7`。插件不修改 SDK，也不额外覆盖工作区中的 SDK 选择。
+模块要求 Go 1.24.2，直接 SDK/ABI 版本由 [go.mod](go.mod) 固定，当前分别为 SDK `v0.2.10`、ABI `v0.1.0`。插件没有主程序，应由 Ingot Builder 组合成 Runtime Image。
 
 ## 启动 Web UI
 
-在已初始化、配置好模型供应商的 ingot home 中，用 Web 应用替换 CLI。以下命令从仓库根目录执行；使用独立 home 时，为每条命令添加相同的全局 `--home /path/to/home` 参数：
+安装当前 Ingot CLI 后，在用于运行 Agent 的项目目录执行以下命令。`ingot init` 生成项目 `plugins.toml`；官方 default/minimal profile 均包含本插件。此处不是从 plugins 仓库执行 `go build ./cmd/ingot`，CLI 源码和安装说明位于 [ingot 仓库](https://github.com/ingot-agent/ingot)。使用独立 Home 时，为每条命令添加相同的全局 `--home /absolute/path/to/home`：
 
 ```sh
-go build -o ingot ./cmd/ingot
-./ingot init                # 默认 profile 已包含 app.backend
-./ingot build --tag local/ingot:web
-./ingot runtime create web --image local/ingot:web -- web
-# 在 runtimes/web/state/ 下配置模型供应商与下方 app.backend 配置
-./ingot runtime run web
+ingot init
+ingot build web --tag local/ingot:web
+ingot runtime command set web -- web
+ingot start web
 ```
 
-`ingot runtime run web` 启动成功后会输出可点击的 Web 地址和打开提示；按 `Ctrl+C` 可停止服务。`web` 是 Runtime 的 default argv；HTTP 监听由应用组件的生命周期启动，不依赖 Builder 的专用命令或插件特判。不要同时保留 CLI 的 Interaction 提供者。
+`build web` 已创建或更新 Runtime 绑定，不需要再次 create。启动后打开默认地址 `http://127.0.0.1:7316/`，在配置命令中设置模型供应商和 Agent 模型选择，再发送消息；新插件没有配置文件时以 Unconfigured/default 状态启动。`ingot start web` 默认连接当前终端，按 `Ctrl+C` 可停止；`ingot start web -d` 后台启动并将输出写入日志文件，可用 `ingot logs web` 查看、`ingot stop web` 停止。
 
-前端产物通过 Go `embed` 编入 Runtime Image；运行时不需要 Node、Vite 或外部 CDN。前端源码和构建说明位于 [`web/`](./web/)。修改前端后需重新构建前端，再执行 `ingot build --tag local/ingot:web` 和 `ingot runtime switch web local/ingot:web`。
+最后一个 `web` 是保存给 Runtime 的 default argv，用来启用启动地址提示。HTTP 监听本身由应用组件生命周期启动，不依赖 Builder 的专用 Web 命令。使用已有 Image 创建另一个 Runtime 时，语法为 `ingot runtime create another local/ingot:web -- web`，随后执行 `ingot start another`。不要同时组合另一个全局 Interaction Channel 提供者，除非组件图已经明确消除了单值依赖歧义。
 
-初版面向可信的本机单用户环境，没有登录、多租户隔离或公网部署保护。请保持回环监听，不要直接暴露至局域网或互联网。
+前端产物通过 Go `embed` 编入 Runtime Image；运行时不需要 Node、Vite 或外部 CDN。前端源码和构建说明位于 [web/README.md](web/README.md)。开发本模块时，项目 recipe 必须引用你的本地模块修改；只修改 checkout 不会改变引用已发布版本的 recipe。重新构建前端后，从该项目执行 `ingot up web -- web`，重建、绑定并重新启动 Runtime；或依次 `ingot build web`、`ingot restart web`。已有 Image 的显式切换可使用 `ingot runtime switch web <image>`，再重启。
+
+当前面向可信的本机单用户环境，没有登录、多租户隔离或公网部署保护。HTTP API 能创建执行、修改会话、调用配置 Operation 和响应审批；请保持回环监听，不要直接暴露至局域网或互联网。Workspace 绑定不提供文件系统或网络沙箱。
 
 ## 工作区能力
 
@@ -51,10 +51,10 @@ go build -o ingot ./cmd/ingot
 
 ## 配置
 
-配置示例：
+`host` 与 `app` 共享插件 ID，读取同一个 state scope。托管 Runtime 的文件位置为 `<INGOT_HOME>/runtimes/<runtime>/state/app.backend/config.toml`。缺失文件使用默认值；未知字段、读取或解码错误会使构造失败。文件直接使用 `[backend]`，不使用旧式 `[plugins."app.backend".backend]`：
 
 ```toml
-[plugins."app.backend".backend]
+[backend]
 address = "127.0.0.1:7316"
 replay_capacity = 1024
 subscriber_buffer = 64
@@ -63,9 +63,22 @@ operation_retention = 128
 max_asset_bytes = 67108864
 ```
 
+| 字段 | 默认值 | 作用 |
+| --- | --- | --- |
+| `address` | `127.0.0.1:7316` | HTTP 监听地址，最终由 `net.Listen` 校验 |
+| `replay_capacity` | 1024 | 进程内 SSE replay 记录容量 |
+| `subscriber_buffer` | 64 | 每个 SSE subscriber 的事件缓冲 |
+| `heartbeat_interval_seconds` | 15 | SSE 心跳秒数 |
+| `operation_retention` | 128 | 保留的终态 Operation invocation 数量，运行中调用另行保留 |
+| `max_asset_bytes` | 67,108,864（64 MiB） | 单次 Asset 上传上限 |
+
+数值字段 `0` 选择默认值；负数无效，heartbeat 还检查 duration 溢出。`address` 空字符串选择默认值。`max_asset_bytes` 不是 JSON 请求上限，普通 JSON 请求另有固定的 1 MiB 上限。
+
+Web 命令 `/app-webui config`（Group `app-webui`、Name `config`、输入 `{}`）通过结构化交互修改上述六项，并原子写入插件配置。配置交互期间文件发生变化时拒绝覆盖。返回六个规范化字段和 `restart_required`：保存后的有效配置与当前启动配置不同时为 `true`。**本插件不热更新监听地址、缓冲或其他服务器设置**；执行 `ingot restart web` 后才使用新配置。仅保存与当前有效值相同的配置时返回 `false`。结果反映已保存的目标配置，重启前 `/api/state` 仍反映当前实例的有效状态。
+
 ## HTTP 接口
 
-M6 后端提供以下接口：
+当前后端提供以下接口，字段与投影定义见 [protocol.go](protocol.go)：
 
 | 功能 | HTTP 接口 |
 | --- | --- |
@@ -78,6 +91,20 @@ M6 后端提供以下接口：
 | Asset | `POST /api/assets`、`GET /api/assets/{id}` |
 | Operation | `GET /api/operations`、`POST /api/operations/{internal-id}`、`DELETE /api/operation-invocations/{id}` |
 | Interaction 响应 | `POST /api/interactions/{id}/response` |
+
+常用请求体示例：
+
+```json
+{"title":"发布检查","workspace":"/absolute/path/to/project"}
+```
+
+上述请求用于 `POST /api/sessions`，返回 `201` 和会话投影（含 `id`）；省略/清空 workspace 使用默认工作区。`PATCH /api/sessions/{id}` 使用 `{"title":"新标题"}`；一次性绑定工作区使用 `{"workspace":"/absolute/path"}`。新建 Turn 使用：
+
+```json
+{"sessionId":"session-id","input":"检查工作区","attachments":[{"kind":"image","mimeType":"image/png","name":"example.png","assetId":"asset-id"}]}
+```
+
+附件可省略；Asset 必须先上传。Turn 被接受时返回 `202` 与 `{"id":"invocation-id"}`，取消使用该 invocation ID 而非 Session ID。响应 Interaction 使用 `{"values":{"answer":"回答文本"}}`，审批则使用 `{"values":{"decision":"allow"}}`；字段名以 pending request 声明为准，成功响应为 `204`。错误包装统一为 `{"error":{"code":"...","message":"..."}}`。
 
 ## Turn 与流式输出
 
@@ -123,7 +150,7 @@ Operation 调用请求格式如下：
 
 Operation Definition 按组件图提供的顺序生成快照，并在服务器开始监听前编译其 Draft 2020-12 Schema。Schema 必须自包含：支持本地 `$ref`，不会获取外部资源。输入和成功结果都必须是满足对应 Schema 的 JSON 对象。
 
-每个 Definition 必须声明稳定的插件 `Group` 和组内局部 `Name`。Web UI 将其投影为 `/<group> <name>` 两级 Slash Command；同名 Operation 可以跨 Group 共存，但重复的 `(Group, Name)` 会在服务器启动前被拒绝。用户选择命令后，浏览器仍使用 Definition 的 internal ID 调用 HTTP API，命令文本不会发送给 Agent 或写入消息历史。
+每个 Definition 必须声明有效的局部 `Name`；`Group` 是可选的展示提示。Web UI 将有分组的定义投影为 `/<group> <name>` 两级 Slash Command，对空 Group 使用界面回退标签。空 Group 和重复 `(Group, Name)` 均允许，不会因此阻止启动；界面区分重复显示命令，HTTP 调用始终通过各自不同的 internal ID 路由。回退标签不会写回 Operation Group，命令文本不会发送给 Agent 或写入消息历史。
 
 对话 Composer 输入 `/` 时先展示 Group，选中后再展示该 Group 的 Operation。完整命令会立即打开 Operation 弹窗，Interaction 表单、运行状态、结果和显式取消均在弹窗内完成；`//` 用于发送以 `/` 开头的普通消息。主导航不再暴露调试页，原 `/operations` 路由保留在“设置 → 开发者”中。
 
@@ -165,8 +192,12 @@ State ID 仍然等于 `State.Name`；scope 不会生成新的全局 State identi
 
 ## 验证
 
-在插件目录中运行测试：
+在本模块目录中运行测试；以下环境变量写法适用于 POSIX Shell：
 
 ```sh
 GOWORK=off go test -race ./...
 ```
+
+PowerShell 使用 `$env:GOWORK = 'off'` 后执行 `go test ./...`；`-race` 需要当前平台具备相应 Go race/C 工具链。前端 lint、类型检查、单元测试与浏览器回归命令见 [前端开发说明](web/README.md)。现有后端测试覆盖真实 HTTP/SSE、工作区选择器、Asset、配置重启标记、Operation Schema、Interaction 作用域及进程关闭；浏览器 fixture 只在测试中提供。
+
+返回 [插件文档索引](../docs/README.md)。

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"reflect"
 	"regexp"
+	"sync/atomic"
 	"unicode/utf8"
 
 	"github.com/ingot-agent/ingot-abi"
@@ -71,13 +72,10 @@ type Exports struct {
 }
 
 type runtime struct {
-	definitions   []tool.Definition
-	entries       map[string]registeredTool
-	interceptors  []tool.Interceptor
-	maxArguments  int
-	maxText       int
-	maxInlinePart int
-	maxInline     int
+	definitions  []tool.Definition
+	entries      map[string]registeredTool
+	interceptors []tool.Interceptor
+	config       atomic.Pointer[Config]
 }
 
 type registeredTool struct {
@@ -138,17 +136,11 @@ func New(ctx context.Context, deps Dependencies) (Exports, ingotabi.Cleanup, err
 		}
 		interceptors[i] = interceptor
 	}
+	instance := &runtime{definitions: definitions, entries: entries, interceptors: interceptors}
+	instance.config.Store(&normalized)
 	return Exports{
-		Runtime: &runtime{
-			definitions:   definitions,
-			entries:       entries,
-			interceptors:  interceptors,
-			maxArguments:  normalized.MaxArgumentsBytes,
-			maxText:       normalized.MaxTextBytes,
-			maxInlinePart: normalized.MaxInlinePartBytes,
-			maxInline:     normalized.MaxInlineBytes,
-		},
-		Operations: []operation.Operation{&setupOperation{scope: deps.State, active: normalized}},
+		Runtime:    instance,
+		Operations: []operation.Operation{&setupOperation{scope: deps.State, runtime: instance}},
 	}, nil, nil
 }
 
@@ -235,8 +227,9 @@ func (r *runtime) Call(ctx context.Context, invocation tool.Invocation) (tool.Re
 	if err := ctx.Err(); err != nil {
 		return tool.Result{}, err
 	}
+	configuration := *r.config.Load()
 	call := invocation.Call
-	if len(call.Arguments) > r.maxArguments {
+	if len(call.Arguments) > configuration.MaxArgumentsBytes {
 		return tool.Result{}, fmt.Errorf("tool %q arguments exceed limit: %w", call.Name, tool.ErrInvalidArguments)
 	}
 	if !json.Valid(call.Arguments) {
@@ -299,7 +292,7 @@ func (r *runtime) Call(ctx context.Context, invocation tool.Invocation) (tool.Re
 	if !sameInvocation(request, original) {
 		return tool.Result{}, fmt.Errorf("tool %q: %w", original.Call.Name, ErrCallMutation)
 	}
-	if err := r.validateResult(call.Name, result); err != nil {
+	if err := r.validateResult(call.Name, result, configuration); err != nil {
 		return tool.Result{}, err
 	}
 	return tool.Result{Content: truncateText(result.Content, r.maxText)}, nil
@@ -315,7 +308,7 @@ func postDispatchRejection(name string, err error) error {
 	return fmt.Errorf("tool %q returned %v: %w", name, err, ErrPostDispatchRejection)
 }
 
-func (r *runtime) validateResult(name string, result tool.Result) error {
+func (r *runtime) validateResult(name string, result tool.Result, configuration Config) error {
 	if err := content.Validate(result.Content); err != nil {
 		return fmt.Errorf("tool %q returned invalid content: %w: %w", name, ErrInvalidResult, err)
 	}
@@ -327,11 +320,11 @@ func (r *runtime) validateResult(name string, result tool.Result) error {
 		if part.Media.Source.Kind != content.SourceInline {
 			continue
 		}
-		if len(part.Media.Source.Data) > r.maxInlinePart {
+		if len(part.Media.Source.Data) > configuration.MaxInlinePartBytes {
 			return fmt.Errorf("tool %q inline result part %d exceeds limit: %w", name, i, ErrInvalidResult)
 		}
 		inlineBytes += len(part.Media.Source.Data)
-		if inlineBytes > r.maxInline {
+		if inlineBytes > configuration.MaxInlineBytes {
 			return fmt.Errorf("tool %q total inline result exceeds limit: %w", name, ErrInvalidResult)
 		}
 	}
