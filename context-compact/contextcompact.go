@@ -99,6 +99,7 @@ type compactor struct {
 	counter usage.Counter
 	store   session.Store
 	cfg     normalizedConfig
+	config  atomic.Pointer[normalizedConfig]
 	gates   *gateManager
 }
 
@@ -126,7 +127,8 @@ func New(ctx context.Context, deps Dependencies) (Exports, ingotabi.Cleanup, err
 		return Exports{}, nil, err
 	}
 	instance := &compactor{model: deps.Model, counter: deps.Counter, store: deps.Store, cfg: normalized, gates: newGateManager()}
-	return Exports{Compactor: instance, Operations: []operation.Operation{&setupOperation{scope: deps.State, providerSources: append([]model.ProviderSource(nil), deps.ProviderSources...), active: normalized}}}, nil, nil
+	instance.config.Store(&normalized)
+	return Exports{Compactor: instance, Operations: []operation.Operation{&setupOperation{scope: deps.State, providerSources: append([]model.ProviderSource(nil), deps.ProviderSources...), compactor: instance}}}, nil, nil
 }
 
 func normalizeConfig(cfg Config) (normalizedConfig, error) {

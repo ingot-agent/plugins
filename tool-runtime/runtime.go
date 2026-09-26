@@ -295,7 +295,7 @@ func (r *runtime) Call(ctx context.Context, invocation tool.Invocation) (tool.Re
 	if err := r.validateResult(call.Name, result, configuration); err != nil {
 		return tool.Result{}, err
 	}
-	return tool.Result{Content: truncateText(result.Content, r.maxText)}, nil
+	return tool.Result{Content: truncateText(result.Content, configuration.MaxTextBytes)}, nil
 }
 
 func isPreDispatchRejection(err error) bool {

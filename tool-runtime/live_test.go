@@ -28,7 +28,7 @@ func TestSetupAppliesToRunningToolRuntime(t *testing.T) {
 	}
 	channel := &configTestChannel{values: []interaction.Answer{
 		{Name: "max_arguments_bytes", Value: interaction.IntegerValue(2)},
-		{Name: "max_text_bytes", Value: interaction.IntegerValue(32)},
+		{Name: "max_text_bytes", Value: interaction.IntegerValue(int64(minimumMaxTextBytes))},
 		{Name: "max_inline_part_bytes", Value: interaction.IntegerValue(32)},
 		{Name: "max_inline_bytes", Value: interaction.IntegerValue(64)},
 	}}

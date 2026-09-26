@@ -12,7 +12,7 @@ import (
 )
 
 func (r *compactor) Compact(ctx context.Context, input contextwindow.CompactionRequest) (contextwindow.CompactionResult, error) {
-	snapshot := &compactor{model: r.model, store: r.store, cfg: *r.config.Load(), gates: r.gates}
+	snapshot := &compactor{model: r.model, counter: r.counter, store: r.store, cfg: *r.config.Load(), gates: r.gates}
 	return snapshot.compact(ctx, input)
 }
 

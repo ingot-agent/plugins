@@ -47,7 +47,7 @@ func TestTextLimitConfiguration(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got := exports.Runtime.(*runtime).maxText; got != test.want {
+			if got := exports.Runtime.(*runtime).config.Load().MaxTextBytes; got != test.want {
 				t.Fatalf("max text=%d want=%d", got, test.want)
 			}
 		})
@@ -69,7 +69,9 @@ func TestSetupTextLimitDefaultAndMinimum(t *testing.T) {
 			channel := &setupChannel{response: interaction.Response{Values: []interaction.Answer{
 				{Name: "max_text_bytes", Value: interaction.Value{Kind: interaction.ValueInteger, Integer: int64(selected)}},
 			}}}
-			op := &setupOperation{scope: scope, active: active}
+			running := &runtime{}
+			running.config.Store(&active)
+			op := &setupOperation{scope: scope, runtime: running}
 			result, err := op.Invoke(context.Background(), operation.Request{Interaction: channel})
 			found := false
 			for _, field := range channel.request.Fields {
@@ -91,15 +93,21 @@ func TestSetupTextLimitDefaultAndMinimum(t *testing.T) {
 				if !errors.Is(err, ErrInvalidConfig) || stored != (Config{}) {
 					t.Fatalf("error=%v stored=%#v", err, stored)
 				}
+				if got := running.config.Load().MaxTextBytes; got != defaultMaxTextBytes {
+					t.Fatalf("running text limit=%d want=%d", got, defaultMaxTextBytes)
+				}
 				return
 			}
 			if err != nil || stored.MaxTextBytes != minimumMaxTextBytes {
 				t.Fatalf("error=%v stored=%#v", err, stored)
 			}
+			if got := running.config.Load().MaxTextBytes; got != minimumMaxTextBytes {
+				t.Fatalf("running text limit=%d want=%d", got, minimumMaxTextBytes)
+			}
 			var output struct {
 				RestartRequired bool `json:"restart_required"`
 			}
-			if err := json.Unmarshal(result.Output, &output); err != nil || !output.RestartRequired {
+			if err := json.Unmarshal(result.Output, &output); err != nil || output.RestartRequired {
 				t.Fatalf("output=%s error=%v", result.Output, err)
 			}
 		})
