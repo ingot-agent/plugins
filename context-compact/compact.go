@@ -12,7 +12,7 @@ import (
 )
 
 func (r *compactor) Compact(ctx context.Context, input contextwindow.CompactionRequest) (contextwindow.CompactionResult, error) {
-	snapshot := &compactor{model: r.model, counter: r.counter, store: r.store, cfg: *r.config.Load(), gates: r.gates}
+	snapshot := &compactor{model: r.model, counter: r.counter, resolver: r.resolver, store: r.store, cfg: *r.config.Load(), gates: r.gates}
 	return snapshot.compact(ctx, input)
 }
 
@@ -44,7 +44,7 @@ func (r *compactor) compact(ctx context.Context, input contextwindow.CompactionR
 	if err != nil {
 		return contextwindow.CompactionResult{}, err
 	}
-	// Reuse the counter's resolved defaults when the summarizer inherits this
+	// Reuse the counter's or resolver's defaults when the summarizer inherits this
 	// provider. A different summary provider may have its own default model.
 	summaryBase := cloneRequest(request)
 	if summaryBase.Provider == "" {

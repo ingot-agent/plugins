@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	ingotabi "github.com/ingot-agent/ingot-abi"
 	"github.com/ingot-agent/sdk/contextwindow"
 	"github.com/ingot-agent/sdk/model"
 	"github.com/ingot-agent/sdk/session"
@@ -38,7 +39,7 @@ func firstToolRound() model.Request {
 
 func newTokenTestCompactor(t *testing.T, cfg Config, counter usage.Counter, models model.Runtime, store *memoryStore) contextwindow.Compactor {
 	t.Helper()
-	exports, _, err := New(context.Background(), withState(t, cfg, Dependencies{Model: models, Counter: counter, Store: store}))
+	exports, _, err := New(context.Background(), withState(t, cfg, Dependencies{Model: models, Counter: ingotabi.Some[usage.Counter](counter), Store: store}))
 	if err != nil {
 		t.Fatal(err)
 	}

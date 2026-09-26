@@ -55,6 +55,10 @@ func (o *setupOperation) Invoke(ctx context.Context, request operation.Request) 
 	if err != nil {
 		return operation.Result{}, err
 	}
+	effective, err := normalizeConfig(current)
+	if err != nil {
+		return operation.Result{}, err
+	}
 	providerNames, err := currentProviderNames(ctx, o.providerSources)
 	if err != nil {
 		return operation.Result{}, err
@@ -72,20 +76,20 @@ func (o *setupOperation) Invoke(ctx context.Context, request operation.Request) 
 		Fields: []interaction.Field{
 			providerField,
 			{Name: "model", Label: "Model", Kind: interaction.FieldString, Required: false, Default: &interaction.Value{Kind: interaction.ValueString, String: current.Model}},
-			{Name: "trigger_input_tokens", Label: "Trigger Input Tokens", Kind: interaction.FieldInteger, Required: false, Default: &interaction.Value{Kind: interaction.ValueInteger, Integer: int64(current.TriggerInputTokens)}},
-			{Name: "target_input_tokens", Label: "Target Input Tokens", Kind: interaction.FieldInteger, Required: false, Default: &interaction.Value{Kind: interaction.ValueInteger, Integer: int64(current.TargetInputTokens)}},
-			{Name: "recent_rounds", Label: "Recent Rounds", Kind: interaction.FieldInteger, Required: false, Default: &interaction.Value{Kind: interaction.ValueInteger, Integer: int64(current.RecentRounds)}},
-			{Name: "summary_chunk_tokens", Label: "Summary Chunk Tokens", Kind: interaction.FieldInteger, Required: false, Default: &interaction.Value{Kind: interaction.ValueInteger, Integer: int64(current.SummaryChunkTokens)}},
-			{Name: "summary_max_tokens", Label: "Summary Max Tokens", Kind: interaction.FieldInteger, Required: false, Default: &interaction.Value{Kind: interaction.ValueInteger, Integer: int64(current.SummaryMaxTokens)}},
-			{Name: "summary_max_bytes", Label: "Summary Max Bytes", Kind: interaction.FieldInteger, Required: false, Default: &interaction.Value{Kind: interaction.ValueInteger, Integer: int64(current.SummaryMaxBytes)}},
-			{Name: "summary_input_tokens", Label: "Summary Input Tokens", Kind: interaction.FieldInteger, Default: &interaction.Value{Kind: interaction.ValueInteger, Integer: int64(current.SummaryInputTokens)}},
-			{Name: "rollup_max_tokens", Label: "Rollup Max Tokens", Kind: interaction.FieldInteger, Default: &interaction.Value{Kind: interaction.ValueInteger, Integer: int64(current.RollupMaxTokens)}},
-			{Name: "memory_trigger_tokens", Label: "Memory Trigger Tokens", Kind: interaction.FieldInteger, Default: &interaction.Value{Kind: interaction.ValueInteger, Integer: int64(current.MemoryTriggerTokens)}},
-			{Name: "memory_target_tokens", Label: "Memory Target Tokens", Kind: interaction.FieldInteger, Default: &interaction.Value{Kind: interaction.ValueInteger, Integer: int64(current.MemoryTargetTokens)}},
-			{Name: "state_trigger_tokens", Label: "State Trigger Tokens", Kind: interaction.FieldInteger, Default: &interaction.Value{Kind: interaction.ValueInteger, Integer: int64(current.StateTriggerTokens)}},
-			{Name: "state_target_tokens", Label: "State Target Tokens", Kind: interaction.FieldInteger, Default: &interaction.Value{Kind: interaction.ValueInteger, Integer: int64(current.StateTargetTokens)}},
+			{Name: "trigger_input_tokens", Label: "Trigger Input Tokens", Kind: interaction.FieldInteger, Required: false, Default: &interaction.Value{Kind: interaction.ValueInteger, Integer: int64(effective.triggerInputTokens)}},
+			{Name: "target_input_tokens", Label: "Target Input Tokens", Kind: interaction.FieldInteger, Required: false, Default: &interaction.Value{Kind: interaction.ValueInteger, Integer: int64(effective.targetInputTokens)}},
+			{Name: "recent_rounds", Label: "Recent Rounds", Kind: interaction.FieldInteger, Required: false, Default: &interaction.Value{Kind: interaction.ValueInteger, Integer: int64(effective.recentRounds)}},
+			{Name: "summary_chunk_tokens", Label: "Summary Chunk Tokens", Kind: interaction.FieldInteger, Required: false, Default: &interaction.Value{Kind: interaction.ValueInteger, Integer: int64(effective.summaryChunkTokens)}},
+			{Name: "summary_max_tokens", Label: "Summary Max Tokens", Kind: interaction.FieldInteger, Required: false, Default: &interaction.Value{Kind: interaction.ValueInteger, Integer: int64(effective.summaryMaxTokens)}},
+			{Name: "summary_max_bytes", Label: "Summary Max Bytes", Kind: interaction.FieldInteger, Required: false, Default: &interaction.Value{Kind: interaction.ValueInteger, Integer: int64(effective.summaryMaxBytes)}},
+			{Name: "summary_input_tokens", Label: "Summary Input Tokens", Kind: interaction.FieldInteger, Default: &interaction.Value{Kind: interaction.ValueInteger, Integer: int64(effective.summaryInputTokens)}},
+			{Name: "rollup_max_tokens", Label: "Rollup Max Tokens", Kind: interaction.FieldInteger, Default: &interaction.Value{Kind: interaction.ValueInteger, Integer: int64(effective.rollupMaxTokens)}},
+			{Name: "memory_trigger_tokens", Label: "Memory Trigger Tokens", Kind: interaction.FieldInteger, Default: &interaction.Value{Kind: interaction.ValueInteger, Integer: int64(effective.memoryTriggerTokens)}},
+			{Name: "memory_target_tokens", Label: "Memory Target Tokens", Kind: interaction.FieldInteger, Default: &interaction.Value{Kind: interaction.ValueInteger, Integer: int64(effective.memoryTargetTokens)}},
+			{Name: "state_trigger_tokens", Label: "State Trigger Tokens", Kind: interaction.FieldInteger, Default: &interaction.Value{Kind: interaction.ValueInteger, Integer: int64(effective.stateTriggerTokens)}},
+			{Name: "state_target_tokens", Label: "State Target Tokens", Kind: interaction.FieldInteger, Default: &interaction.Value{Kind: interaction.ValueInteger, Integer: int64(effective.stateTargetTokens)}},
 			{Name: "allowed_accuracies", Label: "Allowed Count Accuracies", Kind: interaction.FieldMultiChoice, Required: true, Default: valuePointer(interaction.Value{Kind: interaction.ValueStrings, Strings: configuredAccuracyNames(current)}), Options: []interaction.Option{{Value: "exact", Label: "Exact"}, {Value: "upper_bound", Label: "Upper Bound"}, {Value: "estimate", Label: "Estimate"}}},
-			{Name: "max_summary_passes", Label: "Max Summary Passes", Kind: interaction.FieldInteger, Required: false, Default: &interaction.Value{Kind: interaction.ValueInteger, Integer: int64(current.MaxSummaryPasses)}},
+			{Name: "max_summary_passes", Label: "Max Summary Passes", Kind: interaction.FieldInteger, Required: false, Default: &interaction.Value{Kind: interaction.ValueInteger, Integer: int64(effective.maxSummaryPasses)}},
 		},
 	})
 	if err != nil {

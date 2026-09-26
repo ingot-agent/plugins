@@ -128,3 +128,25 @@ func findSetupField(t *testing.T, fields []interaction.Field, name string) inter
 	t.Fatalf("field %q not found", name)
 	return interaction.Field{}
 }
+
+func TestSetupShowsEffectiveDefaultWatermarks(t *testing.T) {
+	scope := testStateScope{dir: writeTestConfig(t, Config{})}
+	op := &setupOperation{scope: scope, compactor: setupCompactor(normalizedConfig{})}
+	channel := &setupChannel{onRequest: func(request interaction.Request) {
+		for _, test := range []struct {
+			name string
+			want int64
+		}{
+			{"trigger_input_tokens", 800000},
+			{"target_input_tokens", 250000},
+		} {
+			field := findSetupField(t, request.Fields, test.name)
+			if field.Default == nil || field.Default.Kind != interaction.ValueInteger || field.Default.Integer != test.want {
+				t.Fatalf("%s default = %#v; want %d", test.name, field.Default, test.want)
+			}
+		}
+	}}
+	if _, err := op.Invoke(context.Background(), operation.Request{Interaction: channel}); err != nil {
+		t.Fatal(err)
+	}
+}

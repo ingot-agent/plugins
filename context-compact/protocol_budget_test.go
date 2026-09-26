@@ -506,6 +506,7 @@ func TestProtocolLargeSourceFitsDefaultCallBudget(t *testing.T) {
 	var final segmentInput
 	calls, fragments := 0, 0
 	r := newProtocolCompactor(t, nil)
+	r.cfg.summaryInputTokens = 32000 // Exercise the fragment path independently of the new 256k default.
 	r.counter = protocolCounterFunc(func(_ context.Context, request usage.CountRequest) (usage.CountResult, error) {
 		tokens := protocolInputTokens(request.Invocation)
 		if messageText(request.Invocation.Messages[0]) == evidenceSystemPrompt {

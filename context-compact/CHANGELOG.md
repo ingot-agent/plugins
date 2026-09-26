@@ -6,8 +6,14 @@ All notable changes to this plugin are documented in this file.
 
 ### Changed
 
-- Require `usage.Counter` and replace byte watermarks with input-token budgets.
-  Legacy byte/turn/anchor configuration requires explicit migration.
+- Default compaction to 800k input tokens with a 250k target for a nominal
+  1M-token context; increase summary chunk/input budgets to 128k/256k so the
+  default call limit can cover larger histories, and show effective defaults
+  in the configuration form.
+- Make `usage.Counter` optional and estimate character-based input tokens when absent; optionally resolve provider/model defaults through `model.RequestResolver`.
+- Leave summary `Stop` nil so the Responses adapter accepts compaction requests.
+- Replace byte watermarks with input-token budgets. Legacy byte/turn/anchor
+  configuration requires explicit migration.
 - Compact complete rounds, including the first round and completed rounds in
   the current turn; recent rounds are a soft retention preference.
 - Keep frozen summary/state-delta segments and use token watermarks for rollup.
