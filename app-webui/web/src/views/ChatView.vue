@@ -22,7 +22,7 @@ import JsonBlock from '../components/JsonBlock.vue'
 import WorkspaceHeader from '../components/WorkspaceHeader.vue'
 import FollowupNote from '../components/FollowupNote.vue'
 import { readPreference, savePreference } from '../theme'
-import { hasVisibleMessageContent, shouldShowHistoryMessage, shouldShowTurnByline } from './conversationDisplay'
+import {hasVisibleMessageContent, shouldShowHistoryMessage, shouldShowTurnByline} from './conversationDisplay'
 defineEmits<{ navigation: []; pending: []; operation: [operation: Operation, sessionId: string] }>()
 const runtime = useRuntime()
 const route = useRoute()
