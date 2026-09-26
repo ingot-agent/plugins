@@ -68,7 +68,7 @@ Additional or distinct state includes:
 
 | Module | State / configuration |
 |---|---|
-| [agent-default](../agent-default/README.md) | `subagents.toml` defines child types and their allowed tools/child types separately from its `config` Operation; scheduler limits are implementation constants |
+| [agent-default](../agent-default/README.md) | `subagents.toml` overrides the built-in `coder`/`explorer`/`reviewer` child types available when `tool-subagent` and child storage/workspace capabilities are installed; scheduler limits are implementation constants |
 | [session-sqlite](../session-sqlite/README.md) | SQLite sessions/workspaces/metadata; no `config` Operation |
 | [skill-runtime](../skill-runtime/README.md) | Skills in the plugin scope, plus the embedded built-in skill; no `config` Operation |
 | [tool-subagent](../tool-subagent/README.md) | Injected child-management capability; no private configuration Operation |

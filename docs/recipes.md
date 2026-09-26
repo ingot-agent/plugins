@@ -236,10 +236,12 @@ allowed_child_types = []
 ```
 
 这是具体类型的工具白名单：reviewer 不能编辑文件，也不能再派发子代理。
+该文件在此 recipe 中演示显式覆盖；若省略，当前源码的 `agent.default` 会提供
+内建 `coder`、`explorer`、`reviewer`，并只允许各自白名单中已安装的工具。
 不要遗漏 `submit_agent_result`；普通文本回复不会替代正式结果提交。
-宿主提供 `agent.Children` 不代表已启用类型：缺少本文件时查询/派发会返回
-unsupported。配置文件只在 session-tree 构造时读取，不由
-`/agent-default config` 修改，改后需要重启。
+宿主提供 `agent.Children` 不代表已启用类型：本组合若没有显式文件，会加载
+内建类型；若显式文件为空，则查询/派发返回 unsupported。配置文件只在
+session-tree 构造时读取，不由 `/agent-default config` 修改，改后需要重启。
 
 创建 `.ingot/runtimes/children/state/interceptor.approval/`，保存
 `config.toml`：

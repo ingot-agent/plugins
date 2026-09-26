@@ -47,6 +47,7 @@ type tree struct {
 	repository agent.ChildSessionRepository
 	workspace  workspace.Manager
 	config     configuration
+	startupCtx context.Context
 
 	mu           sync.Mutex
 	nextToken    uint64
@@ -113,6 +114,7 @@ func New(ctx context.Context, deps Dependencies) (Exports, ingotabi.Cleanup, err
 		repository:   repository,
 		workspace:    workspaceManager,
 		config:       config,
+		startupCtx:   ctx,
 		active:       make(map[session.ID]*executionState),
 		notify:       make(chan struct{}, 1),
 		rootGates:    make(map[session.ID]*sync.Mutex),

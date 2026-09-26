@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"sync"
 	"testing"
@@ -35,6 +36,22 @@ type memoryRepository struct {
 type failingGetRepository struct {
 	*memoryRepository
 	err error
+}
+
+type recordingRecoveryRepository struct {
+	*memoryRepository
+	recoveries int
+}
+
+func (r *recordingRecoveryRepository) RecoverChildSessions(ctx context.Context, request agent.ChildRecoveryRequest) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if request.Reason != "runtime_restart" {
+		return fmt.Errorf("unexpected recovery reason %q", request.Reason)
+	}
+	r.recoveries++
+	return nil
 }
 
 func (r *failingGetRepository) GetChildSession(context.Context, session.ID) (agent.ChildSessionRecord, error) {
@@ -585,3 +602,124 @@ func cloneRecord(record agent.ChildSessionRecord) agent.ChildSessionRecord {
 
 var _ agent.ChildSessionRepository = (*memoryRepository)(nil)
 var _ workspace.Manager = (*memoryWorkspace)(nil)
+
+func TestBuiltinChildTypesUseInstalledTools(t *testing.T) {
+	repository := &recordingRecoveryRepository{memoryRepository: newMemoryRepository()}
+	workspaces := &memoryWorkspace{assigned: map[session.ID]workspace.Binding{}}
+	exports, cleanup, err := New(context.Background(), Dependencies{
+		State: stateScope(t.TempDir()), Repository: ingotabi.Some[agent.ChildSessionRepository](repository),
+		Workspace: ingotabi.Some[workspace.Manager](workspaces),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = cleanup(context.Background()) })
+	definitions := []tool.Definition{{Name: submitToolName}, {Name: "read_file"}, {Name: "search"}, {Name: "edit_file"}, {Name: "shell_exec"}}
+	if err := exports.Control.ValidateTools(definitions); err != nil {
+		t.Fatal(err)
+	}
+	if err := exports.Control.ValidateTools(definitions); err != nil {
+		t.Fatal(err)
+	}
+	if repository.recoveries != 1 {
+		t.Fatalf("recovery called %d times, want 1", repository.recoveries)
+	}
+	tree := exports.Control.(*tree)
+	if !tree.config.enabled || tree.config.builtin {
+		t.Fatalf("built-in config not activated: %#v", tree.config)
+	}
+	for _, tc := range []struct {
+		name  string
+		tools []string
+	}{
+		{"coder", []string{"read_file", "search", "edit_file", "shell_exec", submitToolName}},
+		{"explorer", []string{"read_file", "search", submitToolName}},
+		{"reviewer", []string{"read_file", "search", submitToolName}},
+	} {
+		if got := tree.config.definitions[tc.name].definition.Tools; !slices.Equal(got, tc.tools) {
+			t.Errorf("%s tools = %v; want %v", tc.name, got, tc.tools)
+		}
+		if tree.config.definitions[tc.name].definition.SystemPrompt == "" {
+			t.Errorf("%s has no system prompt", tc.name)
+		}
+	}
+	root, err := exports.Control.BeginRoot(context.Background(), "c0_root")
+	if err != nil {
+		t.Fatal(err)
+	}
+	types, err := exports.Children.Types(context.Background(), execution.Scope{SessionID: "c0_root"})
+	if err != nil || len(types) != 3 || types[0].Name != "coder" || types[1].Name != "explorer" || types[2].Name != "reviewer" {
+		t.Fatalf("built-in types = %#v; err = %v", types, err)
+	}
+	child, err := exports.Children.CreateChild(context.Background(), execution.Scope{SessionID: "c0_root"}, agent.ChildRequest{
+		AgentType: "explorer", Task: "look around", Workspace: &workspace.Binding{Root: t.TempDir()},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := exports.Control.Next(context.Background())
+	if err != nil || task.Handle.SessionID != child.SessionID || !slices.Equal(task.ToolNames, []string{"read_file", "search", submitToolName}) {
+		t.Fatalf("task = %#v; err = %v", task, err)
+	}
+	if err := exports.Control.EndRoot(context.Background(), root, false); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestBuiltinTypesPruneOptionalTools(t *testing.T) {
+	config, err := builtinConfiguration(map[string]struct{}{submitToolName: {}, "read_file": {}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"coder", "explorer", "reviewer"} {
+		if got := config.definitions[name].definition.Tools; !slices.Equal(got, []string{"read_file", submitToolName}) {
+			t.Errorf("%s tools = %v", name, got)
+		}
+		if len(config.definitions[name].definition.AllowedChildTypes) != 0 {
+			t.Errorf("%s unexpectedly allowed to spawn children", name)
+		}
+	}
+}
+
+func TestBuiltinTypesDisabledWithoutSubagentTool(t *testing.T) {
+	exports, cleanup, err := New(context.Background(), Dependencies{State: stateScope(t.TempDir())})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = cleanup(context.Background()) })
+	if err := exports.Control.ValidateTools([]tool.Definition{{Name: "read_file"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := exports.Children.Types(context.Background(), execution.Scope{SessionID: "c0_root"}); !errors.Is(err, agent.ErrChildUnsupported) {
+		t.Fatalf("types error = %v", err)
+	}
+}
+
+func TestExplicitChildConfigOverridesBuiltins(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, configFileName), []byte("subagents_config_version = 1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	exports, cleanup, err := New(context.Background(), Dependencies{State: stateScope(root)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = cleanup(context.Background()) })
+	if err := exports.Control.ValidateTools([]tool.Definition{{Name: submitToolName}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := exports.Children.Types(context.Background(), execution.Scope{SessionID: "c0_root"}); !errors.Is(err, agent.ErrChildUnsupported) {
+		t.Fatalf("explicit empty config should disable built-ins, got %v", err)
+	}
+}
+
+func TestBuiltinTypesRequireChildStorageWhenToolsInstalled(t *testing.T) {
+	exports, cleanup, err := New(context.Background(), Dependencies{State: stateScope(t.TempDir())})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = cleanup(context.Background()) })
+	if err := exports.Control.ValidateTools([]tool.Definition{{Name: submitToolName}}); !errors.Is(err, agent.ErrChildUnsupported) {
+		t.Fatalf("missing storage error = %v", err)
+	}
+}
