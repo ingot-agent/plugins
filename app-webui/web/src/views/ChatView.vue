@@ -22,7 +22,7 @@ import JsonBlock from '../components/JsonBlock.vue'
 import WorkspaceHeader from '../components/WorkspaceHeader.vue'
 import FollowupNote from '../components/FollowupNote.vue'
 import { readPreference, savePreference } from '../theme'
-import {hasVisibleMessageContent, shouldShowHistoryMessage, shouldShowTurnByline} from './conversationDisplay'
+import { shouldShowTurnByline} from './conversationDisplay'
 defineEmits<{ navigation: []; pending: []; operation: [operation: Operation, sessionId: string] }>()
 const runtime = useRuntime()
 const route = useRoute()
@@ -399,11 +399,12 @@ onBeforeUnmount(() => { media.removeEventListener('change', resize); window.remo
           <div v-if="runtime.historyLoading[sessionId] && !messages.length" class="history-loading"><LoaderCircle class="spin" :size="16" /><div>{{ t('loadingHistory') }}<p v-if="running.length" class="muted text-xs mt-1">{{ t('historyWaiting') }}</p></div></div>
           <div v-if="runtime.historyErrors[sessionId]" class="error-banner"><p>{{ runtime.historyErrors[sessionId] }}</p><button class="text-button" @click="runtime.loadHistory(sessionId)">{{ t('retry') }}</button></div>
           <template v-for="entry in transcript" :key="entry.id">
-            <article v-if="entry.kind === 'message'" v-show="shouldShowHistoryMessage(entry.message, showToolCalls)" class="message" :class="['message-' + entry.message.role, { 'message-with-tools': showToolCalls && entry.message.role === 'assistant' && entry.message.toolCalls?.length }]">
-              <div v-if="hasVisibleMessageContent(entry.message)" class="message-content"><ContentParts :parts="entry.message.content" /></div>
-              <ToolCard v-for="call in showToolCalls ? entry.message.toolCalls : []" :key="call.id" :name="call.name" :arguments="call.arguments" :content="toolResults.get(call.id)?.content" />
+            <article v-if="entry.kind === 'message'" class="message" :class="'message-' + entry.message.role" :data-message-index="entry.message.role === 'assistant' ? entry.index : undefined">
+              <div class="message-content"><ContentParts :parts="entry.message.content" /></div>
+              <ToolCard v-for="call in entry.message.toolCalls" :key="call.id" :name="call.name" :arguments="call.arguments" :content="toolResults.get(call.id)?.content" />
               <button v-if="entry.message.role === 'assistant' && turnCopies.has(entry.index)" class="icon-button message-copy" :aria-label="t('copy')" @click="copy(turnCopies.get(entry.index)!)"><Copy :size="14" /></button>
             </article>
+
             <article v-else class="message message-assistant live-message">
               <template v-if="showTurn(entry.turn)">
                 <div v-if="shouldShowTurnByline(entry.turn, showToolCalls, runtime.interactions)" class="message-byline"><StatusBadge :status="entry.turn.status" /></div>
