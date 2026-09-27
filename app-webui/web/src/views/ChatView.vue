@@ -56,7 +56,16 @@ const workspace = ref('')
 const selectingWorkspace = ref(false)
 const assigningWorkspace = ref(false)
 const needsWorkspace = computed(() => Boolean(session.value && !session.value.workspace))
-const effectiveWorkspace = computed(() => workspace.value.trim() || runtime.defaultWorkspace)
+const effectiveWorkspace = computed(function () {
+  if (!workspace.value.trim()){
+    return 'default workspace'
+  }
+
+  if (workspace.value.trim()===runtime.defaultWorkspace.trim()){
+    return "default workspace"
+  }
+  return workspace.value.trim()
+})
 async function selectWorkspace(path: string) {
   workspace.value = path
   if (!needsWorkspace.value || !sessionId.value) return
@@ -400,7 +409,7 @@ onBeforeUnmount(() => { media.removeEventListener('change', resize); window.remo
                 <div v-if="shouldShowTurnByline(entry.turn, showToolCalls, runtime.interactions)" class="message-byline"><StatusBadge :status="entry.turn.status" /></div>
                 <TurnContent :turn="entry.turn" :interactions="runtime.interactions" :historical-tool-ids="historicalToolIds" :show-tool-calls="showToolCalls" />
               </template>
-              <p v-if="entry.turn.error" class="error-banner">{{ entry.turn.error.message }}</p>
+              <p v-if="entry.turn.error" class="error-banner mt-2">{{ entry.turn.error.message }}</p>
               <button v-if="entry.turn.status !== 'running'" class="execution-link" @click="details = true"><Activity :size="13" /><span>{{ t('status.' + entry.turn.status) }}</span><template v-if="entry.turn.outcome"><span>·</span><span>{{ (entry.turn.outcome.durationNs / 1e9).toFixed(1) }}s</span></template><ChevronRight :size="12" /></button>
             </article>
           </template>
@@ -416,7 +425,7 @@ onBeforeUnmount(() => { media.removeEventListener('change', resize); window.remo
             <LoaderCircle v-if="selectingWorkspace" class="spin" :size="16" /><FolderOpen v-else :size="16" /><span>{{ t(selectingWorkspace ? 'workspaceSelecting' : 'chooseWorkspace') }}</span>
           </button>
           <span v-if="effectiveWorkspace" class="workspace-chosen truncate" :title="effectiveWorkspace">{{ effectiveWorkspace }}</span>
-          <span class="muted text-xs shrink-0">{{ t(workspace ? 'workspaceHint' : 'defaultWorkspace') }}</span>
+<!--          <span class="muted text-xs shrink-0">{{ t(workspace ? 'workspaceHint' : 'defaultWorkspace') }}</span>-->
         </div>
         <button v-if="!following && !welcome" class="latest-button" @click="latest"><ArrowDown :size="14" />{{ t('showLatest') }}</button>
         <div v-if="needsWorkspace" class="workspace-assignment-banner">

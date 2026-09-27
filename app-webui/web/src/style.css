@@ -141,9 +141,9 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
 .welcome h2 { margin: 12px 0; font-size: clamp(25px, 2.8vw, 34px); line-height: 1.3; font-weight: 450; letter-spacing: -.035em; }
 .welcome p { margin: 0; font-size: 14px; color: var(--muted); }
 .transcript { max-width: 800px; margin: 0 auto; padding: 24px 28px 28px; }
-.message { position: relative; margin-bottom: 27px; font-size: 14px; line-height: 1.85; overflow-wrap: anywhere; }
-.message-with-tools { display: flow-root; margin-bottom: 0; }
-.message-with-tools > .tool-card { margin: 0 0 10px; }
+.message { position: relative; margin-bottom: 5px; font-size: 14px; line-height: 1.85; overflow-wrap: anywhere; }
+.message-with-tools { display: flex; flex-direction: column;gap: 5px; }
+.message-with-tools > .tool-card { margin: 0 0 5px; }
 .message-user { display: flex; justify-content: flex-end; margin: 5px 0 33px; }
 .message-user .message-content { background: var(--subtle); border: 1px solid color-mix(in srgb, var(--line) 65%, transparent); padding: 10px 17px; border-radius: 14px 14px 4px 14px; max-width: 88%; }
 .message-user .markdown > :first-child { margin-top: 0; }
