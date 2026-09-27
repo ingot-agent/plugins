@@ -152,6 +152,24 @@ func (b *browserAgent) Stream(ctx context.Context, turn agent.Turn, handler agen
 		}
 	}
 	emit(observation.ToolFinished{Status: observation.StatusSucceeded, Result: &tool.Result{Content: content.FromText("Workspace is ready.")}})
+	if strings.Contains(turn.Input, "tool-only") {
+		b.mu.Lock()
+		for index, names := range [][]string{{"edit_file", "shell_exec"}, {"edit_file"}, {"shell_exec"}} {
+			calls := make([]tool.Call, 0, len(names))
+			for _, name := range names {
+				calls = append(calls, tool.Call{ID: fmt.Sprintf("fixture-%d-%d", len(b.history[turn.SessionID]), len(calls)), Name: name, Arguments: json.RawMessage(`{}`)})
+			}
+			message := model.Message{Role: model.RoleAssistant, ToolCalls: calls}
+			if index == 0 {
+				message.Content = content.FromText("Checking the workspace before editing.")
+			}
+			b.history[turn.SessionID] = append(b.history[turn.SessionID], message)
+			for _, fixtureCall := range calls {
+				b.history[turn.SessionID] = append(b.history[turn.SessionID], model.Message{Role: model.RoleTool, ToolCallID: fixtureCall.ID, Content: content.FromText("Workspace is ready.")})
+			}
+		}
+		b.mu.Unlock()
+	}
 	if timeline {
 		b.mu.Lock()
 		b.history[turn.SessionID] = append(b.history[turn.SessionID],

@@ -240,6 +240,8 @@ test('tool call visibility is a persistent conversation preference', async ({ pa
   await send(page, 'timeline approve')
   await expect(page.locator('.tool-card')).toHaveCount(1)
   await expect(page.getByText('Allow workspace inspection?', { exact: true })).toBeVisible()
+  await expect(page.locator('.transcript .brand')).toHaveCount(0)
+  await expect(page.locator('.transcript .message-byline .status-badge')).toBeVisible()
   const scrollLayout = await page.locator('.conversation-scroll').evaluate(element => {
     const scrollRect = element.getBoundingClientRect()
     const composerRect = document.querySelector('.composer-dock')!.getBoundingClientRect()
@@ -264,10 +266,43 @@ test('tool call visibility is a persistent conversation preference', async ({ pa
 
   await page.reload()
   await expect(page.getByRole('button', { name: 'Show tool calls', exact: true })).toHaveAttribute('aria-pressed', 'false')
-  // await expect(page.locator('.tool-card')).toHaveCount(0)
+  await expect(page.getByText('Your workspace is ready. We can take the next step together.', { exact: true })).toBeVisible()
+  await expect(page.locator('.tool-card')).toHaveCount(0)
+  await expect(page.locator('.transcript .message-assistant')).toHaveCount(3)
+  await expect(page.locator('.transcript .brand')).toHaveCount(0)
+  await expect(page.locator('.transcript .message-byline')).toHaveCount(0)
 
   await page.getByRole('button', { name: 'Show tool calls', exact: true }).click()
   await expect(page.locator('.tool-card')).toHaveCount(2)
+  await expect(page.locator('.transcript .message-assistant')).toHaveCount(3)
+})
+
+test('mixed and tool-only history rounds keep tool spacing after refresh without hiding answers', async ({ page }) => {
+  await ready(page)
+  await send(page, 'tool-only workspace')
+  await expect(page.getByText('Your workspace is ready. We can take the next step together.', { exact: true })).toBeVisible()
+  await page.getByRole('button', { name: 'Hide tool calls', exact: true }).click()
+  await page.reload()
+  await expect(page.getByRole('button', { name: 'Show tool calls', exact: true })).toHaveAttribute('aria-pressed', 'false')
+  await expect(page.locator('.tool-card')).toHaveCount(0)
+  await expect(page.locator('.transcript .message-assistant:visible')).toHaveCount(2)
+  const visibleRoundMargins = await page.locator('.transcript .message-assistant:visible').evaluateAll(messages => messages.map(message => getComputedStyle(message).marginBottom))
+  expect(visibleRoundMargins).toEqual(['27px', '27px'])
+  await expect(page.locator('.transcript .message-assistant:visible .markdown')).toHaveText(['Checking the workspace before editing.', 'Your workspace is ready. We can take the next step together.'])
+  await page.getByRole('button', { name: 'Show tool calls', exact: true }).click()
+  await expect(page.locator('.tool-card')).toHaveCount(4)
+  await expect(page.locator('.transcript .message-assistant:visible')).toHaveCount(4)
+  await expect(page.locator('.message-with-tools')).toHaveCount(3)
+  const roundMargins = await page.locator('.message-with-tools').evaluateAll(messages => messages.map(message => getComputedStyle(message).marginBottom))
+  expect(roundMargins).toEqual(['0px', '0px', '0px'])
+  await expect(page.locator('.message-with-tools:not(:has(.message-content))')).toHaveCount(2)
+  const gaps = await page.locator('.transcript .message-assistant .tool-card').evaluateAll(cards => cards.slice(1).map((card, index) => {
+    const previous = cards[index].getBoundingClientRect()
+    return card.getBoundingClientRect().top - previous.bottom
+  }))
+  expect(gaps).toHaveLength(3)
+  for (const gap of gaps) expect(gap).toBeCloseTo(10, 0)
+  await expect(page.locator('.transcript .brand')).toHaveCount(0)
 })
 
 test('global request drawer has independent accessible fields and settles inline requests', async ({ page }) => {
