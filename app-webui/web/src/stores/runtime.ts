@@ -3,10 +3,11 @@ import { defineStore } from 'pinia'
 import { APIError, command, errorMessage, isAbort, request, segment } from '../api'
 import { subscribe } from '../sse'
 import { bootstrapTurns, indexById, reduceOperation, reduceTurn } from '../state'
-import type { Attachment, Interaction, InteractionState, LiveTurn, Message, Notice, Operation, OperationInvocation, Session, Snapshot, TraceEvent, WebEvent, WorkspaceSelection } from '../protocol'
+import type { Attachment, Followup, FollowupAnchor, Interaction, InteractionState, LiveTurn, Message, Notice, Operation, OperationInvocation, Session, Snapshot, TraceEvent, WebEvent, WorkspaceSelection } from '../protocol'
 
 export const useRuntime = defineStore('runtime', () => {
   const sessions = ref<Session[]>([])
+  const followups = ref<Record<string, Followup[]>>({})
   const capabilities = ref({ run: false, stream: false })
   const assets = ref({ available: false, maxBytes: 0 })
   const defaultWorkspace = ref('')
@@ -82,6 +83,7 @@ export const useRuntime = defineStore('runtime', () => {
     for (const controller of historyRequests.values()) controller.abort()
     historyRequests.clear()
     histories.value = {}
+    followups.value = {}
     historyLoading.value = {}
     historyErrors.value = {}
     cursor.value = snapshot.cursor
@@ -97,7 +99,10 @@ export const useRuntime = defineStore('runtime', () => {
     // Process-local identifiers may be reused after a server restart.
     traces.value = {}
     optimistic.value = {}
-    if (activeSession.value) void loadHistory(activeSession.value)
+    if (activeSession.value) {
+      void loadHistory(activeSession.value)
+      void loadFollowups(activeSession.value).catch(error => notify(errorMessage(error)))
+    }
   }
   function receive(id: number, event: WebEvent) {
     if (id <= cursor.value) return
@@ -121,11 +126,16 @@ export const useRuntime = defineStore('runtime', () => {
       if (event.type === 'session.deleted') {
         sessions.value = sessions.value.filter(session => session.id !== data.id)
         delete histories.value[data.id]
+        delete followups.value[data.id]
+        for (const id of Object.keys(followups.value)) followups.value[id] = followups.value[id].filter(note => note.id !== data.id)
         historyRequests.get(data.id)?.abort()
       } else {
         const item = data as Session
         sessions.value = [...sessions.value.filter(session => session.id !== item.id), item]
       }
+    } else if (event.type === 'followup.created' || event.type === 'followup.deleted') {
+      const id = data.sourceSessionId
+      if (id && (id === activeSession.value || followups.value[id])) void loadFollowups(id)
     } else if (/^operation\.(started|completed|failed|canceled)$/.test(event.type)) {
       reduceOperation(operationInvocations.value, event)
       const settled = Object.values(operationInvocations.value).filter(item => item.status !== 'running')
@@ -184,6 +194,22 @@ export const useRuntime = defineStore('runtime', () => {
     sessionRevision++
     sessions.value = [...sessions.value.filter(item => item.id !== session.id), session]
     return session
+  }
+  async function loadFollowups(id: string) {
+    const generation = epoch
+    const items = await request<Followup[]>('/sessions/' + segment(id) + '/followups')
+    if (generation === epoch) followups.value[id] = items || []
+  }
+  async function createFollowup(id: string, anchor: FollowupAnchor) {
+    const item = await command<Followup>('/sessions/' + segment(id) + '/followups', 'POST', anchor)
+    followups.value[id] = [...(followups.value[id] || []).filter(note => note.id !== item.id), item]
+    histories.value[item.id] = []
+    return item
+  }
+  async function deleteFollowup(item: Followup) {
+    await command('/followups/' + segment(item.id), 'DELETE')
+    followups.value[item.sourceSessionId] = (followups.value[item.sourceSessionId] || []).filter(note => note.id !== item.id)
+    delete histories.value[item.id]
   }
   async function assignWorkspace(id: string, workspace: string) {
     const session = await command<Session>('/sessions/' + segment(id) + '/workspace', 'POST', { workspace })
@@ -246,10 +272,10 @@ export const useRuntime = defineStore('runtime', () => {
   }
   const cancelOperation = (id: string) => command('/operation-invocations/' + segment(id), 'DELETE')
   return {
-    sessions, orderedSessions, capabilities, assets, defaultWorkspace, turns, interactions, interactionStates,
+    sessions, followups, orderedSessions, capabilities, assets, defaultWorkspace, turns, interactions, interactionStates,
     operations, operationInvocations, histories, historyLoading, historyErrors, optimistic,
     traces, notices, connection, connectionError, activeSession, cursor, pendingCount,
     notify, running, loadHistory, refreshSessions, bootstrap, receive, connect, disconnect,
-    createSession, assignWorkspace, pickWorkspace, mutateSession, send, stop, respond, invoke, cancelOperation,
+    createSession, loadFollowups, createFollowup, deleteFollowup, assignWorkspace, pickWorkspace, mutateSession, send, stop, respond, invoke, cancelOperation,
   }
 })

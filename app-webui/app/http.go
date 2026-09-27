@@ -37,6 +37,9 @@ func (a *application) routes() http.Handler {
 	mux.HandleFunc("PATCH /api/sessions/{id}", a.handleRenameSession)
 	mux.HandleFunc("POST /api/sessions/{id}/workspace", a.handleAssignWorkspace)
 	mux.HandleFunc("GET /api/sessions/{id}/history", a.handleHistory)
+	mux.HandleFunc("GET /api/sessions/{id}/followups", a.handleListFollowups)
+	mux.HandleFunc("POST /api/sessions/{id}/followups", a.handleCreateFollowup)
+	mux.HandleFunc("DELETE /api/followups/{id}", a.handleDeleteFollowup)
 	mux.HandleFunc("POST /api/interactions/{id}/response", a.handleInteractionResponse)
 
 	mux.HandleFunc("POST /api/assets", a.handleUploadAsset)
@@ -170,7 +173,9 @@ func (a *application) handleCreateTurn(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
+	a.sessionMu.Lock()
 	id, err := a.turns.Start(agent.Turn{SessionID: session.ID(request.SessionID), Input: request.Input, Attachments: attachments})
+	a.sessionMu.Unlock()
 	if err != nil {
 		writeError(w, err)
 		return
@@ -417,7 +422,36 @@ func (a *application) handleSessionLifecycle(eventType string, mutate func(conte
 func (a *application) handleDeleteSession(w http.ResponseWriter, r *http.Request) {
 	id := session.ID(r.PathValue("id"))
 	a.sessionMu.Lock()
-	err := a.sessions.Delete(r.Context(), id)
+	note, ok, err := a.sessions.GetFollowup(r.Context(), id)
+	if err != nil {
+		a.sessionMu.Unlock()
+		writeError(w, err)
+		return
+	}
+	if ok {
+		err = a.deleteFollowup(r.Context(), note)
+		a.sessionMu.Unlock()
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	notes, err := a.sessions.ListFollowups(r.Context(), id)
+	if err != nil {
+		a.sessionMu.Unlock()
+		writeError(w, err)
+		return
+	}
+	for _, note := range notes {
+		if err := a.deleteFollowup(r.Context(), note); err != nil {
+			a.sessionMu.Unlock()
+			writeError(w, err)
+			return
+		}
+	}
+	err = a.sessions.Delete(r.Context(), id)
 	if err == nil {
 		_ = a.backend.Events().Publish(appbackend.Event{Type: "session.deleted", Data: map[string]string{"id": string(id)}})
 	}
@@ -442,7 +476,7 @@ func (a *application) handleForkSession(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	a.sessionMu.Lock()
-	item, err := a.sessions.Fork(r.Context(), id, request.Title)
+	item, err := a.sessions.Fork(r.Context(), id, session.ForkRequest{Title: request.Title})
 	if err == nil {
 		_ = a.backend.Events().Publish(appbackend.Event{Type: "session.created", Data: item})
 	}

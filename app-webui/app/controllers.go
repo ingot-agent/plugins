@@ -76,7 +76,9 @@ type sessionController interface {
 	Archive(context.Context, session.ID) (appbackend.Session, error)
 	Restore(context.Context, session.ID) (appbackend.Session, error)
 	Delete(context.Context, session.ID) error
-	Fork(context.Context, session.ID, string) (appbackend.Session, error)
+	Fork(context.Context, session.ID, session.ForkRequest) (appbackend.Session, error)
+	GetFollowup(context.Context, session.ID) (followup, bool, error)
+	ListFollowups(context.Context, session.ID) ([]followup, error)
 }
 
 type defaultSessionController struct {
@@ -176,12 +178,18 @@ func (c *defaultSessionController) List(ctx context.Context) ([]appbackend.Sessi
 	if err != nil {
 		return nil, err
 	}
-	result := make([]appbackend.Session, len(items))
-	for i, metadata := range items {
-		result[i], err = c.project(ctx, metadata, nil)
+	result := make([]appbackend.Session, 0, len(items))
+	for _, metadata := range items {
+		if _, isFollowup, err := followupFromMetadata(metadata); err != nil {
+			return nil, err
+		} else if isFollowup {
+			continue
+		}
+		item, err := c.project(ctx, metadata, nil)
 		if err != nil {
 			return nil, err
 		}
+		result = append(result, item)
 	}
 	return result, nil
 }
@@ -200,8 +208,8 @@ func (c *defaultSessionController) Restore(ctx context.Context, id session.ID) (
 func (c *defaultSessionController) Delete(ctx context.Context, id session.ID) error {
 	return c.manager.Delete(ctx, id)
 }
-func (c *defaultSessionController) Fork(ctx context.Context, id session.ID, title string) (appbackend.Session, error) {
-	metadata, err := c.manager.Fork(ctx, id, session.ForkRequest{Title: title})
+func (c *defaultSessionController) Fork(ctx context.Context, id session.ID, request session.ForkRequest) (appbackend.Session, error) {
+	metadata, err := c.manager.Fork(ctx, id, request)
 	if err != nil {
 		return appbackend.Session{}, err
 	}
@@ -209,6 +217,36 @@ func (c *defaultSessionController) Fork(ctx context.Context, id session.ID, titl
 	// persistence implementation when the source is bound. An unbound legacy
 	// source remains visible as unbound so the UI can request first assignment.
 	return c.project(ctx, metadata, nil)
+}
+
+func (c *defaultSessionController) GetFollowup(ctx context.Context, id session.ID) (followup, bool, error) {
+	metadata, err := c.manager.Get(ctx, id)
+	if err != nil {
+		if errors.Is(err, session.ErrNotFound) {
+			return followup{}, false, nil
+		}
+		return followup{}, false, err
+	}
+	return followupFromMetadata(metadata)
+}
+
+func (c *defaultSessionController) ListFollowups(ctx context.Context, source session.ID) ([]followup, error) {
+	items, err := c.query.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	result := []followup{}
+	for _, metadata := range items {
+		note, isFollowup, err := followupFromMetadata(metadata)
+		if err != nil {
+			return nil, err
+		}
+		if isFollowup && note.SourceSessionID == string(source) {
+			result = append(result, note)
+		}
+	}
+	sortFollowups(result)
+	return result, nil
 }
 
 func isNil(value any) bool {

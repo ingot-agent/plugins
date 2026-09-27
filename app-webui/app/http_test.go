@@ -109,7 +109,7 @@ func (s *testStore) Create(_ context.Context, request session.CreateRequest) (se
 		}
 	}
 	now := time.Now().UTC()
-	metadata := session.Metadata{ID: id, Title: request.Title, CreatedAt: now, UpdatedAt: now}
+	metadata := session.Metadata{ID: id, Title: request.Title, CreatedAt: now, UpdatedAt: now, Meta: request.Meta}
 	s.items = append(s.items, metadata)
 	return metadata, nil
 }
@@ -181,7 +181,7 @@ func (s *testStore) Fork(ctx context.Context, id session.ID, request session.For
 	if request.Title == "" {
 		request.Title = source.Title
 	}
-	target, err := s.Create(ctx, session.CreateRequest{Title: request.Title})
+	target, err := s.Create(ctx, session.CreateRequest{Title: request.Title, Meta: request.Meta})
 	if err != nil {
 		return session.Metadata{}, err
 	}
@@ -578,7 +578,7 @@ func TestSessionProjectionIncludesWorkspace(t *testing.T) {
 	if err != nil || restored.Workspace != root {
 		t.Fatalf("restored = %#v err=%v", restored, err)
 	}
-	forked, err := a.sessions.Fork(context.Background(), session.ID(item.ID), "forked")
+	forked, err := a.sessions.Fork(context.Background(), session.ID(item.ID), session.ForkRequest{Title: "forked"})
 	if err != nil || forked.Workspace != root {
 		t.Fatalf("forked = %#v err=%v", forked, err)
 	}

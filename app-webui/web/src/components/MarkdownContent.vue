@@ -4,7 +4,7 @@ import { useI18n } from 'vue-i18n'
 import MarkdownIt from 'markdown-it'
 import hljs from 'highlight.js/lib/common'
 import { errorMessage } from '../api'
-const props = defineProps<{ text: string }>()
+const props = defineProps<{ text: string; partIndex?: number }>()
 const { t } = useI18n()
 const copyError = ref('')
 const markdown = new MarkdownIt({
@@ -55,6 +55,6 @@ async function copyCode(event: MouseEvent) {
 <!-- markdown-it disables HTML and validates link protocols before rendering. -->
 <template>
   <!-- eslint-disable-next-line vue/no-v-html -->
-  <div class="markdown" @click="copyCode" v-html="html" />
+  <div class="markdown" :data-part-index="partIndex" @click="copyCode" v-html="html" />
   <p v-if="copyError" class="error-text" role="alert">{{ copyError }}</p>
 </template>

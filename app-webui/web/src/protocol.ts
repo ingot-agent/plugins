@@ -24,6 +24,13 @@ export interface Message {
   toolCalls?: ToolCall[]
 }
 export interface Attachment { kind: string; mimeType?: string; name?: string; assetId: string }
+export interface FollowupAnchor { messageIndex: number; partIndex: number; start: number; end: number; quote: string }
+export interface Followup extends FollowupAnchor {
+  id: string
+  sourceSessionId: string
+  baseMessageCount: number
+  createdAt: string
+}
 export interface Scope {
   agent?: { sessionId?: string; turnId?: string; roundIndex?: number; toolCallId?: string }
   operation?: { invocationId: string }

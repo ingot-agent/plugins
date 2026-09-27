@@ -13,6 +13,7 @@ module tag 时，应阅读同一 tag 的文档，不能把分支上的新功能�
 | Configure a running agent / 首次配置 | [Configuration guide](configuration.md) |
 | Build complete compositions / 完整组合 | [Recipes: chat, editing with approval, child agents](recipes.md) |
 | Browser and HTTP API / 浏览器及接口 | [app-webui](../app-webui/README.md) |
+| Inline follow-up persistence / 原文追问存储方案 | [Session Meta design](inline-followups-session-metadata-design.md) |
 | Develop a plugin / 开发插件 | [Plugin development](plugin-development.md) |
 | Write and actually call the first tool / 首个插件实操 | [First plugin tutorial](tutorials/first-plugin.md) |
 | Activation and snapshots / 热更新边界 | [Live configuration](live-plugin-configuration.md), [Model providers](live-model-provider-configuration.md) |

@@ -9,6 +9,32 @@ async function send(page: Page, input: string) {
   await page.getByRole('button', { name: 'Send message', exact: true }).click()
   await expect(page).toHaveURL(/#\/sessions\//)
 }
+async function selectAnswerText(page: Page, passage: string) {
+  const answer = page.locator('.message-assistant[data-message-index] .markdown').last()
+  await expect(answer).toContainText(passage)
+  await answer.evaluate((element, text) => {
+    const node = element.querySelector('p')!.firstChild!
+    const start = node.textContent!.indexOf(text)
+    const range = document.createRange()
+    range.setStart(node, start)
+    range.setEnd(node, start + text.length)
+    window.getSelection()!.removeAllRanges()
+    window.getSelection()!.addRange(range)
+    element.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }))
+  }, passage)
+}
+async function clickHighlightedText(page: Page, passage: string) {
+  const rect = await page.locator('.message-assistant[data-message-index] .markdown').last().evaluate((element, text) => {
+    const node = element.querySelector('p')!.firstChild!
+    const start = node.textContent!.indexOf(text)
+    const range = document.createRange()
+    range.setStart(node, start)
+    range.setEnd(node, start + text.length)
+    const box = range.getBoundingClientRect()
+    return { x: box.left + box.width / 2, y: box.top + box.height / 2 }
+  }, passage)
+  await page.mouse.click(rect.x, rect.y)
+}
 async function openOperationDebugger(page: Page) {
   await page.getByRole('button', { name: 'Settings', exact: true }).click()
   await page.getByRole('link', { name: 'Operation debugger', exact: true }).click()
@@ -27,6 +53,137 @@ test('conversation creation, streamed output, execution detail, and history refr
   await expect(page.locator('.message-user .message-content')).toHaveText('hello workspace')
   await expect(page.getByText('Your workspace is ready. We can take the next step together.', { exact: true })).toHaveCount(1)
   expect(errors).toEqual([])
+})
+
+test('selected answer opens a persistent independent follow-up', async ({ page }) => {
+  await ready(page)
+  await send(page, 'hello workspace')
+  await selectAnswerText(page, 'workspace is ready')
+  await page.getByRole('button', { name: 'Follow up', exact: true }).click()
+  const note = page.getByRole('dialog', { name: 'Follow up' })
+  await expect(note.getByText('workspace is ready', { exact: true })).toBeVisible()
+  await note.getByRole('textbox', { name: 'Ask about this passage…' }).fill('What does ready mean?')
+  await note.getByRole('button', { name: 'Send message' }).click()
+  await expect(note.getByText('Your workspace is ready. We can take the next step together.', { exact: true })).toBeVisible()
+  const inherited = await page.evaluate(async () => {
+    const source = location.hash.split('/').pop()!
+    const [item] = await (await fetch(`/api/sessions/${source}/followups`)).json()
+    const history = await (await fetch(`/api/sessions/${item.id}/history`)).json()
+    return { count: item.baseMessageCount, first: history[0].content[0].text, second: history[1].content[0].text }
+  })
+  expect(inherited.count).toBe(2)
+  expect(inherited.first).toBe('hello workspace')
+  expect(inherited.second).toContain('Your workspace is ready')
+  await expect(page.locator('.transcript .message-user')).toHaveCount(1)
+  await note.getByRole('button', { name: 'Close' }).click()
+  await expect(note).toHaveCount(0)
+  await expect(page.locator('.followup-pin')).toHaveCount(0)
+  await page.reload()
+  await expect(page.getByText('Connected', { exact: true })).toBeVisible()
+  await clickHighlightedText(page, 'workspace is ready')
+  await expect(page.getByRole('dialog', { name: 'Follow up' }).getByText('What does ready mean?', { exact: false })).toBeVisible()
+  await page.setViewportSize({ width: 390, height: 740 })
+  await expect.poll(async () => {
+    const bounds = await note.boundingBox()
+    return bounds && bounds.x >= 0 && bounds.x + bounds.width <= 390 && bounds.y + bounds.height <= 740
+  }).toBe(true)
+  await page.getByRole('dialog', { name: 'Follow up' }).getByRole('button', { name: 'Delete' }).click()
+  await page.getByRole('dialog', { name: 'Follow up' }).getByRole('button', { name: 'Delete' }).last().click()
+  await expect(note).toHaveCount(0)
+  await clickHighlightedText(page, 'workspace is ready')
+  await expect(note).toHaveCount(0)
+})
+
+test('a closed unsent note reopens with its draft and its floating window stays in the viewport', async ({ page }) => {
+  await ready(page)
+  await send(page, 'hello workspace')
+  await selectAnswerText(page, 'workspace is ready')
+  await page.getByRole('button', { name: 'Follow up', exact: true }).click()
+  const note = page.getByRole('dialog', { name: 'Follow up' })
+  await note.getByRole('textbox', { name: 'Ask about this passage…' }).fill('An unsent question')
+  const before = await note.boundingBox()
+  const grip = await page.getByRole('button', { name: 'Resize follow-up window' }).boundingBox()
+  await page.mouse.move(grip!.x + grip!.width / 2, grip!.y + grip!.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(grip!.x + 90, grip!.y + 75, { steps: 5 })
+  await page.mouse.up()
+  const expanded = await note.boundingBox()
+  expect(expanded!.width).toBeGreaterThan(before!.width + 65)
+  expect(expanded!.height).toBeGreaterThan(before!.height + 50)
+  const compactGrip = await page.getByRole('button', { name: 'Resize follow-up window' }).boundingBox()
+  await page.mouse.move(compactGrip!.x + compactGrip!.width / 2, compactGrip!.y + compactGrip!.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(compactGrip!.x - 180, compactGrip!.y - 200, { steps: 5 })
+  await page.mouse.up()
+  expect((await note.boundingBox())!.height).toBeLessThan(expanded!.height - 100)
+  await expect(note.getByRole('textbox', { name: 'Ask about this passage…' })).toBeVisible()
+  const compact = await note.boundingBox()
+  expect(compact!.width).toBeGreaterThanOrEqual(300)
+  expect(await note.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true)
+  await note.getByRole('button', { name: 'Close' }).click()
+  await clickHighlightedText(page, 'workspace is ready')
+  await expect(note.getByRole('textbox', { name: 'Ask about this passage…' })).toHaveValue('An unsent question')
+  await page.reload()
+  await clickHighlightedText(page, 'workspace is ready')
+  await expect(note.getByRole('textbox', { name: 'Ask about this passage…' })).toHaveValue('An unsent question')
+  await page.setViewportSize({ width: 1024, height: 768 })
+  await expect(page.locator('.chat-main')).toBeVisible()
+  await page.setViewportSize({ width: 758, height: 900 })
+  const singleLine = note.getByRole('textbox', { name: 'Ask about this passage…' })
+  expect((await singleLine.boundingBox())!.height).toBeLessThanOrEqual(32)
+  expect(await singleLine.evaluate(element => getComputedStyle(element).resize)).toBe('none')
+  await page.setViewportSize({ width: 390, height: 740 })
+  await expect(page.locator('.chat-main')).toBeVisible()
+  await expect.poll(async () => {
+    const mobile = await note.boundingBox()
+    return mobile && mobile.x >= 0 && mobile.x + mobile.width <= 390 && mobile.y + mobile.height <= 740
+  }).toBe(true)
+  const field = note.getByRole('textbox', { name: 'Ask about this passage…' })
+  await expect(field).toHaveAttribute('rows', '1')
+  const initialHeight = (await field.boundingBox())!.height
+  await field.fill('First line\nSecond line\nThird line')
+  expect((await field.boundingBox())!.height).toBeGreaterThan(initialHeight + 25)
+  expect(await field.evaluate(element => getComputedStyle(element).resize)).toBe('none')
+  await note.getByRole('button', { name: 'Close' }).click()
+  await expect(page.locator('.chat-main')).toBeVisible()
+  await clickHighlightedText(page, 'workspace is ready')
+  await expect(note.getByRole('textbox', { name: 'Ask about this passage…' })).toHaveValue('First line\nSecond line\nThird line')
+})
+
+test('multiple follow-up windows can overlap and clicking a window brings it to the front', async ({ page }) => {
+  await ready(page)
+  await send(page, 'hello workspace')
+  for (const passage of ['workspace is ready', 'next step together']) {
+    await selectAnswerText(page, passage)
+    await page.getByRole('button', { name: 'Follow up', exact: true }).click()
+    await page.getByRole('dialog', { name: 'Follow up' }).getByRole('button', { name: 'Close' }).click()
+  }
+  const notes = await page.evaluate(async () => {
+    const source = location.hash.split('/').pop()!
+    return await (await fetch(`/api/sessions/${source}/followups`)).json() as { id: string; quote: string }[]
+  })
+  expect(notes).toHaveLength(2)
+  await clickHighlightedText(page, 'workspace is ready')
+  const first = page.locator(`.followup-window[data-note-id="${notes.find(note => note.quote === 'workspace is ready')!.id}"]`)
+  const initial = await first.boundingBox()
+  await page.mouse.move(initial!.x + 90, initial!.y + 22)
+  await page.mouse.down()
+  await page.mouse.move(110, 85, { steps: 5 })
+  await page.mouse.up()
+  await clickHighlightedText(page, 'next step together')
+  const second = page.locator(`.followup-window[data-note-id="${notes.find(note => note.quote === 'next step together')!.id}"]`)
+  await expect(page.getByRole('dialog', { name: 'Follow up' })).toHaveCount(2)
+  const one = await first.boundingBox()
+  const two = await second.boundingBox()
+  await page.mouse.move(one!.x + 90, one!.y + 22)
+  await page.mouse.down()
+  await page.mouse.move(two!.x + 140, two!.y + 72, { steps: 8 })
+  await page.mouse.up()
+  const front = async () => page.evaluate(({ x, y }) => document.elementFromPoint(x, y)?.closest<HTMLElement>('.followup-window')?.dataset.noteId,
+    { x: two!.x + 120, y: two!.y + 95 })
+  expect(await front()).toBe(notes.find(note => note.quote === 'workspace is ready')!.id)
+  await page.mouse.click(two!.x + 25, two!.y + 20)
+  expect(await front()).toBe(notes.find(note => note.quote === 'next step together')!.id)
 })
 
 test('pending approval survives refresh while history is blocked and settles across tabs', async ({ page, context }) => {
