@@ -152,13 +152,13 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
 .welcome p { margin: 0; font-size: 14px; color: var(--muted); }
 .transcript { max-width: 800px; margin: 0 auto; padding: 24px 28px 28px; }
 .message { position: relative; margin-bottom: 27px; font-size: 14px; line-height: 1.85; overflow-wrap: anywhere; }
+.message-with-tools { display: flow-root; margin-bottom: 0; }
+.message-with-tools > .tool-card { margin: 0 0 10px; }
 .message-user { display: flex; justify-content: flex-end; margin: 5px 0 33px; }
 .message-user .message-content { background: var(--subtle); border: 1px solid color-mix(in srgb, var(--line) 65%, transparent); padding: 10px 17px; border-radius: 14px 14px 4px 14px; max-width: 88%; }
 .message-user .markdown > :first-child { margin-top: 0; }
 .message-user .markdown > :last-child { margin-bottom: 0; }
 .message-byline { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; font-size: 12px; font-weight: 600; }
-.message-byline .brand-mark { width: 23px; height: 23px; }
-.message-byline .brand-mark svg { width: 17px; }
 .message-copy { margin-top: 9px; }
 .live-message:has(> .execution-link:only-child) { margin-top: -10px; margin-bottom: 15px; }
 .turn-content > .markdown + .markdown { margin-top: 16px; }

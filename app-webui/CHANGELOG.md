@@ -4,6 +4,13 @@
 
 ### Changed
 
+- Remove the Ingot logo and name from conversation messages while retaining
+  live execution status, navigation branding, and the welcome screen.
+- Apply the saved tool-call visibility preference to persisted history after
+  refresh, including tool-only assistant messages, without hiding answers;
+  remove the parent-message round margin for history with visible tool calls
+  so card spacing stays consistent across mixed and tool-only rounds.
+
 - Discover and invoke Operations through two-level Slash Commands with validated
   display names and unique internal routing identities.
 - Edit configuration in dialogs with progressive Object/List navigation, single-line inputs, retained drafts, and fixed submit controls.

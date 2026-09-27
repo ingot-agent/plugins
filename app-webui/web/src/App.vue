@@ -89,7 +89,7 @@ onBeforeUnmount(() => { runtime.disconnect(); window.removeEventListener('keydow
         <button v-for="option in [{ value: 'light', icon: Sun }, { value: 'dark', icon: Moon }, { value: 'system', icon: Monitor }]" :key="option.value" class="theme-option" :class="{ selected: theme === option.value }" :aria-pressed="theme === option.value" @click="theme = option.value"><component :is="option.icon" :size="22" /><span>{{ t(option.value) }}</span></button>
       </div></div>
       <div class="settings-section"><label class="field-label" for="language">{{ t('language') }}</label><select id="language" v-model="locale" class="field mt-3"><option value="en">English</option><option value="zh">简体中文</option></select></div>
-      <div class="settings-section"><h3 class="field-label">{{ t('developer') }}</h3><RouterLink to="/operations" class="btn mt-3" @click="settings = false"><SquareTerminal :size="15" />{{ t('operationDebugger') }}</RouterLink></div>
+<!--      <div class="settings-section"><h3 class="field-label">{{ t('developer') }}</h3><RouterLink to="/operations" class="btn mt-3" @click="settings = false"><SquareTerminal :size="15" />{{ t('operationDebugger') }}</RouterLink></div>-->
     </Overlay>
     <Overlay :open="pending" :title="t('pending')" drawer @update:open="pending = $event">
       <div v-if="!runtime.pendingCount" class="empty-panel"><Inbox :size="28" /><p>{{ t('noPending') }}</p></div>
