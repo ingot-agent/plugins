@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sync"
 
+	"github.com/ingot-agent/sdk/model"
 	"github.com/pelletier/go-toml/v2"
 )
 
@@ -34,10 +35,21 @@ func loadConfig(scope string) (Config, error) {
 	if err != nil {
 		return config, fmt.Errorf("read plugin config: %w", err)
 	}
+	var document struct {
+		Config
+		ProviderDefaultReasoning bool `toml:"provider_default_reasoning"`
+	}
 	decoder := toml.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&config); err != nil {
+	if err := decoder.Decode(&document); err != nil {
 		return config, fmt.Errorf("decode plugin config: %w", err)
+	}
+	config = document.Config
+	if document.ProviderDefaultReasoning {
+		if config.ReasoningEffort != "" {
+			return Config{}, fmt.Errorf("conflicting legacy reasoning selection: %w", ErrInvalidConfig)
+		}
+		config.ReasoningEffort = model.ReasoningEffortProviderDefault
 	}
 	return config, nil
 }

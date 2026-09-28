@@ -28,12 +28,13 @@ func (r *runtime) invokeRoundModel(
 	configuration Config,
 ) (agent.Round, error) {
 	request := model.Request{
-		Provider:    configuration.Provider,
-		Model:       configuration.Model,
-		Messages:    cloneMessages(messages),
-		Tools:       cloneDefinitions(definitions),
-		Temperature: copyFloat(configuration.Temperature),
-		MaxTokens:   copyInt(configuration.MaxTokens),
+		Provider:        configuration.Provider,
+		Model:           configuration.Model,
+		Messages:        cloneMessages(messages),
+		Tools:           cloneDefinitions(definitions),
+		Temperature:     copyFloat(configuration.Temperature),
+		MaxTokens:       copyInt(configuration.MaxTokens),
+		ReasoningEffort: configuration.ReasoningEffort,
 	}
 	request, err := r.compactRequest(ctx, sessionID, request)
 	if err != nil {

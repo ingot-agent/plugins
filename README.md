@@ -88,7 +88,9 @@ dependencies, operations/tools, state, defaults and limitations.
 Plugin modules cannot depend on Core or sibling plugin implementations, or
 contain `go.mod` replacements. Shared contracts belong in the optional
 [SDK](https://github.com/ingot-agent/sdk), fixed [ABI](https://github.com/ingot-agent/ingot-abi),
-or another contract module. `go.work` may list only first-level plugins here;
+another contract module, or a public contract package exported by a plugin.
+Cross-plugin contract dependencies must use a published module version.
+`go.work` may list only first-level plugins here;
 CI uses `GOWORK=off` to verify each changed module independently.
 
 ```sh

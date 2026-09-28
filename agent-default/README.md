@@ -14,13 +14,13 @@ components, each constructed with `New(ctx, deps)`:
 | --- | --- | --- |
 | `observation` / `./observation` | `[]observation.Observer` | `observation.Consumer` |
 | `session-tree` / `./sessiontree` | `state.Scope`; optional `agent.ChildSessionRepository` and `workspace.Manager` | `agent.Children`, `prompt.Contributor`, internal `sessioncontrol.Control` |
-| `default` / `.` | See below | `agent.Runtime`, `agent.StreamingRuntime`, `agent.History`, `[]operation.Operation` |
+| `default` / `.` | See below | `agent.Runtime`, `agent.StreamingRuntime`, `agent.History`, `modelselection.Controller`, `[]operation.Operation` |
 
 The default component consumes `state.Scope`, `model.Runtime`, `tool.Runtime`,
 `session.Store`, `asset.Store`, `prompt.Renderer`, `observation.Consumer`, and
 `sessioncontrol.Control`. It also consumes ordered `[]model.ProviderSource`,
 `[]agent.Interceptor`, and `[]agent.RoundInterceptor`, plus explicit ABI optional
-`model.StreamingRuntime` and `contextwindow.Compactor` capabilities. The composite
+`model.StreamingRuntime`, `model.RequestResolver`, and `contextwindow.Compactor` capabilities. The composite
 plugin supplies its own observation/control components. Direct Go construction
 can omit observation (discarding events) and control (disabling dispatch), but
 the required model/tool/store/asset/prompt/state dependencies cannot be nil.
@@ -43,6 +43,7 @@ max_rounds = 8
 | --- | --- | --- |
 | `provider` | empty | Uses `model.runtime` selection when empty |
 | `model` | empty | Uses `model.runtime` default model when empty |
+| `reasoning_effort` | empty | Explicit effort; empty inherits `model.runtime`; `providerDefault` skips the runtime effort default |
 | `temperature` | absent | Optional finite number in `[0,2]`; explicit zero is an override |
 | `max_tokens` | absent | Optional positive output-token limit |
 | `max_rounds` | 8 | Maximum model rounds per turn; zero selects 8, negatives fail |
@@ -58,6 +59,14 @@ Override values are collected in a second typed interaction. Saving validates
 the current provider choice, detects conflicting persisted edits, writes the
 file, publishes defaults, and returns `{"restart_required":false}`. Direct file
 edits are loaded at construction.
+
+The optional WebUI model picker contract is implemented by this component.
+Its snapshot combines the live provider directory with the effective agent and
+model-runtime selection. Updates accept only a model declared by the chosen
+provider and an effort declared by that model, detect stale revisions, atomically
+save this plugin's configuration, and affect later turns. An empty effort from
+the picker sets `provider_default_reasoning` explicitly. Existing turns retain
+their initial configuration snapshot.
 
 ## Turn, history, and streaming behavior
 

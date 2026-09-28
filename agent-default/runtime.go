@@ -15,6 +15,7 @@ import (
 	"github.com/ingot-agent/ingot-abi"
 	"github.com/ingot-agent/ingot-abi/state"
 	"github.com/ingot-agent/plugins/agent-default/sessioncontrol"
+	"github.com/ingot-agent/plugins/app-webui/modelselection"
 	"github.com/ingot-agent/sdk/agent"
 	"github.com/ingot-agent/sdk/asset"
 	"github.com/ingot-agent/sdk/content"
@@ -58,11 +59,12 @@ var (
 
 // Config controls model selection and generation.
 type Config struct {
-	Provider    string   `toml:"provider"`
-	Model       string   `toml:"model"`
-	Temperature *float64 `toml:"temperature"`
-	MaxTokens   *int     `toml:"max_tokens"`
-	MaxRounds   int      `toml:"max_rounds"`
+	Provider        string                `toml:"provider"`
+	Model           string                `toml:"model"`
+	ReasoningEffort model.ReasoningEffort `toml:"reasoning_effort,omitempty"`
+	Temperature     *float64              `toml:"temperature"`
+	MaxTokens       *int                  `toml:"max_tokens"`
+	MaxRounds       int                   `toml:"max_rounds"`
 	// Deprecated: retained for config compatibility and ignored. Use the
 	// Streaming export's Stream method to request incremental output.
 	Streaming bool `toml:"streaming"`
@@ -73,6 +75,7 @@ type Dependencies struct {
 	State             state.Scope
 	Model             model.Runtime
 	ProviderSources   []model.ProviderSource
+	Resolver          ingotabi.Optional[model.RequestResolver]
 	Streaming         ingotabi.Optional[model.StreamingRuntime]
 	Tools             tool.Runtime
 	Store             session.Store
@@ -90,6 +93,7 @@ type Exports struct {
 	Runtime    agent.Runtime
 	Streaming  agent.StreamingRuntime
 	History    agent.History
+	Selection  modelselection.Controller
 	Operations []operation.Operation
 }
 
@@ -106,6 +110,9 @@ type runtime struct {
 	observation       observation.Consumer
 	gates             *gateManager
 	config            atomic.Pointer[Config]
+	selectionState    state.Scope
+	selectionSources  []model.ProviderSource
+	resolver          ingotabi.Optional[model.RequestResolver]
 	control           sessioncontrol.Control
 	dispatchCancel    context.CancelFunc
 	dispatchDone      chan struct{}
@@ -140,6 +147,9 @@ func New(ctx context.Context, deps Dependencies) (Exports, ingotabi.Cleanup, err
 	if deps.Compactor.Valid && isNil(deps.Compactor.Value) {
 		return Exports{}, nil, fmt.Errorf("compactor dependency is typed nil: %w", ErrInvalidConfig)
 	}
+	if deps.Resolver.Valid && isNil(deps.Resolver.Value) {
+		return Exports{}, nil, fmt.Errorf("resolver dependency is typed nil: %w", ErrInvalidConfig)
+	}
 	normalized, err := normalizeConfig(cfg, nil)
 	if err != nil {
 		return Exports{}, nil, err
@@ -166,7 +176,8 @@ func New(ctx context.Context, deps Dependencies) (Exports, ingotabi.Cleanup, err
 		model: deps.Model, streaming: deps.Streaming, tools: deps.Tools, store: deps.Store, assets: deps.Assets,
 		prompt: deps.Prompt, compactor: deps.Compactor, interceptors: interceptors,
 		roundInterceptors: roundInterceptors, observation: observationConsumer,
-		gates: newGateManager(),
+		gates:          newGateManager(),
+		selectionState: deps.State, selectionSources: append([]model.ProviderSource(nil), deps.ProviderSources...), resolver: deps.Resolver,
 	}
 	instance.config.Store(&normalized)
 	var cleanup ingotabi.Cleanup
@@ -180,7 +191,7 @@ func New(ctx context.Context, deps Dependencies) (Exports, ingotabi.Cleanup, err
 		instance.startDispatcher(dispatchCtx)
 		cleanup = instance.cleanup
 	}
-	return Exports{Runtime: instance, Streaming: instance, History: instance, Operations: []operation.Operation{&setupOperation{scope: deps.State, providerSources: append([]model.ProviderSource(nil), deps.ProviderSources...), runtime: instance}}}, cleanup, nil
+	return Exports{Runtime: instance, Streaming: instance, History: instance, Selection: instance, Operations: []operation.Operation{&setupOperation{scope: deps.State, providerSources: append([]model.ProviderSource(nil), deps.ProviderSources...), runtime: instance}}}, cleanup, nil
 }
 
 // Load returns a validated, caller-owned snapshot of one session's persisted

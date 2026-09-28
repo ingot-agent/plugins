@@ -37,6 +37,9 @@ is valid; malformed TOML and unknown fields fail startup. Request fields overrid
 configured defaults independently. If the configured/request provider is empty
 and exactly one live provider exists, that provider is selected automatically.
 There is no automatic model selection from a provider's model allowlist.
+`model.ReasoningEffortProviderDefault` explicitly suppresses
+`default_reasoning_effort` for one request. The runtime converts it to an empty
+effort before invoking the provider.
 
 With zero providers, an unknown provider, or multiple providers and no selection,
 the eventual selection fails with `model.ErrProviderNotFound`. An empty model

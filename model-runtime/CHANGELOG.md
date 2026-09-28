@@ -11,6 +11,8 @@ All notable changes to this plugin are documented in this file.
 
 ### Changed
 
+- Let `providerDefault` bypass the configured default reasoning effort when a
+  request explicitly selects the provider's own default.
 - Invoke the required `Complete` and optional `Stream` functions carried by
   each provider entry, without separate provider interfaces or type assertions.
 - Replace static named Provider injection with live `model.ProviderSource`

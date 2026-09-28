@@ -152,6 +152,9 @@ func (r *runtime) Complete(ctx context.Context, request model.Request) (model.Re
 		if callCtx == nil {
 			return model.Response{}, errors.New("model runtime interceptor supplied nil context")
 		}
+		if selected.ReasoningEffort == model.ReasoningEffortProviderDefault {
+			selected.ReasoningEffort = ""
+		}
 		if err := validateRequest(selected); err != nil {
 			return model.Response{}, err
 		}
@@ -221,6 +224,9 @@ func (r *runtime) Stream(ctx context.Context, request model.Request, handler mod
 	terminal := model.StreamNext(func(callCtx context.Context, selected model.Request, selectedHandler model.StreamHandler) (model.Response, error) {
 		if callCtx == nil {
 			return model.Response{}, errors.New("model streaming interceptor supplied nil context")
+		}
+		if selected.ReasoningEffort == model.ReasoningEffortProviderDefault {
+			selected.ReasoningEffort = ""
 		}
 		if err := validateRequest(selected); err != nil {
 			return model.Response{}, err
@@ -333,7 +339,9 @@ func (s providerSnapshot) applyDefaults(request *model.Request) {
 	if request.Model == "" {
 		request.Model = s.defaults.DefaultModel
 	}
-	if request.ReasoningEffort == "" {
+	if request.ReasoningEffort == model.ReasoningEffortProviderDefault {
+		request.ReasoningEffort = ""
+	} else if request.ReasoningEffort == "" {
 		request.ReasoningEffort = s.defaults.DefaultReasoningEffort
 	}
 }

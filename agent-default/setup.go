@@ -187,8 +187,11 @@ func validateConfig(cfg Config) error {
 }
 
 func normalizeConfig(cfg Config, providerNames []string) (Config, error) {
-	if !utf8.ValidString(cfg.Provider) || !utf8.ValidString(cfg.Model) {
+	if !utf8.ValidString(cfg.Provider) || !utf8.ValidString(cfg.Model) || !utf8.ValidString(string(cfg.ReasoningEffort)) {
 		return Config{}, fmt.Errorf("provider or model is invalid UTF-8: %w", ErrInvalidConfig)
+	}
+	if cfg.ReasoningEffort != "" && cfg.ReasoningEffort != model.ReasoningEffortProviderDefault && !cfg.ReasoningEffort.Valid() {
+		return Config{}, fmt.Errorf("reasoning selection is invalid: %w", ErrInvalidConfig)
 	}
 	if cfg.Temperature != nil && (math.IsNaN(*cfg.Temperature) || math.IsInf(*cfg.Temperature, 0) || *cfg.Temperature < 0 || *cfg.Temperature > 2) {
 		return Config{}, fmt.Errorf("temperature must be in [0,2]: %w", ErrInvalidConfig)

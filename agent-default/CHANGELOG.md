@@ -6,6 +6,8 @@ All notable changes to this plugin are documented in this file.
 
 ### Added
 
+- Expose a model selection controller for the Web UI with live provider, model,
+  and reasoning-effort choices, validated and persisted for future turns.
 - Enable three built-in child types (`coder`, `explorer`, `reviewer`) when no
   `subagents.toml` exists and the composed tool runtime includes
   `submit_agent_result`; filter their tool allowlists by installed tools.

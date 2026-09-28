@@ -35,7 +35,11 @@ Plugin modules must not:
 
 - contain a `go.mod` `replace` directive;
 - depend on `github.com/ingot-agent/ingot` or any of its submodules; or
-- depend on another first-level plugin module's implementation.
+- depend on another first-level plugin module's implementation packages.
+
+Plugins may depend on public capability contract packages exported by another
+plugin, using a published module version. The provider remains optional in the
+component graph; the Go dependency only shares the interface and data types.
 
 The current workflow has no Core checkout/build, WebUI-specific job or release
 job. Keep module validation independent from Core. Frontend changes still
