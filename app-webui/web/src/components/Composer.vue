@@ -7,6 +7,7 @@ import { request, errorMessage } from '../api'
 import { useRuntime } from '../stores/runtime'
 import { filterGroups, filterOperations, operationGroups, parseComposerInput } from '../commands'
 import CommandPalette from './CommandPalette.vue'
+import ModelSelectionPicker from './ModelSelectionPicker.vue'
 const props = defineProps<{ sessionKey: string; running: LiveTurn[]; archived?: boolean; disabled?: boolean; sending?: boolean }>()
 const emit = defineEmits<{
   send: [input: string, attachments: Attachment[], done: () => void]
@@ -177,7 +178,7 @@ onBeforeUnmount(() => {
       <div class="composer-toolbar">
         <input ref="picker" type="file" multiple class="sr-only" tabindex="-1" @change="add(($event.target as HTMLInputElement).files || []); ($event.target as HTMLInputElement).value = ''" />
         <button type="button" class="icon-button" :disabled="!runtime.assets.available || archived || disabled || sending" :aria-label="t('attach')" :title="runtime.assets.available ? t('uploadLimit', { size: size(runtime.assets.maxBytes) }) : t('assetUnavailable')" @click="picker?.click()"><Paperclip :size="19" /></button>
-        <span class="composer-agent"><span class="tiny-square" />Ingot</span>
+        <ModelSelectionPicker />
         <button v-if="running.length" type="button" class="send-button stopping-button ml-auto" :disabled="running.every(turn => turn.stopping) || runtime.connection !== 'online'" :aria-label="t(running.some(turn => turn.stopping) ? 'stopping' : 'stop')" @click="stop"><LoaderCircle v-if="running.some(turn => turn.stopping)" class="spin" :size="18" /><Square v-else :size="14" fill="currentColor" /></button>
         <button v-else class="send-button ml-auto" type="submit" :disabled="!canSubmit" :aria-label="t(parsed.kind === 'command' ? 'runOperation' : 'send')"><LoaderCircle v-if="sending" class="spin" :size="18" /><ArrowUp v-else :size="20" /></button>
       </div>

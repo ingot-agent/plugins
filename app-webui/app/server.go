@@ -18,6 +18,7 @@ import (
 	"github.com/ingot-agent/ingot-abi/lifecycle"
 	"github.com/ingot-agent/ingot-abi/state"
 	appbackend "github.com/ingot-agent/plugins/app-webui"
+	"github.com/ingot-agent/plugins/app-webui/modelselection"
 	"github.com/ingot-agent/sdk/agent"
 	"github.com/ingot-agent/sdk/asset"
 	"github.com/ingot-agent/sdk/operation"
@@ -38,6 +39,7 @@ type Dependencies struct {
 	WorkspaceResolver workspace.Resolver
 	Assets            ingotabi.Optional[asset.Store]
 	Operations        []operation.Operation
+	ModelSelection    ingotabi.Optional[modelselection.Controller]
 	Invocation        invocation.Invocation
 	Lifecycle         lifecycle.Controller
 	State             state.Scope
@@ -53,6 +55,7 @@ type application struct {
 	sessions             sessionController
 	turns                *turnRegistry
 	operations           *operationController
+	modelSelection       modelselection.Controller
 	operationInvocations *operationRegistry
 	assets               asset.Store
 	server               *http.Server
@@ -104,6 +107,9 @@ func New(ctx context.Context, deps Dependencies) (Exports, ingotabi.Cleanup, err
 	if deps.Assets.Valid && isNil(deps.Assets.Value) {
 		return Exports{}, nil, fmt.Errorf("nil asset store: %w", appbackend.ErrInvalidConfig)
 	}
+	if deps.ModelSelection.Valid && isNil(deps.ModelSelection.Value) {
+		return Exports{}, nil, fmt.Errorf("nil model selection controller: %w", appbackend.ErrInvalidConfig)
+	}
 	if deps.Invocation.Mode() == invocation.ModeCheck {
 		return Exports{}, nil, nil
 	}
@@ -125,6 +131,9 @@ func New(ctx context.Context, deps Dependencies) (Exports, ingotabi.Cleanup, err
 		workspacePicker:  nativeWorkspacePicker{},
 	}
 	instance.turns = newTurnRegistry(runCtx, agentController, deps.Backend.Events())
+	if deps.ModelSelection.Valid {
+		instance.modelSelection = deps.ModelSelection.Value
+	}
 	instance.operationInvocations = newOperationRegistry(runCtx, operations, deps.Backend.Interactions(), deps.Backend.Events(), normalized.OperationRetention)
 	if deps.Assets.Valid {
 		instance.assets = deps.Assets.Value

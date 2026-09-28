@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import { command, request } from '../api'
-import type { Message, Session, Snapshot } from '../protocol'
+import type { Interaction, Message, ModelSelectionSnapshot, OperationInvocation, Session, Snapshot } from '../protocol'
 import { useRuntime } from './runtime'
 
 vi.mock('../api', async importOriginal => ({
@@ -20,10 +20,36 @@ const snapshot = (): Snapshot => ({
   workspace: { defaultPath: '/state/workspace' },
   sessions: [session('Initial')], turns: [], interactions: [], interactionStates: [], operations: [], operationInvocations: [],
 })
+const selection = (revision: string, model: string): ModelSelectionSnapshot => ({
+  revision, configured: true, current: { provider: 'provider', model, reasoningEffort: 'low' },
+  providers: [{ name: 'provider', models: [{ name: model, reasoningEfforts: ['low'] }] }],
+})
 
 beforeEach(() => { setActivePinia(createPinia()); vi.resetAllMocks() })
 
 describe('runtime request and event ordering', () => {
+  it('keeps a newer model selection event ahead of a pending refresh', async () => {
+    const runtime = useRuntime()
+    const stale = deferred<ModelSelectionSnapshot>()
+    vi.mocked(request).mockReturnValueOnce(stale.promise)
+    const pending = runtime.refreshModelSelection()
+    runtime.receive(1, { type: 'model.selection.updated', data: selection('new', 'model-b') })
+    stale.resolve(selection('old', 'model-a'))
+    await pending
+    expect(runtime.modelSelection?.current.model).toBe('model-b')
+  })
+
+  it('submits the selected model and effort with its revision', async () => {
+    const runtime = useRuntime()
+    runtime.modelSelection = selection('old', 'model-a')
+    vi.mocked(command).mockResolvedValueOnce(selection('new', 'model-b'))
+    await runtime.updateModelSelection({ provider: 'provider', model: 'model-b', reasoningEffort: 'low' }, 'old')
+    expect(command).toHaveBeenCalledWith('/model-selection', 'PUT', {
+      revision: 'old', selection: { provider: 'provider', model: 'model-b', reasoningEffort: 'low' },
+    })
+    expect(runtime.modelSelection?.revision).toBe('new')
+  })
+
   it('does not let a slow session refresh undo a newer SSE mutation', async () => {
     const runtime = useRuntime()
     runtime.bootstrap(snapshot())
@@ -130,5 +156,61 @@ describe('runtime request and event ordering', () => {
     expect(request).toHaveBeenCalledWith('/operations/counter%2Fread', expect.objectContaining({
       body: '{"sessionId":"s","input":{"value":9007199254740993}}',
     }))
+  })
+
+  it('recovers an operation and its form when no operation event arrives', async () => {
+    const runtime = useRuntime()
+    const invocation: OperationInvocation = { id: 'op', operationId: 'config', name: 'config', status: 'running' }
+    const pending: Interaction = { id: 'ask', name: 'config', fields: [], scope: { operation: { invocationId: 'op' } } }
+    vi.mocked(request).mockResolvedValueOnce({ ...snapshot(), operationInvocations: [invocation], interactions: [pending] })
+    await expect(runtime.refreshOperationState('op')).resolves.toBe(true)
+    expect(runtime.operationInvocations.op).toEqual(invocation)
+    expect(runtime.interactions.ask).toEqual(pending)
+  })
+
+  it('does not restore an interaction resolved after a state refresh began', async () => {
+    const runtime = useRuntime()
+    const invocation: OperationInvocation = { id: 'op', operationId: 'config', name: 'config', status: 'running' }
+    const pending: Interaction = { id: 'ask', name: 'config', fields: [], scope: { operation: { invocationId: 'op' } } }
+    runtime.receive(1, { type: 'operation.started', data: invocation })
+    runtime.receive(2, { type: 'interaction.requested', data: pending })
+    const stale = deferred<Snapshot>()
+    vi.mocked(request).mockReturnValueOnce(stale.promise)
+    const refresh = runtime.refreshOperationState('op')
+    runtime.receive(3, { type: 'interaction.resolved', data: { id: 'ask' } })
+    stale.resolve({ ...snapshot(), cursor: 2, operationInvocations: [invocation], interactions: [pending] })
+    await refresh
+    expect(runtime.interactions.ask).toBeUndefined()
+  })
+
+  it('removes a canceled operation from pending requests and ignores late events', async () => {
+    const runtime = useRuntime()
+    const pending: Interaction = { id: 'ask', name: 'config', fields: [], scope: { operation: { invocationId: 'op' } } }
+    runtime.receive(1, { type: 'interaction.requested', data: pending })
+    vi.mocked(command).mockResolvedValueOnce(undefined)
+    await runtime.cancelOperation('op')
+    expect(command).toHaveBeenCalledWith('/operation-invocations/op', 'DELETE')
+    expect(runtime.pendingCount).toBe(0)
+    runtime.receive(2, { type: 'interaction.requested', data: pending })
+    expect(runtime.pendingCount).toBe(0)
+  })
+
+  it('counts an operation only after it is suspended and preserves its draft on reconnect', () => {
+    const runtime = useRuntime()
+    const invocation: OperationInvocation = { id: 'op', operationId: 'config', name: 'config', status: 'running' }
+    const pending: Interaction = { id: 'ask', name: 'config', fields: [], scope: { operation: { invocationId: 'op' } } }
+    runtime.receive(1, { type: 'operation.started', data: invocation })
+    runtime.receive(2, { type: 'interaction.requested', data: pending })
+    expect(runtime.pendingCount).toBe(0)
+    runtime.interactionDrafts.ask = { changed: true }
+    runtime.suspendOperation('op')
+    expect(runtime.pendingCount).toBe(1)
+    runtime.bootstrap({ ...snapshot(), operationInvocations: [invocation], interactions: [pending] })
+    expect(runtime.interactionDrafts.ask).toEqual({ changed: true })
+    expect(runtime.pendingCount).toBe(1)
+    runtime.resumeOperation('op')
+    expect(runtime.pendingCount).toBe(0)
+    runtime.receive(5, { type: 'interaction.resolved', data: { id: 'ask' } })
+    expect(runtime.interactionDrafts.ask).toBeUndefined()
   })
 })

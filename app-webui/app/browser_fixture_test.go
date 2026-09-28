@@ -24,6 +24,7 @@ import (
 	ingotabi "github.com/ingot-agent/ingot-abi"
 	appbackend "github.com/ingot-agent/plugins/app-webui"
 	hostcomponent "github.com/ingot-agent/plugins/app-webui/host"
+	"github.com/ingot-agent/plugins/app-webui/modelselection"
 	"github.com/ingot-agent/sdk/agent"
 	"github.com/ingot-agent/sdk/asset"
 	"github.com/ingot-agent/sdk/content"
@@ -305,6 +306,14 @@ func TestBrowserFixture(t *testing.T) {
 	a.sessions = browserSessionController{sessionController: a.sessions, agent: b}
 	a.turns = newTurnRegistry(ctx, a.agent, host.Runtime.Events())
 	a.assets = &browserAssets{items: make(map[string][]byte)}
+	a.modelSelection = &testModelSelection{snapshot: modelselection.Snapshot{
+		Revision: "initial", Configured: true,
+		Current: modelselection.Selection{Provider: "primary", Model: "chat", ReasoningEffort: "low"},
+		Providers: []modelselection.Provider{
+			{Name: "primary", Models: []modelselection.Model{{Name: "chat", ReasoningEfforts: []string{"low", "high"}}}},
+			{Name: "secondary", Models: []modelselection.Model{{Name: "reasoner", ReasoningEfforts: []string{"medium", "high"}}}},
+		},
+	}}
 	echo := operationFixture("echo")
 	echo.definition.InputSchema = json.RawMessage("{\"type\":\"object\",\"properties\":{\"value\":{\"type\":\"integer\"}},\"required\":[\"value\"]}")
 	echo.invoke = func(_ context.Context, request operation.Request) (operation.Result, error) {

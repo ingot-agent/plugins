@@ -3,7 +3,7 @@
 `app.backend` 是 Ingot 的浏览器应用，包含 Vue 3 + Tailwind CSS 前端及 HTTP/SSE 应用边界。插件目录名为 `app-webui`，Go 模块为 `github.com/ingot-agent/plugins/app-webui`，manifest ID 为 `app.backend`，配置命令 Group 为 `app-webui`；这些标识各有用途，不能互换。[manifest](ingot.plugin.toml) 声明兼容 Ingot `>=0.3.0 <0.4.0`。它是一个包含两个组件的复合插件：
 
 - `host`（包 `./host`）依赖 ABI `state.Scope`，持有进程内的 `EventHub`，导出 `appbackend.Runtime`、全局 `interaction.Channel`、显式作用域的 `interaction.ExecutionBinder` 和 `observation.Observer`。该组件不依赖 Agent，因此 Agent 可以使用这些能力而不会在组件图中形成环。
-- `app`（包 `./app`）是没有能力导出的图叶节点，持有 HTTP 服务器、Controller、运行中的 Turn，以及保留的 Operation 结果。它依赖 host 的 `appbackend.Runtime`、`agent.History`、`session.Store`、`session.Manager`、`session.Query`、`workspace.Manager`、`workspace.Resolver`，以及 ABI `invocation.Invocation`、`lifecycle.Controller` 和 `state.Scope`。相互独立且可选的 `agent.Runtime` 与 `agent.StreamingRuntime` 至少需要提供一个。`asset.Store` 是可选依赖，Operation 通过 `[]operation.Operation` 收集；应用自身另外注册 `/app-webui config`。
+- `app`（包 `./app`）是没有能力导出的图叶节点，持有 HTTP 服务器、Controller、运行中的 Turn，以及保留的 Operation 结果。它依赖 host 的 `appbackend.Runtime`、`agent.History`、`session.Store`、`session.Manager`、`session.Query`、`workspace.Manager`、`workspace.Resolver`，以及 ABI `invocation.Invocation`、`lifecycle.Controller` 和 `state.Scope`。相互独立且可选的 `agent.Runtime` 与 `agent.StreamingRuntime` 至少需要提供一个。`asset.Store` 和 `modelselection.Controller` 是可选依赖，Operation 通过 `[]operation.Operation` 收集；应用自身另外注册 `/app-webui config`。
 
 模块要求 Go 1.24.2，直接 SDK/ABI 版本由 [go.mod](go.mod) 固定，当前分别为 SDK `v0.2.10`、ABI `v0.1.0`。插件没有主程序，应由 Ingot Builder 组合成 Runtime Image。
 
@@ -84,6 +84,7 @@ Web 命令 `/app-webui config`（Group `app-webui`、Name `config`、输入 `{}`
 | 功能 | HTTP 接口 |
 | --- | --- |
 | 状态引导与事件 | `GET /api/state`、`GET /api/events` |
+| 模型选择 | `GET/PUT /api/model-selection` |
 | Turn | `POST /api/turns`、`DELETE /api/turns/{id}` |
 | Session | `GET/POST /api/sessions`、`GET/PATCH/DELETE /api/sessions/{id}`、`POST /api/sessions/{id}/workspace` |
 | Session 生命周期 | `POST /api/sessions/{id}/archive`、`/restore`、`/fork` |
@@ -93,6 +94,10 @@ Web 命令 `/app-webui config`（Group `app-webui`、Name `config`、输入 `{}`
 | Asset | `POST /api/assets`、`GET /api/assets/{id}` |
 | Operation | `GET /api/operations`、`POST /api/operations/{internal-id}`、`DELETE /api/operation-invocations/{id}` |
 | Interaction 响应 | `POST /api/interactions/{id}/response` |
+
+`modelselection.Controller` 定义在本插件的 [modelselection 包](modelselection/selection.go)，由其他插件实现并通过组件图注入。它只提供当前有效选择、实时 provider/model/强度目录及带修订号的更新；WebUI 不读取实现插件的配置。未注入时接口返回 `501`，界面隐藏切换控件。模型目录为空的 provider 不可在界面中选择模型。
+
+`PUT /api/model-selection` 使用 `{"revision":"...","selection":{"provider":"...","model":"...","reasoningEffort":"low"}}`。`reasoningEffort` 为 `providerDefault` 表示明确使用供应商默认值；提交时实现者必须重新校验实时目录并保存。旧修订号返回 `409`，无效选择返回 `400`。成功后发布 `model.selection.updated` 事件，并只影响之后开始的 Turn。
 
 常用请求体示例：
 

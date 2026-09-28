@@ -1,6 +1,13 @@
 # Changelog
 
-## Unreleased
+## 0.2.0 - 2026-09-28
+
+### Added
+
+- Expose the optional `modelselection.Controller` capability so other plugins
+  can provide live provider, model, and reasoning-effort choices to the Web UI.
+- Restore command dialog state when a live event is missed, including pending
+  interactions and completed operations.
 
 ### Changed
 

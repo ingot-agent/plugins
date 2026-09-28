@@ -4,7 +4,7 @@ import { Check, CircleCheck, CircleX, LoaderCircle, Square, SlidersHorizontal } 
 import { useI18n } from 'vue-i18n'
 import type { Operation } from '../protocol'
 import { useRuntime } from '../stores/runtime'
-import { errorMessage } from '../api'
+import { APIError, errorMessage } from '../api'
 import Overlay from './Overlay.vue'
 import StatusBadge from './StatusBadge.vue'
 import InteractionForm from './InteractionForm.vue'
@@ -23,7 +23,8 @@ const runtime = useRuntime()
 const { t } = useI18n()
 const localInvocationId = ref('')
 const startError = ref('')
-const canceling = ref(false)
+const syncError = ref('')
+const closing = ref(false)
 const formId = useId()
 const formState = ref({ busy: false, disabled: true })
 const activeDepth = ref(0)
@@ -34,31 +35,86 @@ const states = computed(() => Object.values(runtime.interactionStates).filter(it
 const command = computed(() => props.operation ? `/${props.operation.group} ${props.operation.name}` : '')
 
 watch(() => props.launchToken, async () => {
+  const launchToken = props.launchToken
   localInvocationId.value = props.invocationId || ''
   startError.value = ''
-  canceling.value = false
+  syncError.value = ''
+  closing.value = false
   activeDepth.value = 0
   if (!props.open || !props.operation || props.invocationId) return
   try {
     const result = await runtime.invoke(props.operation.id, '{}', props.sessionId || '')
+    if (launchToken !== props.launchToken || !props.open) {
+      try { await cancelInvocation(result.id) }
+      catch (cause) { runtime.notify(errorMessage(cause)) }
+      return
+    }
     localInvocationId.value = result.id
     emit('invocation', result.id)
-  } catch (cause) { startError.value = errorMessage(cause) }
+  } catch (cause) {
+    if (launchToken === props.launchToken && props.open) startError.value = errorMessage(cause)
+  }
 }, { immediate: true })
 
-async function cancel() {
-  if (!invocationId.value) return
-  canceling.value = true
-  try { await runtime.cancelOperation(invocationId.value) }
-  catch (cause) { runtime.notify(errorMessage(cause)); canceling.value = false }
+watch([() => props.open, invocationId], ([open, id], _, onCleanup) => {
+  if (!open || !id) return
+  let active = true
+  let syncing = false
+  async function refresh() {
+    if (syncing || (invocation.value && (invocation.value.status !== 'running' || interactions.value.length))) return
+    syncing = true
+    try {
+      const found = await runtime.refreshOperationState(id)
+      if (active && found !== undefined) syncError.value = found ? '' : t('operationUnavailable')
+    } catch (cause) {
+      if (active && !invocation.value) syncError.value = errorMessage(cause)
+    } finally {
+      syncing = false
+    }
+  }
+  void refresh()
+  const timer = window.setInterval(() => { void refresh() }, 2000)
+  onCleanup(() => { active = false; window.clearInterval(timer) })
+}, { immediate: true })
+
+async function cancelInvocation(id: string) {
+  try { await runtime.cancelOperation(id) }
+  catch (cause) {
+    if (!(cause instanceof APIError) || (cause.status !== 404 && cause.status !== 409)) throw cause
+    runtime.dismissOperationInteractions(id)
+  }
+}
+
+async function closeDialog(nextOpen: boolean) {
+  if (nextOpen) { emit('update:open', true); return }
+  if (closing.value) return
+  const id = invocationId.value
+  if (id && (!invocation.value || invocation.value.status === 'running') && interactions.value.some(item => !!runtime.interactionDrafts[item.id])) {
+    runtime.suspendOperation(id)
+    emit('update:open', false)
+    return
+  }
+  if (id && (!invocation.value || invocation.value.status === 'running')) {
+    closing.value = true
+    try { await cancelInvocation(id) }
+    catch (cause) {
+      runtime.notify(errorMessage(cause))
+      closing.value = false
+      return
+    }
+    closing.value = false
+  } else if (id) {
+    runtime.dismissOperationInteractions(id)
+  }
+  emit('update:open', false)
 }
 </script>
 
 <template>
-  <Overlay :open="open" :title="command || t('operation')" :description="operation?.description" @update:open="$emit('update:open', $event)">
+  <Overlay :open="open" :title="command || t('operation')" :description="operation?.description" @update:open="closeDialog">
     <div class="command-dialog">
       <div class="command-dialog-meta"><span><SlidersHorizontal :size="14" />{{ t('operation') }}</span><span v-if="interactions.length" class="command-editing"><span />{{ t('editingOperation') }}</span><StatusBadge v-else-if="invocation" :status="invocation.status" /></div>
-      <div v-if="startError" class="command-state error-text"><CircleX :size="18" /><span>{{ startError }}</span></div>
+      <div v-if="startError || syncError" class="command-state error-text"><CircleX :size="18" /><span>{{ startError || syncError }}</span></div>
       <div v-else-if="!invocationId || !invocation" class="command-state"><LoaderCircle class="spin accent" :size="18" /><span>{{ t(invocationId ? 'waitingOperationState' : 'startingOperation') }}</span></div>
       <template v-else>
         <div v-if="invocation.status === 'running' && !interactions.length" class="command-state"><LoaderCircle class="spin accent" :size="18" /><span>{{ t('waitingOperationInteraction') }}</span></div>
@@ -74,9 +130,8 @@ async function cancel() {
       </template>
     </div>
     <template #footer>
-      <button v-if="invocation?.status === 'running'" type="button" class="btn command-cancel" :aria-label="t('cancelOperation')" :disabled="canceling || formState.busy || runtime.connection !== 'online'" @click="cancel"><LoaderCircle v-if="canceling" class="spin" :size="14" /><Square v-else :size="12" />{{ t(canceling ? 'cancelingOperation' : 'cancel') }}</button>
-      <button type="button" class="btn" @click="$emit('update:open', false)">{{ t('close') }}</button>
-      <button v-if="interactions.length" type="submit" :form="formId" class="btn primary" :aria-label="t('submit')" :disabled="canceling || formState.disabled"><LoaderCircle v-if="formState.busy" class="spin" :size="15" /><Check v-else :size="15" />{{ t('submitOperation') }}</button>
+      <button type="button" class="btn" :disabled="closing" @click="closeDialog(false)"><LoaderCircle v-if="closing" class="spin" :size="14" />{{ t('close') }}</button>
+      <button v-if="interactions.length" type="submit" :form="formId" class="btn primary" :aria-label="t('submit')" :disabled="closing || formState.disabled"><LoaderCircle v-if="formState.busy" class="spin" :size="15" /><Check v-else :size="15" />{{ t('submitOperation') }}</button>
     </template>
   </Overlay>
 </template>
