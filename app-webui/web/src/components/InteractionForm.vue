@@ -5,7 +5,7 @@ import { useI18n } from 'vue-i18n'
 import type { Interaction } from '../protocol'
 import { useRuntime } from '../stores/runtime'
 import { APIError, errorMessage } from '../api'
-import { initialInteractionValues, interactionValues, InteractionValueError } from '../forms'
+import { cloneInteractionValue, equalInteractionValue, initialInteractionValues, interactionValues, InteractionValueError } from '../forms'
 import FieldControl from './FieldControl.vue'
 import OperationFields from './OperationFields.vue'
 
@@ -14,6 +14,7 @@ const emit = defineEmits<{ settled: []; state: [value: { busy: boolean; disabled
 const runtime = useRuntime()
 const { t } = useI18n()
 const values = ref<Record<string, unknown>>({})
+const initialValues = ref<Record<string, unknown>>({})
 const editor = ref<InstanceType<typeof OperationFields>>()
 const busy = ref(false)
 const error = ref('')
@@ -22,14 +23,20 @@ const localId = useId()
 const formId = computed(() => props.id || localId)
 const operation = computed(() => !!props.interaction.scope?.operation)
 const submitDisabled = computed(() => !!props.disabled || busy.value || settled.value || runtime.connection !== 'online')
+const dirty = computed(() => !equalInteractionValue(values.value, initialValues.value))
 watchEffect(() => emit('state', { busy: busy.value, disabled: submitDisabled.value }))
 
 function reset() {
-  values.value = initialInteractionValues(props.interaction.fields)
+  initialValues.value = initialInteractionValues(props.interaction.fields)
+  values.value = cloneInteractionValue(runtime.interactionDrafts[props.interaction.id] || initialValues.value)
   error.value = ''
   settled.value = false
 }
 watch(() => props.interaction.id, reset, { immediate: true })
+watch(values, () => {
+  if (dirty.value) runtime.interactionDrafts[props.interaction.id] = cloneInteractionValue(values.value)
+  else delete runtime.interactionDrafts[props.interaction.id]
+}, { deep: true, flush: 'sync' })
 
 async function submit() {
   if (submitDisabled.value) return

@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { Inbox, X, ArrowUpRight, Sun, Moon, Monitor, SquareTerminal } from 'lucide-vue-next'
+import { Inbox, X, ArrowUpRight, Sun, Moon, Monitor } from 'lucide-vue-next'
 import type { Interaction, Operation } from './protocol'
 import { useRuntime } from './stores/runtime'
 import { readPreference, savePreference, applyTheme } from './theme'
@@ -22,7 +22,7 @@ const commandDialog = reactive({ open: false, operationId: '', sessionId: '', in
 const dialogOperation = computed(() => runtime.operations.find(item => item.id === commandDialog.operationId))
 const operationRequests = computed(() => {
   const seen = new Set<string>()
-  return Object.values(runtime.interactions).filter(item => {
+  return runtime.pendingOperationRequests.filter(item => {
     const id = item.scope?.operation?.invocationId
     if (!id || seen.has(id)) return false
     seen.add(id)
@@ -54,6 +54,7 @@ function resumeOperation(invocationId: string) {
   const invocation = runtime.operationInvocations[invocationId]
   const operation = invocation && runtime.operations.find(item => item.id === invocation.operationId)
   if (!operation) return
+  runtime.resumeOperation(invocationId)
   commandDialog.operationId = operation.id
   commandDialog.sessionId = invocation.sessionId || ''
   commandDialog.invocationId = invocationId

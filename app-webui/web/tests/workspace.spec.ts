@@ -40,6 +40,33 @@ async function openOperationDebugger(page: Page) {
   await page.getByRole('link', { name: 'Operation debugger', exact: true }).click()
 }
 
+test('model and reasoning controls follow the selected provider', async ({ page }) => {
+  await ready(page)
+  const trigger = page.getByRole('button', { name: 'Model selection' })
+  await expect(trigger).toContainText('chat')
+  await expect(trigger).toContainText('low')
+  await trigger.click()
+  await page.getByRole('combobox', { name: 'Provider' }).selectOption('secondary')
+  const models = page.getByRole('combobox', { name: 'Model', exact: true })
+  await expect(models.locator('option')).toHaveCount(1)
+  await expect(models.locator('option')).toHaveText('reasoner')
+  await page.getByRole('combobox', { name: 'Reasoning effort' }).selectOption('high')
+  await page.getByRole('button', { name: 'Save' }).click()
+  await expect(trigger).toContainText('reasoner')
+  await expect(trigger).toContainText('high')
+  await trigger.click()
+  await page.getByRole('combobox', { name: 'Reasoning effort' }).selectOption('providerDefault')
+  await page.getByRole('button', { name: 'Save' }).click()
+  await expect(trigger).toContainText('Provider default')
+  await page.reload()
+  await expect(trigger).toContainText('reasoner')
+  await expect(trigger).toContainText('Provider default')
+  await page.setViewportSize({ width: 390, height: 740 })
+  await trigger.click()
+  await expect(page.getByRole('combobox', { name: 'Provider' })).toBeVisible()
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390)
+})
+
 test('conversation creation, streamed output, execution detail, and history refresh', async ({ page }) => {
   const errors: string[] = []
   page.on('pageerror', error => errors.push(error.message))
@@ -350,7 +377,7 @@ test('cancellation retains partial output and becomes terminal', async ({ page }
   await expect(text).toHaveText(['Partial response', 'next after cancellation'])
 })
 
-test('slash command opens a recursive operation dialog without creating a conversation', async ({ page }) => {
+test('closing an unchanged slash command cancels its form and a new command can submit', async ({ page }) => {
   await ready(page)
   const composer = page.getByRole('textbox', { name: 'Message your agent…', exact: true })
   await composer.fill('/')
@@ -363,9 +390,17 @@ test('slash command opens a recursive operation dialog without creating a conver
   await dialog.getByRole('button', { name: /Rules/ }).click()
   await dialog.getByRole('button', { name: /workspace.inspect/ }).click()
   await expect(dialog.getByRole('textbox', { name: 'Tool', exact: true })).toHaveValue('workspace.inspect')
+  await expect(dialog.getByRole('button', { name: 'Cancel operation' })).toHaveCount(0)
   await dialog.getByRole('button', { name: 'Close', exact: true }).first().click()
+  await expect(dialog).toHaveCount(0)
+  await page.reload()
+  await expect(page.getByText('Connected', { exact: true })).toBeVisible()
   await page.getByRole('button', { name: 'Pending requests', exact: true }).click()
-  await page.getByRole('button', { name: /Continue/ }).click()
+  const pending = page.getByRole('dialog', { name: 'Pending requests', exact: true })
+  await expect(pending.getByText('You’re all caught up.')).toBeVisible()
+  await pending.getByRole('button', { name: 'Close', exact: true }).click()
+  await composer.fill('/tool-shell config')
+  await composer.press('Enter')
   await expect(dialog).toBeVisible()
   await dialog.getByRole('button', { name: /Rules/ }).click()
   await dialog.getByRole('button', { name: 'Add item', exact: true }).click()
@@ -376,6 +411,96 @@ test('slash command opens a recursive operation dialog without creating a conver
   await expect(dialog.getByText('Operation completed.', { exact: true })).toBeVisible()
   await expect(page).toHaveURL(/#\/new$/)
   await expect(page.locator('.message')).toHaveCount(0)
+})
+
+test('closing an edited slash command shelves its draft for later submission', async ({ page }) => {
+  await ready(page)
+  const composer = page.getByRole('textbox', { name: 'Message your agent…', exact: true })
+  await composer.fill('/tool-shell config')
+  await composer.press('Enter')
+  const dialog = page.getByRole('dialog', { name: '/tool-shell config', exact: true })
+  await dialog.getByRole('button', { name: /Rules/ }).click()
+  await dialog.getByRole('button', { name: /workspace.inspect/ }).click()
+  await dialog.getByRole('textbox', { name: 'Tool', exact: true }).fill('workspace.verify')
+  await dialog.getByRole('button', { name: 'Close', exact: true }).first().click()
+  await expect(dialog).toHaveCount(0)
+  await page.getByRole('button', { name: 'Pending requests', exact: true }).click()
+  const pending = page.getByRole('dialog', { name: 'Pending requests', exact: true })
+  await expect(pending.getByRole('button', { name: /\/tool-shell config/ })).toBeVisible()
+  await pending.getByRole('button', { name: /\/tool-shell config/ }).click()
+  await dialog.getByRole('button', { name: /Rules/ }).click()
+  await dialog.getByRole('button', { name: /workspace.verify/ }).click()
+  await expect(dialog.getByRole('textbox', { name: 'Tool', exact: true })).toHaveValue('workspace.verify')
+  await dialog.getByRole('button', { name: 'Submit response', exact: true }).click()
+  await expect(dialog.getByText('Operation completed.', { exact: true })).toBeVisible()
+  await dialog.getByRole('button', { name: 'Close', exact: true }).first().click()
+  await page.getByRole('button', { name: 'Pending requests', exact: true }).click()
+  await expect(page.getByRole('dialog', { name: 'Pending requests', exact: true }).getByText('You’re all caught up.')).toBeVisible()
+})
+
+test('restoring an edited slash command value leaves no pending request', async ({ page }) => {
+  await ready(page)
+  const composer = page.getByRole('textbox', { name: 'Message your agent…', exact: true })
+  await composer.fill('/tool-shell config')
+  await composer.press('Enter')
+  const dialog = page.getByRole('dialog', { name: '/tool-shell config', exact: true })
+  await dialog.getByRole('button', { name: /Rules/ }).click()
+  await dialog.getByRole('button', { name: /workspace.inspect/ }).click()
+  const tool = dialog.getByRole('textbox', { name: 'Tool', exact: true })
+  await tool.fill('workspace.verify')
+  await tool.fill('workspace.inspect')
+  await dialog.getByRole('button', { name: 'Close', exact: true }).first().click()
+  await expect(dialog).toHaveCount(0)
+  await page.getByRole('button', { name: 'Pending requests', exact: true }).click()
+  await expect(page.getByRole('dialog', { name: 'Pending requests', exact: true }).getByText('You’re all caught up.')).toBeVisible()
+})
+
+test('closing before a slash command starts cancels it when the response arrives', async ({ page }) => {
+  let releaseResponse!: () => void
+  let operationStarted!: () => void
+  const started = new Promise<void>(resolve => { operationStarted = resolve })
+  const held = new Promise<void>(resolve => { releaseResponse = resolve })
+  await page.route('**/api/operations/*', async route => {
+    const response = await route.fetch()
+    operationStarted()
+    await held
+    await route.fulfill({ response })
+  })
+  await ready(page)
+  const composer = page.getByRole('textbox', { name: 'Message your agent…', exact: true })
+  await composer.fill('/tool-shell config')
+  await composer.press('Enter')
+  await started
+  await expect.poll(async () => {
+    const state = await (await page.request.get('/api/state')).json()
+    return state.interactions.length
+  }).toBe(1)
+  const dialog = page.getByRole('dialog', { name: '/tool-shell config', exact: true })
+  await dialog.getByRole('button', { name: 'Close', exact: true }).last().click()
+  await expect(dialog).toHaveCount(0)
+  releaseResponse()
+  await expect.poll(async () => {
+    const state = await (await page.request.get('/api/state')).json()
+    return state.interactions.length
+  }).toBe(0)
+  await page.getByRole('button', { name: 'Pending requests', exact: true }).click()
+  await expect(page.getByRole('dialog', { name: 'Pending requests' }).getByText('You’re all caught up.')).toBeVisible()
+})
+
+test('slash command recovers its form when the event stream stops delivering events', async ({ page }) => {
+  await page.addInitScript(() => {
+    const nativeFetch = window.fetch.bind(window)
+    window.fetch = (input, init) => String(input).startsWith('/api/events?after=')
+      ? Promise.resolve(new Response(new ReadableStream(), { headers: { 'Content-Type': 'text/event-stream' } }))
+      : nativeFetch(input, init)
+  })
+  await ready(page)
+  const composer = page.getByRole('textbox', { name: 'Message your agent…', exact: true })
+  await composer.fill('/tool-shell config')
+  await composer.press('Enter')
+  const dialog = page.getByRole('dialog', { name: '/tool-shell config', exact: true })
+  await expect(dialog.getByRole('button', { name: /Rules/ })).toBeVisible()
+  await expect(dialog.getByText('Waiting for operation state…')).toHaveCount(0)
 })
 
 test('nested providers keep complex detail navigation and edit scalar lists inline', async ({ page }) => {
@@ -461,8 +586,10 @@ test('operation drilldown works in the debugger and dark Chinese mobile dialog',
   await expect(dialog.getByRole('button', { name: '提交回复', exact: true })).toBeInViewport()
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
   await page.screenshot({ path: 'test-results/operation-provider-dark-mobile.png' })
-  await dialog.getByRole('button', { name: '取消执行', exact: true }).click()
-  await expect(dialog.getByText('操作已取消。', { exact: true })).toBeVisible()
+  await dialog.getByRole('button', { name: '关闭', exact: true }).last().click()
+  await expect(dialog).toHaveCount(0)
+  await page.getByRole('button', { name: '待处理请求', exact: true }).click()
+  await expect(page.getByRole('dialog', { name: '待处理请求' }).getByText('所有请求均已处理。')).toBeVisible()
 })
 
 test('session rename, archive, restore, fork and delete', async ({ page }) => {

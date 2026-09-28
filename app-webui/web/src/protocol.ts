@@ -141,6 +141,17 @@ export interface Snapshot {
   operations: Operation[]
   operationInvocations: OperationInvocation[]
 }
+export interface ModelSelection {
+  provider: string
+  model: string
+  reasoningEffort: string
+}
+export interface ModelSelectionSnapshot {
+  revision: string
+  configured: boolean
+  current: ModelSelection
+  providers: { name: string; models: { name: string; reasoningEfforts: string[] }[] }[]
+}
 // Observation and Operation payloads deliberately include arbitrary plugin JSON.
 export interface WebEvent { type: string; scope?: Scope; data: Record<string, any> }
 export interface TraceEvent extends WebEvent { cursor: number }

@@ -15,6 +15,7 @@ import (
 
 	appbackend "github.com/ingot-agent/plugins/app-webui"
 	"github.com/ingot-agent/plugins/app-webui/internal/projection"
+	"github.com/ingot-agent/plugins/app-webui/modelselection"
 	"github.com/ingot-agent/sdk/agent"
 	"github.com/ingot-agent/sdk/asset"
 	"github.com/ingot-agent/sdk/content"
@@ -28,6 +29,8 @@ const maxJSONBody = 1 << 20
 func (a *application) routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/state", a.handleState)
+	mux.HandleFunc("GET /api/model-selection", a.handleModelSelection)
+	mux.HandleFunc("PUT /api/model-selection", a.handleUpdateModelSelection)
 	mux.HandleFunc("GET /api/events", a.handleEvents)
 	mux.HandleFunc("POST /api/turns", a.handleCreateTurn)
 	mux.HandleFunc("DELETE /api/turns/{id}", a.handleCancelTurn)
@@ -79,6 +82,48 @@ func (a *application) handleState(w http.ResponseWriter, r *http.Request) {
 		Interactions:         a.backend.Interactions().Pending(),
 		InteractionStates:    a.backend.Interactions().States(),
 	})
+}
+
+func (a *application) handleModelSelection(w http.ResponseWriter, r *http.Request) {
+	if a.modelSelection == nil {
+		writeAPIError(w, http.StatusNotImplemented, "model_selection_unavailable", "model selection is unavailable")
+		return
+	}
+	noCache(w)
+	snapshot, err := a.modelSelection.Snapshot(r.Context())
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, snapshot)
+}
+
+func (a *application) handleUpdateModelSelection(w http.ResponseWriter, r *http.Request) {
+	if a.modelSelection == nil {
+		writeAPIError(w, http.StatusNotImplemented, "model_selection_unavailable", "model selection is unavailable")
+		return
+	}
+	var input struct {
+		Revision  string                   `json:"revision"`
+		Selection modelselection.Selection `json:"selection"`
+	}
+	if err := decodeJSON(w, r, &input); err != nil {
+		return
+	}
+	snapshot, err := a.modelSelection.Update(r.Context(), input.Selection, input.Revision)
+	if err != nil {
+		switch {
+		case errors.Is(err, modelselection.ErrConflict):
+			writeAPIError(w, http.StatusConflict, "model_selection_changed", "model selection changed; reload the choices")
+		case errors.Is(err, modelselection.ErrInvalid):
+			writeAPIError(w, http.StatusBadRequest, "invalid_model_selection", "the selected model or reasoning effort is unavailable")
+		default:
+			writeError(w, err)
+		}
+		return
+	}
+	_ = a.backend.Events().Publish(appbackend.Event{Type: "model.selection.updated", Data: snapshot})
+	writeJSON(w, http.StatusOK, snapshot)
 }
 
 func (a *application) handleEvents(w http.ResponseWriter, r *http.Request) {

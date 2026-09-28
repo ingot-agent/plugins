@@ -217,6 +217,15 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
 .composer-input::placeholder { color: var(--muted); }
 .composer-toolbar { display: flex; align-items: center; gap: 8px; }
 .composer-agent { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--muted); }
+.model-selection-trigger { display: inline-flex; align-items: center; gap: 6px; min-width: 0; max-width: min(65%, 390px); height: 28px; padding: 0 6px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); font-size: 11px; }
+.model-selection-trigger:hover { background: var(--hover); color: var(--ink); }
+.model-selection-current { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.model-selection-effort { flex: none; max-width: 100px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--accent); }
+.model-selection-popover { z-index: 40; width: min(310px, calc(100vw - 28px)); padding: 15px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); box-shadow: 0 18px 50px #0003; }
+.model-selection-heading { font-size: 13px; font-weight: 600; }
+.model-selection-popover .form-field { margin: 12px 0; }
+.model-selection-note { color: var(--muted); font-size: 12px; line-height: 1.5; }
+.model-selection-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 17px; }
 .tiny-square { width: 5px; height: 5px; border-radius: 1px; background: var(--muted); opacity: .6; }
 .send-button { display: flex; align-items: center; justify-content: center; width: 33px; height: 33px; background: var(--ink); color: var(--canvas); border: 0; border-radius: 10px; }
 .send-button:disabled { opacity: 1; background: var(--subtle); color: #b4b6af; }
@@ -319,8 +328,6 @@ details[open] > summary > .disclosure-chevron { transform: rotate(90deg); }
 .command-dialog-meta > span { display: inline-flex; align-items: center; gap: 7px; }
 .command-editing { color: var(--accent); }
 .command-editing > span { width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
-.command-cancel { margin-right: auto; border-color: transparent; background: transparent; color: var(--muted); }
-.command-cancel:hover:not(:disabled) { color: var(--danger); background: color-mix(in srgb, var(--danger) 7%, var(--surface)); }
 .command-dialog > .markdown { color: var(--muted); font-size: 12px; }
 .command-state { display: flex; align-items: center; gap: 9px; margin: 18px 0; padding: 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--subtle); font-size: 12px; }
 .success-text { color: #5f895f; }
