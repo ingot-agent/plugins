@@ -97,6 +97,11 @@ Web 命令 `/app-webui config`（Group `app-webui`、Name `config`、输入 `{}`
 
 `modelselection.Controller` 定义在本插件的 [modelselection 包](modelselection/selection.go)，由其他插件实现并通过组件图注入。它只提供当前有效选择、实时 provider/model/强度目录及带修订号的更新；WebUI 不读取实现插件的配置。未注入时接口返回 `501`，界面隐藏切换控件。模型目录为空的 provider 不可在界面中选择模型。
 
+当前官方实现由 [model-runtime](../model-runtime/README.md) 提供，选择器修改它的
+默认供应商、模型和推理强度，与 `/model-runtime config` 使用同一份配置和冲突检查。
+Agent 不再保存独立的模型覆盖配置。契约保留在 WebUI 的公开包中，用于展示插件可自行
+发布能力 SDK，并由其他插件实现，无需把新能力加入官方 SDK。
+
 `PUT /api/model-selection` 使用 `{"revision":"...","selection":{"provider":"...","model":"...","reasoningEffort":"low"}}`。`reasoningEffort` 为 `providerDefault` 表示明确使用供应商默认值；提交时实现者必须重新校验实时目录并保存。旧修订号返回 `409`，无效选择返回 `400`。成功后发布 `model.selection.updated` 事件，并只影响之后开始的 Turn。
 
 常用请求体示例：

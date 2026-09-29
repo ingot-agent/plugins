@@ -3,12 +3,10 @@ package agentdefault
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"path/filepath"
 	"testing"
 
 	"github.com/ingot-agent/sdk/interaction"
-	"github.com/ingot-agent/sdk/model"
 	"github.com/ingot-agent/sdk/operation"
 )
 
@@ -36,10 +34,10 @@ func (*setupTestChannel) Emit(context.Context, interaction.Event) error { return
 func (*setupTestChannel) Set(context.Context, interaction.State) error  { return nil }
 func (*setupTestChannel) Clear(context.Context, string) error           { return nil }
 
-func TestSetupUsesProviderOptionsAndExplicitlyClearsOverrides(t *testing.T) {
+func TestSetupOnlyExposesGenerationSettingsAndClearsOverrides(t *testing.T) {
 	temperature, maxTokens := 0.7, 512
-	current := Config{Provider: "first", Model: "model", Temperature: &temperature, MaxTokens: &maxTokens, MaxRounds: 10}
-	active, err := normalizeConfig(current, []string{"first", "second"})
+	current := Config{Temperature: &temperature, MaxTokens: &maxTokens, MaxRounds: 10}
+	active, err := normalizeConfig(current)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -48,13 +46,11 @@ func TestSetupUsesProviderOptionsAndExplicitlyClearsOverrides(t *testing.T) {
 		t.Fatal(err)
 	}
 	channel := &setupTestChannel{responses: []interaction.Response{{Values: []interaction.Answer{
-		{Name: "provider", Value: interaction.StringValue("second")},
-		{Name: "model", Value: interaction.StringValue("next-model")},
 		{Name: "temperature_mode", Value: interaction.StringValue(overrideInherit)},
 		{Name: "max_tokens_mode", Value: interaction.StringValue(overrideInherit)},
 		{Name: "max_rounds", Value: interaction.IntegerValue(12)},
 	}}}}
-	op := &setupOperation{scope: scope, providerSources: []model.ProviderSource{&setupProviderSource{names: []string{"first", "second"}}}, runtime: setupRuntime(active)}
+	op := &setupOperation{scope: scope, runtime: setupRuntime(active)}
 	result, err := op.Invoke(context.Background(), operation.Request{Interaction: channel})
 	if err != nil {
 		t.Fatal(err)
@@ -66,18 +62,21 @@ func TestSetupUsesProviderOptionsAndExplicitlyClearsOverrides(t *testing.T) {
 		t.Fatalf("output = %s, error = %v", result.Output, err)
 	}
 	running := op.runtime.config.Load()
-	if running.Provider != "second" || running.Model != "next-model" || running.Temperature != nil || running.MaxTokens != nil || running.MaxRounds != 12 {
+	if running.Temperature != nil || running.MaxTokens != nil || running.MaxRounds != 12 {
 		t.Fatalf("running config = %#v", running)
 	}
-	provider := findSetupField(t, channel.requests[0], "provider")
-	if provider.Kind != interaction.FieldChoice || len(provider.Options) != 3 || provider.Options[0].Value != "" || provider.Options[2].Value != "second" {
-		t.Fatalf("provider field = %#v", provider)
+	for _, field := range channel.requests[0].Fields {
+		switch field.Name {
+		case "temperature_mode", "max_tokens_mode", "max_rounds":
+		default:
+			t.Fatalf("unexpected agent setting: %s", field.Name)
+		}
 	}
 	stored, err := loadConfig(scope.Dir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stored.Provider != "second" || stored.Model != "next-model" || stored.Temperature != nil || stored.MaxTokens != nil || stored.MaxRounds != 12 {
+	if stored.Temperature != nil || stored.MaxTokens != nil || stored.MaxRounds != 12 {
 		t.Fatalf("stored = %#v", stored)
 	}
 	if len(channel.requests) != 1 {
@@ -87,7 +86,7 @@ func TestSetupUsesProviderOptionsAndExplicitlyClearsOverrides(t *testing.T) {
 
 func TestSetupRequestsOverrideValuesInASecondInteraction(t *testing.T) {
 	current := Config{}
-	active, err := normalizeConfig(current, nil)
+	active, err := normalizeConfig(current)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,67 +115,6 @@ func TestSetupRequestsOverrideValuesInASecondInteraction(t *testing.T) {
 	}
 	if stored.Temperature == nil || *stored.Temperature != 0.25 || stored.MaxTokens == nil || *stored.MaxTokens != 256 {
 		t.Fatalf("stored = %#v", stored)
-	}
-}
-
-func TestSetupRefreshesProvidersAndRepairsRemovedSelection(t *testing.T) {
-	scope := testStateScope{dir: writeTestConfig(t, Config{Provider: "removed"})}
-	source := &setupProviderSource{}
-	op := &setupOperation{scope: scope, providerSources: []model.ProviderSource{source}, runtime: setupRuntime(Config{Provider: "removed", MaxRounds: defaultMaxRounds})}
-	for _, selected := range []string{"", "added"} {
-		if selected != "" {
-			source.names = []string{selected}
-		}
-		channel := &setupTestChannel{
-			responses: []interaction.Response{{Values: []interaction.Answer{
-				{Name: "provider", Value: interaction.StringValue(selected)},
-				{Name: "temperature_mode", Value: interaction.StringValue(overrideInherit)},
-				{Name: "max_tokens_mode", Value: interaction.StringValue(overrideInherit)},
-			}}},
-			onRequest: func(request interaction.Request) {
-				field := findSetupField(t, request, "provider")
-				if field.Kind != interaction.FieldChoice || len(field.Options) != len(source.names)+1 {
-					t.Fatalf("provider options = %#v", field)
-				}
-				if selected == "" && field.Default != nil {
-					t.Fatalf("removed provider must not remain a choice default: %#v", field.Default)
-				}
-				if selected != "" && field.Options[1].Value != selected {
-					t.Fatalf("new provider absent from options: %#v", field)
-				}
-			},
-		}
-		if _, err := op.Invoke(context.Background(), operation.Request{Interaction: channel}); err != nil {
-			t.Fatal(err)
-		}
-		stored, err := loadConfig(scope.Dir())
-		if err != nil || stored.Provider != selected {
-			t.Fatalf("saved provider = %q, error = %v", stored.Provider, err)
-		}
-	}
-}
-
-func TestSetupRejectsProviderRemovedDuringInteraction(t *testing.T) {
-	for _, remaining := range [][]string{nil, {"other"}} {
-		scope := testStateScope{dir: writeTestConfig(t, Config{})}
-		source := &setupProviderSource{names: []string{"selected"}}
-		selected := "selected"
-		channel := &setupTestChannel{
-			responses: []interaction.Response{{Values: []interaction.Answer{
-				{Name: "provider", Value: interaction.StringValue(selected)},
-				{Name: "temperature_mode", Value: interaction.StringValue(overrideInherit)},
-				{Name: "max_tokens_mode", Value: interaction.StringValue(overrideInherit)},
-			}}},
-			onRequest: func(interaction.Request) { source.names = remaining },
-		}
-		op := &setupOperation{scope: scope, providerSources: []model.ProviderSource{source}, runtime: setupRuntime(Config{MaxRounds: defaultMaxRounds})}
-		if _, err := op.Invoke(context.Background(), operation.Request{Interaction: channel}); !errors.Is(err, ErrInvalidConfig) {
-			t.Fatalf("error = %v, want ErrInvalidConfig", err)
-		}
-		stored, err := loadConfig(scope.Dir())
-		if err != nil || stored.Provider != "" {
-			t.Fatalf("removed selection was saved: %#v, error = %v", stored, err)
-		}
 	}
 }
 

@@ -73,6 +73,14 @@ depending on another plugin's contract.
 Do not put capability target types in a graph component's implementation package.
 Official plugin modules cannot import sibling plugin implementations or Core.
 
+For example, [app-webui/modelselection](../app-webui/modelselection/selection.go)
+defines a model picker contract consumed by WebUI and implemented by
+[model-runtime](../model-runtime/README.md). The implementation imports the
+published contract package; it does not depend on the WebUI application component.
+This demonstrates that the official SDK is optional: community plugins can
+publish their own SDK contracts and compose new capabilities without changing
+Core or extending the official SDK.
+
 | Dependency field | Resolution |
 |---|---|
 | `T` | Exactly one matching provider |

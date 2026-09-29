@@ -141,8 +141,9 @@ Recipe 旁会产生对应的 lock 文件及写入锁文件。这些是本地验�
    只是配置，教程没有假设某个第三方服务或模型已经可用。
 2. 用 `/model-runtime config` 选中 `primary`，填写该服务实际支持的模型 ID。
    适配器的模型列表是 allowlist，不会向服务请求模型目录。
-3. 保留 `/agent-default config` 的 provider/model 为继承模式；新 Runtime
-   没有旧覆盖。若复用 Runtime，先检查旧 override 是否改变了选择。
+3. `/agent-default config` 只调整生成参数和轮数限制，模型选择统一由
+   model-runtime 管理。旧 Agent 的模型覆盖配置会被忽略；如果之前只在 Agent
+   中设置过模型，请在 `/model-runtime config` 中重新选择一次。
 4. 新建 Session，发送一句普通文本，确认得到模型答复，并在刷新后仍可读取
    Session 历史。这个组合没有 shell、文件编辑或提问工具。
 

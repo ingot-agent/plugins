@@ -6,6 +6,10 @@ All notable changes to this plugin are documented in this file.
 
 ### Added
 
+- Implement the public app-webui model selection contract in model-runtime.
+  The picker updates the same defaults and persistent state as the config
+  Operation, with live directory validation and shared conflict detection.
+
 - Configure provider, model, and reasoning-effort defaults from live provider
   capability directories and validate every resolved request against them.
 

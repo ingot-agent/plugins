@@ -17,6 +17,13 @@ import (
 	"github.com/ingot-agent/sdk/tool"
 )
 
+// turnConfig freezes generation settings and the model runtime's effective
+// selection for all rounds of one turn. It is never persisted by the Agent.
+type turnConfig struct {
+	Config
+	selection model.Request
+}
+
 func (r *runtime) execute(ctx context.Context, turn agent.Turn, handler agent.StreamHandler) (execution agent.Execution, err error) {
 	return r.executeFrame(ctx, turn, handler, nil)
 }
@@ -34,7 +41,7 @@ func (r *runtime) executeFrame(ctx context.Context, turn agent.Turn, handler age
 	if err := ctx.Err(); err != nil {
 		return agent.Execution{}, err
 	}
-	configuration := *r.config.Load()
+	configuration := turnConfig{Config: *r.config.Load()}
 	turnID, err := newTurnID()
 	if err != nil {
 		return agent.Execution{}, fmt.Errorf("generate turn id: %w", err)
@@ -62,6 +69,18 @@ func (r *runtime) executeFrame(ctx context.Context, turn agent.Turn, handler age
 			Status: terminalStatus(err), Result: cloneResult(execution.Result), Outcome: cloneOutcome(execution.Outcome), Error: errorText(err),
 		})
 	}()
+	if r.resolver.Valid {
+		configuration.selection, err = r.resolver.Value.ResolveRequest(ctx, model.Request{})
+		if err != nil {
+			recorder.recordFailure(err, agent.FailureModel, nil, "")
+			return agent.Execution{}, err
+		}
+		// Freeze provider-default reasoning too: an empty request effort would
+		// inherit a new runtime default if the picker changed during the turn.
+		if configuration.selection.ReasoningEffort == "" {
+			configuration.selection.ReasoningEffort = model.ReasoningEffortProviderDefault
+		}
+	}
 	release, err := r.gates.acquire(ctx, string(turn.SessionID))
 	if err != nil {
 		recorder.recordFailure(err, agent.FailureSessionGate, nil, "")
@@ -149,7 +168,7 @@ func (r *runtime) executeFrame(ctx context.Context, turn agent.Turn, handler age
 	return agent.Execution{}, nil
 }
 
-func (r *runtime) runTurn(ctx context.Context, turn agent.Turn, handler agent.StreamHandler, frame *turnFrame, configuration Config) (agent.Result, error) {
+func (r *runtime) runTurn(ctx context.Context, turn agent.Turn, handler agent.StreamHandler, frame *turnFrame, configuration turnConfig) (agent.Result, error) {
 	if err := ctx.Err(); err != nil {
 		executionRecorderFrom(ctx).recordFailure(err, agent.FailureHistoryLoad, nil, "")
 		return agent.Result{}, err
@@ -227,7 +246,7 @@ func (r *runtime) observeRound(
 	handler agent.StreamHandler,
 	lastAllowed bool,
 	frame *turnFrame,
-	configuration Config,
+	configuration turnConfig,
 ) (result agent.RoundResult, resultErr error) {
 	correlation, _ := observation.CorrelationFromContext(ctx)
 	correlation.RoundIndex = index

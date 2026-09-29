@@ -72,16 +72,17 @@ fail until it is configured again; explicit valid requests and configuration
 remain available. Invalid or duplicate directory entries require repair before
 the directory can be used.
 
-Provider choices in `model-runtime`, `agent-default`, and `context-compact`
+Provider choices in `model-runtime` and `context-compact`
 use current source snapshots. `usage-default` estimates input tokens with
 `unicode-estimate-v1` for every resolved model and has no provider route
 configuration. Non-text content is skipped by this estimate. Existing forms
 remain immutable; closed choices are revalidated
-at submission. Model
-and reasoning-effort choices in `model-runtime` use provider capability
-directories, while changes to other plugins' configuration are not applied
-live. Existing explicit agent or context provider or model overrides continue
-to take precedence over runtime defaults.
+at submission. Model and reasoning-effort choices in `model-runtime` use
+provider capability directories. The WebUI model picker updates the same runtime
+defaults as its configuration Operation through the public
+`app-webui/modelselection` contract. Agent has no persisted selection overrides;
+it captures runtime defaults at turn entry through `model.RequestResolver`.
+Explicit context-compaction overrides still take precedence over runtime defaults.
 
 ## Configuration boundaries
 
@@ -89,7 +90,7 @@ Model configuration through the existing Operations needs no restart. This
 covers already-loaded plugins. Installing new plugin binaries follows the
 existing runtime image build and startup workflow. Editing state files directly
 does not trigger live reload. Provider state file formats and names are
-unchanged. Model enumeration and a new model-picker UI are outside this change.
+unchanged. The model picker accepts only models declared in the live directory.
 
 ## Verification
 
@@ -115,8 +116,7 @@ and removes its workspace afterward. It preserves the repository's `go.work`
 and module dependency files. Caller settings such as `GOCACHE` remain in effect.
 No Core checkout or build is required.
 
-Five of these model-related plugins declare SDK `v0.2.10`; `agent-default`
-now declares `v0.2.11` for its child-agent contracts. Check each `go.mod` and
+`agent-default` and `model-runtime` declare SDK `v0.2.14`. Check each `go.mod` and
 the selected module graph: a composition uses one SDK version, and all modules
 must pass independent checks with `GOWORK=off`.
 The temporary workspace is used when testing further SDK changes from

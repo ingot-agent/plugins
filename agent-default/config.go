@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"sync"
 
-	"github.com/ingot-agent/sdk/model"
 	"github.com/pelletier/go-toml/v2"
 )
 
@@ -37,7 +36,12 @@ func loadConfig(scope string) (Config, error) {
 	}
 	var document struct {
 		Config
-		ProviderDefaultReasoning bool `toml:"provider_default_reasoning"`
+		// Accept old files without retaining a second source of model defaults.
+		// The next save writes only Config and drops these retired fields.
+		Provider                 string `toml:"provider"`
+		Model                    string `toml:"model"`
+		ReasoningEffort          string `toml:"reasoning_effort"`
+		ProviderDefaultReasoning bool   `toml:"provider_default_reasoning"`
 	}
 	decoder := toml.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
@@ -45,12 +49,6 @@ func loadConfig(scope string) (Config, error) {
 		return config, fmt.Errorf("decode plugin config: %w", err)
 	}
 	config = document.Config
-	if document.ProviderDefaultReasoning {
-		if config.ReasoningEffort != "" {
-			return Config{}, fmt.Errorf("conflicting legacy reasoning selection: %w", ErrInvalidConfig)
-		}
-		config.ReasoningEffort = model.ReasoningEffortProviderDefault
-	}
 	return config, nil
 }
 

@@ -14,12 +14,12 @@ components, each constructed with `New(ctx, deps)`:
 | --- | --- | --- |
 | `observation` / `./observation` | `[]observation.Observer` | `observation.Consumer` |
 | `session-tree` / `./sessiontree` | `state.Scope`; optional `agent.ChildSessionRepository` and `workspace.Manager` | `agent.Children`, `prompt.Contributor`, internal `sessioncontrol.Control` |
-| `default` / `.` | See below | `agent.Runtime`, `agent.StreamingRuntime`, `agent.History`, `modelselection.Controller`, `[]operation.Operation` |
+| `default` / `.` | See below | `agent.Runtime`, `agent.StreamingRuntime`, `agent.History`, `[]operation.Operation` |
 
 The default component consumes `state.Scope`, `model.Runtime`, `tool.Runtime`,
 `session.Store`, `asset.Store`, `prompt.Renderer`, `observation.Consumer`, and
-`sessioncontrol.Control`. It also consumes ordered `[]model.ProviderSource`,
-`[]agent.Interceptor`, and `[]agent.RoundInterceptor`, plus explicit ABI optional
+`sessioncontrol.Control`. It also consumes ordered `[]agent.Interceptor` and
+`[]agent.RoundInterceptor`, plus explicit ABI optional
 `model.StreamingRuntime`, `model.RequestResolver`, and `contextwindow.Compactor` capabilities. The composite
 plugin supplies its own observation/control components. Direct Go construction
 can omit observation (discarding events) and control (disabling dispatch), but
@@ -31,8 +31,6 @@ the required model/tool/store/asset/prompt/state dependencies cannot be nil.
 It is not a `[plugins.agent.default]` build-recipe configuration table.
 
 ```toml
-provider = ""
-model = ""
 max_rounds = 8
 # Optional generation overrides; omit to inherit provider behavior:
 # temperature = 0.2
@@ -41,9 +39,6 @@ max_rounds = 8
 
 | Field | Default | Meaning |
 | --- | --- | --- |
-| `provider` | empty | Uses `model.runtime` selection when empty |
-| `model` | empty | Uses `model.runtime` default model when empty |
-| `reasoning_effort` | empty | Explicit effort; empty inherits `model.runtime`; `providerDefault` skips the runtime effort default |
 | `temperature` | absent | Optional finite number in `[0,2]`; explicit zero is an override |
 | `max_tokens` | absent | Optional positive output-token limit |
 | `max_rounds` | 8 | Maximum model rounds per turn; zero selects 8, negatives fail |
@@ -53,20 +48,26 @@ Missing configuration applies defaults. Malformed TOML and unknown fields fail
 startup. A turn snapshots these settings; later updates affect subsequent turns.
 
 Operation `config`, group `agent-default` (`/agent-default config`), accepts `{}`
-with no extra input properties. It offers current providers, a model name, round
-limit, and explicit `inherit`/`override` modes for temperature and token limit.
-Override values are collected in a second typed interaction. Saving validates
-the current provider choice, detects conflicting persisted edits, writes the
-file, publishes defaults, and returns `{"restart_required":false}`. Direct file
-edits are loaded at construction.
+with no extra input properties. It offers the round limit and explicit
+`inherit`/`override` modes for temperature and token limit. Override values are
+collected in a second typed interaction. Saving validates generation limits,
+detects conflicting persisted edits, writes the file, publishes defaults, and
+returns `{"restart_required":false}`. Direct file edits are loaded at construction.
 
-The optional WebUI model picker contract is implemented by this component.
-Its snapshot combines the live provider directory with the effective agent and
-model-runtime selection. Updates accept only a model declared by the chosen
-provider and an effort declared by that model, detect stale revisions, atomically
-save this plugin's configuration, and affect later turns. An empty effort from
-the picker sets `provider_default_reasoning` explicitly. Existing turns retain
-their initial configuration snapshot.
+Model selection belongs to [model-runtime](../model-runtime/README.md). Use the
+WebUI model picker or `/model-runtime config` to select the default provider,
+model, and reasoning effort. The retired `provider`, `model`, `reasoning_effort`,
+and `provider_default_reasoning` keys are accepted in old Agent configuration
+files but ignored, and are dropped on the next save. They are not copied into
+another plugin's state. If an old Agent override was your only model selection,
+select it once in model-runtime; existing runtime defaults take effect immediately.
+
+When `model.RequestResolver` is available, the Agent captures the runtime's
+selection once at turn entry and supplies it to every model round, including
+streaming and compaction. A later picker update affects subsequent turns.
+Provider-default reasoning is pinned with the request-only `providerDefault`
+sentinel. The Agent does not persist this snapshot or enumerate providers.
+Without a resolver, model selection is left to the model runtime on each call.
 
 ## Turn, history, and streaming behavior
 
