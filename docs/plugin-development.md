@@ -67,9 +67,19 @@ Use the ABI version supported by Core (currently `v0.1.0`) and check the
 ## Typed capabilities
 
 Put reusable contracts in an independent package, such as the
-[agent SDK](https://github.com/ingot-agent/sdk) or another domain contract module.
+[agent SDK](https://github.com/ingot-agent/sdk), another domain contract module,
+or a plugin's public contract package. Use a published module version when
+depending on another plugin's contract.
 Do not put capability target types in a graph component's implementation package.
 Official plugin modules cannot import sibling plugin implementations or Core.
+
+For example, [app-webui/modelselection](../app-webui/modelselection/selection.go)
+defines a model picker contract consumed by WebUI and implemented by
+[model-runtime](../model-runtime/README.md). The implementation imports the
+published contract package; it does not depend on the WebUI application component.
+This demonstrates that the official SDK is optional: community plugins can
+publish their own SDK contracts and compose new capabilities without changing
+Core or extending the official SDK.
 
 | Dependency field | Resolution |
 |---|---|

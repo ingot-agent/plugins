@@ -34,12 +34,13 @@ Use the composer's slash-command menu:
 1. `/model-openai-compatible config`: add a named provider, API base URL and
    credentials. See the [adapter reference](../model-openai-compatible/README.md)
    for URL handling and supported requests.
-2. `/model-runtime config`: choose the default provider and model identifier.
-   Providers are discovered from live sources; model identifiers are not
-   enumerated. Use an identifier supported by the provider.
-3. `/agent-default config`: optionally override model selection, generation
-   settings and the round limit. Explicit agent values take precedence over
-   model-runtime defaults; clear old overrides when switching models.
+2. `/model-runtime config`: choose the default provider, model, and reasoning
+   effort from live provider capabilities. The WebUI model picker edits the same
+   runtime defaults; it requires a declared model directory.
+3. `/agent-default config`: optionally adjust generation settings and the round
+   limit. Model selection is owned by model-runtime; old Agent provider/model/
+   effort overrides are ignored. If an old Agent override was your only model
+   selection, select it once in model-runtime.
 4. Create/select a Session with the intended workspace and send a message.
    A workspace binding does not sandbox local tools.
 
@@ -113,7 +114,7 @@ controls and keep populated state out of source control.
 |---|---|
 | No model available | Configure the loaded adapter, then model-runtime; an unconfigured source can legitimately be empty |
 | Provider ambiguous or duplicated | Use unique provider names across adapters and select a default when needed |
-| Model switch ineffective | Check agent/context overrides and in-flight requests retaining snapshots |
+| Model switch ineffective | Check explicit request/context-compaction overrides and running Agent turns retaining their initial selection |
 | Command absent | Confirm that module is in the image; default profiles do not include all modules |
 | WebUI setting inactive | Inspect `restart_required` and restart the Runtime |
 | Configuration conflict | Reopen the form; stale writes are rejected instead of overwriting newer state |

@@ -40,10 +40,12 @@ An invocation captures one coherent configuration. Configuration publication
 does not rewrite a request that is already running. Calls that begin after the
 configuration Operation completes observe the new state.
 
-- Agent turns retain their agent-level provider/model overrides, generation
-  settings and round limit across rounds. Empty provider/model overrides are
-  resolved by `model-runtime` on each model call; runtime defaults and provider
-  connection snapshots can therefore change between rounds of one Turn.
+- Agent turns retain their generation settings and round limit across rounds.
+  With `model.RequestResolver` injected, they also capture model-runtime's
+  effective provider/model/effort at turn entry. Changes through the model picker
+  or runtime config Operation apply to later turns. Without a resolver, defaults
+  are resolved on each model call. Provider connection snapshots may still change
+  between rounds; pinning a selection does not pin adapter credentials or URLs.
 - Context compaction, prompt rendering, approval, usage counting, and tool
   invocation retain one snapshot for the call.
 - HTTP requests finish on the client they started with; the update swaps in a

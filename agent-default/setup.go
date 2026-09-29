@@ -7,12 +7,9 @@ import (
 	"fmt"
 	"math"
 	"reflect"
-	"slices"
-	"unicode/utf8"
 
 	"github.com/ingot-agent/ingot-abi/state"
 	"github.com/ingot-agent/sdk/interaction"
-	"github.com/ingot-agent/sdk/model"
 	"github.com/ingot-agent/sdk/operation"
 )
 
@@ -30,9 +27,8 @@ var ErrConfigConflict = errors.New("agent.default configuration changed during i
 // scope. temperature and max_tokens are optional overrides whose inherit or
 // override intent is requested explicitly before a typed value is collected.
 type setupOperation struct {
-	scope           state.Scope
-	providerSources []model.ProviderSource
-	runtime         *runtime
+	scope   state.Scope
+	runtime *runtime
 }
 
 var _ operation.Operation = (*setupOperation)(nil)
@@ -58,20 +54,9 @@ func (o *setupOperation) Invoke(ctx context.Context, request operation.Request) 
 	if err != nil {
 		return operation.Result{}, err
 	}
-	providerNames, err := currentProviderNames(ctx, o.providerSources)
-	if err != nil {
-		return operation.Result{}, err
-	}
 	maxRoundsDefault := int64(current.MaxRounds)
 	if maxRoundsDefault == 0 {
 		maxRoundsDefault = defaultMaxRounds
-	}
-	providerField := interaction.Field{Name: "provider", Label: "Provider", Description: "Empty uses the model.runtime default.", Kind: interaction.FieldChoice, Required: true, Options: []interaction.Option{{Value: "", Label: "model.runtime default"}}}
-	if current.Provider == "" || slices.Contains(providerNames, current.Provider) {
-		providerField.Default = valuePointer(interaction.StringValue(current.Provider))
-	}
-	for _, name := range providerNames {
-		providerField.Options = append(providerField.Options, interaction.Option{Value: name, Label: name})
 	}
 	temperatureMode := overrideInherit
 	if current.Temperature != nil {
@@ -83,10 +68,8 @@ func (o *setupOperation) Invoke(ctx context.Context, request operation.Request) 
 	}
 	response, err := request.Interaction.Request(ctx, interaction.Request{
 		Name:        setupOperationName,
-		Description: "Provider, model and generation limits used when a request leaves them empty.",
+		Description: "Generation limits and maximum rounds for each turn.",
 		Fields: []interaction.Field{
-			providerField,
-			{Name: "model", Label: "Model", Description: "Empty uses the model.runtime default.", Kind: interaction.FieldString, Default: optionalString(current.Model)},
 			{Name: "temperature_mode", Label: "Temperature", Kind: interaction.FieldChoice, Required: true, Default: valuePointer(interaction.StringValue(temperatureMode)), Options: overrideOptions()},
 			{Name: "max_tokens_mode", Label: "Max tokens", Kind: interaction.FieldChoice, Required: true, Default: valuePointer(interaction.StringValue(maxTokensMode)), Options: overrideOptions()},
 			{Name: "max_rounds", Label: "Max rounds", Kind: interaction.FieldInteger, Default: &interaction.Value{Kind: interaction.ValueInteger, Integer: maxRoundsDefault}},
@@ -96,12 +79,6 @@ func (o *setupOperation) Invoke(ctx context.Context, request operation.Request) 
 		return operation.Result{}, err
 	}
 	updated := current
-	if v, ok := answerString(response, "provider"); ok {
-		updated.Provider = v
-	}
-	if v, ok := answerString(response, "model"); ok {
-		updated.Model = v
-	}
 	selectedTemperatureMode, ok := answerString(response, "temperature_mode")
 	temperatureMode = selectedTemperatureMode
 	if !ok || (temperatureMode != overrideInherit && temperatureMode != overrideSet) {
@@ -149,11 +126,7 @@ func (o *setupOperation) Invoke(ctx context.Context, request operation.Request) 
 	if v, ok := answerInteger(response, "max_rounds"); ok {
 		updated.MaxRounds = int(v)
 	}
-	providerNames, err = currentProviderNames(ctx, o.providerSources)
-	if err != nil {
-		return operation.Result{}, err
-	}
-	effective, err := normalizeConfig(updated, providerNames)
+	effective, err := normalizeConfig(updated)
 	if err != nil {
 		return operation.Result{}, err
 	}
@@ -182,14 +155,11 @@ func (o *setupOperation) Invoke(ctx context.Context, request operation.Request) 
 // validateConfig applies the same generation limits at construction and in the
 // setup Operation.
 func validateConfig(cfg Config) error {
-	_, err := normalizeConfig(cfg, nil)
+	_, err := normalizeConfig(cfg)
 	return err
 }
 
-func normalizeConfig(cfg Config, providerNames []string) (Config, error) {
-	if !utf8.ValidString(cfg.Provider) || !utf8.ValidString(cfg.Model) {
-		return Config{}, fmt.Errorf("provider or model is invalid UTF-8: %w", ErrInvalidConfig)
-	}
+func normalizeConfig(cfg Config) (Config, error) {
 	if cfg.Temperature != nil && (math.IsNaN(*cfg.Temperature) || math.IsInf(*cfg.Temperature, 0) || *cfg.Temperature < 0 || *cfg.Temperature > 2) {
 		return Config{}, fmt.Errorf("temperature must be in [0,2]: %w", ErrInvalidConfig)
 	}
@@ -204,18 +174,6 @@ func normalizeConfig(cfg Config, providerNames []string) (Config, error) {
 		return Config{}, fmt.Errorf("max_rounds must be positive: %w", ErrInvalidConfig)
 	}
 	cfg.MaxRounds = maxRounds
-	if cfg.Provider != "" && providerNames != nil {
-		found := false
-		for _, name := range providerNames {
-			if cfg.Provider == name {
-				found = true
-				break
-			}
-		}
-		if !found {
-			return Config{}, fmt.Errorf("provider %q is unavailable: %w", cfg.Provider, ErrInvalidConfig)
-		}
-	}
 	return cfg, nil
 }
 
@@ -224,14 +182,6 @@ func overrideOptions() []interaction.Option {
 }
 
 func valuePointer(value interaction.Value) *interaction.Value { return &value }
-
-func optionalString(value string) *interaction.Value {
-	if value == "" {
-		return nil
-	}
-	result := interaction.StringValue(value)
-	return &result
-}
 
 func optionalFloat(value *float64) *interaction.Value {
 	if value == nil {

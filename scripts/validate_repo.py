@@ -122,12 +122,6 @@ def is_core_dependency(path: str) -> bool:
     return path == CORE_MODULE or path.startswith(f"{CORE_MODULE}/")
 
 
-def is_sibling_plugin_dependency(path: str, own_module: str) -> bool:
-    if not path.startswith(PLUGIN_MODULE_PREFIX):
-        return False
-    return path != own_module and not path.startswith(f"{own_module}/")
-
-
 def validate_workspace(
     repo_root: Path, plugins: list[Path], errors: list[str]
 ) -> None:
@@ -224,15 +218,10 @@ def validate_plugin(plugin_dir: Path, errors: list[str], manifest_names: dict[st
     if re.search(r"(?m)^\s*replace(?:\s|\()", go_mod_text):
         errors.append(f"{plugin_name}: go.mod must not contain replace directives")
 
-    own_module = declared_module or expected_module
     for dependency in required_module_paths(go_mod):
         if is_core_dependency(dependency):
             errors.append(
                 f"{plugin_name}: go.mod must not depend on {CORE_MODULE}"
-            )
-        elif is_sibling_plugin_dependency(dependency, own_module):
-            errors.append(
-                f"{plugin_name}: go.mod must not depend on sibling plugin {dependency}"
             )
 
     if not manifest.is_file():

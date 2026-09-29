@@ -15,6 +15,7 @@ import (
 
 	"github.com/ingot-agent/ingot-abi"
 	"github.com/ingot-agent/ingot-abi/state"
+	"github.com/ingot-agent/plugins/app-webui/modelselection"
 	"github.com/ingot-agent/sdk/content"
 	"github.com/ingot-agent/sdk/model"
 	"github.com/ingot-agent/sdk/operation"
@@ -51,10 +52,12 @@ type Exports struct {
 	Runtime    model.Runtime
 	Streaming  model.StreamingRuntime
 	Resolver   model.RequestResolver
+	Selection  modelselection.Controller
 	Operations []operation.Operation
 }
 
 type runtime struct {
+	scope              state.Scope
 	providerSources    []model.ProviderSource
 	config             atomic.Pointer[Config]
 	interceptors       []model.Interceptor
@@ -103,11 +106,12 @@ func New(ctx context.Context, deps Dependencies) (Exports, ingotabi.Cleanup, err
 	}
 
 	instance := &runtime{
+		scope:           deps.State,
 		providerSources: slices.Clone(deps.ProviderSources),
 		interceptors:    interceptors, streamInterceptors: streamInterceptors,
 	}
 	instance.config.Store(&cfg)
-	return Exports{Runtime: instance, Streaming: instance, Resolver: instance, Operations: []operation.Operation{&setupOperation{scope: deps.State, runtime: instance}}}, nil, nil
+	return Exports{Runtime: instance, Streaming: instance, Resolver: instance, Selection: instance, Operations: []operation.Operation{&setupOperation{scope: deps.State, runtime: instance}}}, nil, nil
 }
 
 // ResolveRequest returns a caller-owned request with provider and model
@@ -151,6 +155,9 @@ func (r *runtime) Complete(ctx context.Context, request model.Request) (model.Re
 	terminal := func(callCtx context.Context, selected model.Request) (model.Response, error) {
 		if callCtx == nil {
 			return model.Response{}, errors.New("model runtime interceptor supplied nil context")
+		}
+		if selected.ReasoningEffort == model.ReasoningEffortProviderDefault {
+			selected.ReasoningEffort = ""
 		}
 		if err := validateRequest(selected); err != nil {
 			return model.Response{}, err
@@ -221,6 +228,9 @@ func (r *runtime) Stream(ctx context.Context, request model.Request, handler mod
 	terminal := model.StreamNext(func(callCtx context.Context, selected model.Request, selectedHandler model.StreamHandler) (model.Response, error) {
 		if callCtx == nil {
 			return model.Response{}, errors.New("model streaming interceptor supplied nil context")
+		}
+		if selected.ReasoningEffort == model.ReasoningEffortProviderDefault {
+			selected.ReasoningEffort = ""
 		}
 		if err := validateRequest(selected); err != nil {
 			return model.Response{}, err
@@ -300,7 +310,11 @@ type providerSnapshot struct {
 }
 
 func (r *runtime) snapshot(ctx context.Context) (providerSnapshot, error) {
-	selection := providerSnapshot{providers: make(map[string]model.ProviderEntry), defaults: *r.config.Load()}
+	return r.snapshotWithConfig(ctx, *r.config.Load())
+}
+
+func (r *runtime) snapshotWithConfig(ctx context.Context, cfg Config) (providerSnapshot, error) {
+	selection := providerSnapshot{providers: make(map[string]model.ProviderEntry), defaults: cfg}
 	for i, source := range r.providerSources {
 		entries, err := source.Snapshot(ctx)
 		if err != nil {
@@ -333,7 +347,9 @@ func (s providerSnapshot) applyDefaults(request *model.Request) {
 	if request.Model == "" {
 		request.Model = s.defaults.DefaultModel
 	}
-	if request.ReasoningEffort == "" {
+	if request.ReasoningEffort == model.ReasoningEffortProviderDefault {
+		request.ReasoningEffort = ""
+	} else if request.ReasoningEffort == "" {
 		request.ReasoningEffort = s.defaults.DefaultReasoningEffort
 	}
 }
@@ -347,7 +363,7 @@ func (s providerSnapshot) selectProvider(request model.Request) (model.ProviderE
 		return model.ProviderEntry{}, fmt.Errorf("provider %q: %w", request.Provider, model.ErrProviderNotFound)
 	}
 	if request.Model == "" {
-		return model.ProviderEntry{}, fmt.Errorf("empty model for provider %q: set default_model in [plugins.model.runtime] or model in [plugins.agent.default]: %w", request.Provider, model.ErrModelNotFound)
+		return model.ProviderEntry{}, fmt.Errorf("empty model for provider %q: configure default_model in model-runtime: %w", request.Provider, model.ErrModelNotFound)
 	}
 	if len(provider.Models) != 0 {
 		selected, ok := findProviderModel(provider.Models, request.Model)

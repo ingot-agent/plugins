@@ -403,10 +403,14 @@ func TestAgentCompactsEveryModelInvocationWithoutReplacingRawMessages(t *testing
 	temperature := 0.25
 	maxTokens := 321
 	exports, _, err := New(context.Background(), withState(t, Config{
-		Provider: "provider", Model: "model", Temperature: &temperature, MaxTokens: &maxTokens,
+		Temperature: &temperature, MaxTokens: &maxTokens,
 	}, Dependencies{
 		Model: models, Tools: &fakeTools{}, Store: store, Assets: newMemoryAssets(), Prompt: passthroughPrompt{},
 		Compactor: ingotabi.Some[contextwindow.Compactor](compactor),
+		Resolver: ingotabi.Some[model.RequestResolver](requestResolverFunc(func(_ context.Context, request model.Request) (model.Request, error) {
+			request.Provider, request.Model = "provider", "model"
+			return request, nil
+		})),
 	}))
 	if err != nil {
 		t.Fatal(err)

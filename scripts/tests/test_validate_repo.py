@@ -9,7 +9,7 @@ from pathlib import Path
 SCRIPTS_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SCRIPTS_DIR))
 
-from validate_repo import plugin_dirs, unexpected_top_level_dirs, validate_workspace
+from validate_repo import plugin_dirs, unexpected_top_level_dirs, validate_plugin, validate_workspace
 
 
 class WorkspaceValidationTests(unittest.TestCase):
@@ -80,6 +80,30 @@ class TopLevelDirectoryTests(unittest.TestCase):
             self.assertEqual(
                 [path.name for path in unexpected_top_level_dirs(repo_root)],
                 ["examples"],
+            )
+
+
+class PluginDependencyTests(unittest.TestCase):
+    def test_sibling_contract_dependency_is_allowed_but_core_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            plugin = Path(temporary_dir) / "agent-default"
+            plugin.mkdir()
+            (plugin / "go.mod").write_text(
+                "module github.com/ingot-agent/plugins/agent-default\n\n"
+                "require (\n"
+                "  github.com/ingot-agent/plugins/app-webui v0.1.1\n"
+                "  github.com/ingot-agent/ingot v0.1.0\n"
+                ")\n",
+                encoding="utf-8",
+            )
+            (plugin / "ingot.plugin.toml").write_text('name = "agent.default"\n', encoding="utf-8")
+            (plugin / "CHANGELOG.md").touch()
+
+            errors: list[str] = []
+            validate_plugin(plugin, errors, {})
+            self.assertEqual(
+                errors,
+                ["agent-default: go.mod must not depend on github.com/ingot-agent/ingot"],
             )
 
 

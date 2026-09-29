@@ -56,10 +56,9 @@ var (
 	ErrInvalidSubmissionRound = errors.New("invalid child result submission round")
 )
 
-// Config controls model selection and generation.
+// Config controls generation limits and the agent loop. Model selection is
+// owned by the injected model runtime.
 type Config struct {
-	Provider    string   `toml:"provider"`
-	Model       string   `toml:"model"`
 	Temperature *float64 `toml:"temperature"`
 	MaxTokens   *int     `toml:"max_tokens"`
 	MaxRounds   int      `toml:"max_rounds"`
@@ -72,7 +71,7 @@ type Config struct {
 type Dependencies struct {
 	State             state.Scope
 	Model             model.Runtime
-	ProviderSources   []model.ProviderSource
+	Resolver          ingotabi.Optional[model.RequestResolver]
 	Streaming         ingotabi.Optional[model.StreamingRuntime]
 	Tools             tool.Runtime
 	Store             session.Store
@@ -106,6 +105,7 @@ type runtime struct {
 	observation       observation.Consumer
 	gates             *gateManager
 	config            atomic.Pointer[Config]
+	resolver          ingotabi.Optional[model.RequestResolver]
 	control           sessioncontrol.Control
 	dispatchCancel    context.CancelFunc
 	dispatchDone      chan struct{}
@@ -129,18 +129,16 @@ func New(ctx context.Context, deps Dependencies) (Exports, ingotabi.Cleanup, err
 	if err != nil {
 		return Exports{}, nil, fmt.Errorf("construct agent.default: %w: %w", err, ErrInvalidConfig)
 	}
-	for i, source := range deps.ProviderSources {
-		if isNil(source) {
-			return Exports{}, nil, fmt.Errorf("provider_sources[%d] is nil: %w", i, ErrInvalidConfig)
-		}
-	}
 	if deps.Streaming.Valid && isNil(deps.Streaming.Value) {
 		return Exports{}, nil, fmt.Errorf("streaming dependency is typed nil: %w", ErrInvalidConfig)
 	}
 	if deps.Compactor.Valid && isNil(deps.Compactor.Value) {
 		return Exports{}, nil, fmt.Errorf("compactor dependency is typed nil: %w", ErrInvalidConfig)
 	}
-	normalized, err := normalizeConfig(cfg, nil)
+	if deps.Resolver.Valid && isNil(deps.Resolver.Value) {
+		return Exports{}, nil, fmt.Errorf("resolver dependency is typed nil: %w", ErrInvalidConfig)
+	}
+	normalized, err := normalizeConfig(cfg)
 	if err != nil {
 		return Exports{}, nil, err
 	}
@@ -166,7 +164,7 @@ func New(ctx context.Context, deps Dependencies) (Exports, ingotabi.Cleanup, err
 		model: deps.Model, streaming: deps.Streaming, tools: deps.Tools, store: deps.Store, assets: deps.Assets,
 		prompt: deps.Prompt, compactor: deps.Compactor, interceptors: interceptors,
 		roundInterceptors: roundInterceptors, observation: observationConsumer,
-		gates: newGateManager(),
+		gates: newGateManager(), resolver: deps.Resolver,
 	}
 	instance.config.Store(&normalized)
 	var cleanup ingotabi.Cleanup
@@ -180,7 +178,7 @@ func New(ctx context.Context, deps Dependencies) (Exports, ingotabi.Cleanup, err
 		instance.startDispatcher(dispatchCtx)
 		cleanup = instance.cleanup
 	}
-	return Exports{Runtime: instance, Streaming: instance, History: instance, Operations: []operation.Operation{&setupOperation{scope: deps.State, providerSources: append([]model.ProviderSource(nil), deps.ProviderSources...), runtime: instance}}}, cleanup, nil
+	return Exports{Runtime: instance, Streaming: instance, History: instance, Operations: []operation.Operation{&setupOperation{scope: deps.State, runtime: instance}}}, cleanup, nil
 }
 
 // Load returns a validated, caller-owned snapshot of one session's persisted

@@ -6,11 +6,17 @@ All notable changes to this plugin are documented in this file.
 
 ### Added
 
+- Implement the public app-webui model selection contract in model-runtime.
+  The picker updates the same defaults and persistent state as the config
+  Operation, with live directory validation and shared conflict detection.
+
 - Configure provider, model, and reasoning-effort defaults from live provider
   capability directories and validate every resolved request against them.
 
 ### Changed
 
+- Let `providerDefault` bypass the configured default reasoning effort when a
+  request explicitly selects the provider's own default.
 - Invoke the required `Complete` and optional `Stream` functions carried by
   each provider entry, without separate provider interfaces or type assertions.
 - Replace static named Provider injection with live `model.ProviderSource`

@@ -198,6 +198,9 @@ func validateConfig(config Config) error {
 	if !utf8.ValidString(config.DefaultProvider) || !utf8.ValidString(config.DefaultModel) || !utf8.ValidString(string(config.DefaultReasoningEffort)) {
 		return fmt.Errorf("provider or model contains invalid UTF-8: %w", ErrInvalidConfig)
 	}
+	if config.DefaultReasoningEffort == model.ReasoningEffortProviderDefault {
+		return fmt.Errorf("providerDefault is a request override, not a runtime default: %w", ErrInvalidConfig)
+	}
 	return nil
 }
 
