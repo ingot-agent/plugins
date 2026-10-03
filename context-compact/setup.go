@@ -90,6 +90,7 @@ func (o *setupOperation) Invoke(ctx context.Context, request operation.Request) 
 			{Name: "state_target_tokens", Label: "State Target Tokens", Kind: interaction.FieldInteger, Default: &interaction.Value{Kind: interaction.ValueInteger, Integer: int64(effective.stateTargetTokens)}},
 			{Name: "allowed_accuracies", Label: "Allowed Count Accuracies", Kind: interaction.FieldMultiChoice, Required: true, Default: valuePointer(interaction.Value{Kind: interaction.ValueStrings, Strings: configuredAccuracyNames(current)}), Options: []interaction.Option{{Value: "exact", Label: "Exact"}, {Value: "upper_bound", Label: "Upper Bound"}, {Value: "estimate", Label: "Estimate"}}},
 			{Name: "max_summary_passes", Label: "Max Summary Passes", Kind: interaction.FieldInteger, Required: false, Default: &interaction.Value{Kind: interaction.ValueInteger, Integer: int64(effective.maxSummaryPasses)}},
+			{Name: "token_count_cache_entries", Label: "Token Count Cache Entries", Kind: interaction.FieldInteger, Default: valuePointer(interaction.IntegerValue(int64(effective.tokenCountCacheEntries)))},
 		},
 	})
 	if err != nil {
@@ -98,6 +99,9 @@ func (o *setupOperation) Invoke(ctx context.Context, request operation.Request) 
 	// Start from the persisted configuration and overlay only the answers the
 	// Host supplied, so an untouched field keeps its current value.
 	updated := current
+	if v, ok := answerInteger(response, "token_count_cache_entries"); ok {
+		updated.TokenCountCacheEntries = int(v)
+	}
 	if v, ok := answerString(response, "provider"); ok {
 		updated.Provider = v
 	}
@@ -181,6 +185,9 @@ func (o *setupOperation) Invoke(ctx context.Context, request operation.Request) 
 		return operation.Result{}, err
 	}
 	o.compactor.config.Store(&normalized)
+	if counter, ok := o.compactor.counter.(*inputCounter); ok {
+		counter.applyConfig(normalized.tokenCountCacheEntries)
+	}
 	return operation.Result{Output: json.RawMessage(`{"restart_required":false}`)}, nil
 }
 

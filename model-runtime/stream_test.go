@@ -50,7 +50,7 @@ func TestReasoningStreamValidation(t *testing.T) {
 				t.Fatal(err)
 			}
 			var events []model.StreamEvent
-			_, err = exports.Streaming.Stream(context.Background(), model.Request{}, func(event model.StreamEvent) error { events = append(events, event); return nil })
+			_, err = exports.Streaming.Stream(context.Background(), "s", "s", model.Request{}, func(event model.StreamEvent) error { events = append(events, event); return nil })
 			if tc.invalid {
 				if !errors.Is(err, modelruntime.ErrInvalidResponse) {
 					t.Fatalf("error=%v", err)

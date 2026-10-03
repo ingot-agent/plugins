@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"unicode/utf8"
 
 	"github.com/ingot-agent/sdk/content"
 	"github.com/ingot-agent/sdk/contextwindow"
@@ -12,7 +13,7 @@ import (
 )
 
 func (r *compactor) Compact(ctx context.Context, input contextwindow.CompactionRequest) (contextwindow.CompactionResult, error) {
-	snapshot := &compactor{model: r.model, counter: r.counter, resolver: r.resolver, store: r.store, cfg: *r.config.Load(), gates: r.gates}
+	snapshot := &compactor{model: r.model, counter: r.counter, resolver: r.resolver, interactions: r.interactions, store: r.store, cfg: *r.config.Load(), gates: r.gates}
 	return snapshot.compact(ctx, input)
 }
 
@@ -23,8 +24,8 @@ func (r *compactor) compact(ctx context.Context, input contextwindow.CompactionR
 	if err := ctx.Err(); err != nil {
 		return contextwindow.CompactionResult{}, err
 	}
-	if input.SessionID == "" {
-		return contextwindow.CompactionResult{}, fmt.Errorf("session_id is required: %w", ErrInvalidRequest)
+	if input.SessionID == "" || input.RootSessionID == "" || !utf8.ValidString(string(input.SessionID)) || !utf8.ValidString(string(input.RootSessionID)) {
+		return contextwindow.CompactionResult{}, fmt.Errorf("root and current session identities are required: %w", ErrInvalidRequest)
 	}
 	request := cloneRequest(input.Invocation)
 	layout, err := inspectRequest(request, r.cfg.recentRounds)
@@ -67,7 +68,7 @@ func (r *compactor) compact(ctx context.Context, input contextwindow.CompactionR
 		return contextwindow.CompactionResult{}, err
 	}
 	compactHistory := current >= r.cfg.triggerInputTokens
-	budget := &callBudget{limit: r.cfg.maxSummaryPasses}
+	budget := &callBudget{limit: r.cfg.maxSummaryPasses, rootSessionID: input.RootSessionID, currentSessionID: input.SessionID}
 	expandedEnd := 0
 
 	for {
@@ -80,6 +81,7 @@ func (r *compactor) compact(ctx context.Context, input contextwindow.CompactionR
 		}
 		rollup := memory >= r.cfg.memoryTriggerTokens || stateTokens >= r.cfg.stateTriggerTokens
 		if !rollup && (!compactHistory || current <= r.cfg.targetInputTokens) {
+			r.publishContext(ctx, input.SessionID, current, identity)
 			return contextwindow.CompactionResult{Messages: cloneMessages(messages), Changed: chain.lastSequence != 0}, nil
 		}
 		var checkpoint persistedCheckpoint

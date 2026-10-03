@@ -44,7 +44,7 @@ func TestCompactionRecoveryPartialFailureCannotAdvanceCheckpoint(t *testing.T) {
 				wantErr, wantCalls = ErrContextUncompactable, 1
 			}
 			compactor := newTokenTestCompactor(t, cfg, &canonicalTokenCounter{}, runtime, store)
-			_, err := compactor.Compact(context.Background(), contextwindow.CompactionRequest{SessionID: "s", Invocation: request})
+			_, err := compactor.Compact(context.Background(), contextwindow.CompactionRequest{RootSessionID: "s", SessionID: "s", Invocation: request})
 			if !errors.Is(err, wantErr) || calls != wantCalls {
 				t.Fatalf("calls=%d err=%v", calls, err)
 			}
@@ -83,7 +83,7 @@ func TestCompactionRecoverySplitRoundPersistsOneCompleteCheckpoint(t *testing.T)
 		return summaryResponse(`{"summary":"Investigation found the failure in /tmp/build.log.","operations":[{"op":"set","path":"/file","value":"/tmp/build.log"}]}`), nil
 	})
 	compactor := newTokenTestCompactor(t, cfg, counter, runtime, store)
-	result, err := compactor.Compact(context.Background(), contextwindow.CompactionRequest{SessionID: "s", Invocation: request})
+	result, err := compactor.Compact(context.Background(), contextwindow.CompactionRequest{RootSessionID: "s", SessionID: "s", Invocation: request})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,7 +109,7 @@ func TestCompactionRecoverySplitRoundPersistsOneCompleteCheckpoint(t *testing.T)
 	}
 	restartedModels := &fakeModel{err: errors.New("complete round must reuse its only checkpoint")}
 	restarted := newTokenTestCompactor(t, cfg, counter, restartedModels, store)
-	replay, err := restarted.Compact(context.Background(), contextwindow.CompactionRequest{SessionID: "s", Invocation: request})
+	replay, err := restarted.Compact(context.Background(), contextwindow.CompactionRequest{RootSessionID: "s", SessionID: "s", Invocation: request})
 	if err != nil || !reflect.DeepEqual(replay, result) || len(restartedModels.requests) != 0 || len(store.entries["s"]) != 1 {
 		t.Fatalf("replay=%+v calls=%d checkpoints=%d err=%v", replay, len(restartedModels.requests), len(store.entries["s"]), err)
 	}
@@ -136,11 +136,11 @@ func TestCompactionRecoveryFailedRollupResumesAfterPersistedSegment(t *testing.T
 			}
 			return model.Response{}, rollupErr
 		}
-		return models.Complete(ctx, input)
+		return models.Complete(ctx, "s", "s", input)
 	})
 	cfg := Config{TriggerInputTokens: 7000, TargetInputTokens: 5000, StateTriggerTokens: 1400, StateTargetTokens: 700}
 	compactor := newTokenTestCompactor(t, cfg, &canonicalTokenCounter{}, runtime, store)
-	_, err = compactor.Compact(context.Background(), contextwindow.CompactionRequest{SessionID: "s", Invocation: request})
+	_, err = compactor.Compact(context.Background(), contextwindow.CompactionRequest{RootSessionID: "s", SessionID: "s", Invocation: request})
 	if !errors.Is(err, rollupErr) || failedRollups != 1 || len(models.requests) != 1 || len(store.entries["s"]) != 1 {
 		t.Fatalf("segment calls=%d failed rollups=%d checkpoints=%d err=%v", len(models.requests), failedRollups, len(store.entries["s"]), err)
 	}
@@ -153,7 +153,7 @@ func TestCompactionRecoveryFailedRollupResumesAfterPersistedSegment(t *testing.T
 		summaryResponse(`{"summary":"Build investigation remains open.","discard_paths":["/obsolete"]}`),
 	}}
 	restarted := newTokenTestCompactor(t, cfg, &canonicalTokenCounter{}, restartedModels, store)
-	result, err := restarted.Compact(context.Background(), contextwindow.CompactionRequest{SessionID: "s", Invocation: request})
+	result, err := restarted.Compact(context.Background(), contextwindow.CompactionRequest{RootSessionID: "s", SessionID: "s", Invocation: request})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -176,7 +176,7 @@ func TestCompactionRecoveryFailedRollupResumesAfterPersistedSegment(t *testing.T
 	if !result.Changed || strings.Contains(messagesText(result.Messages), "obsolete") || !reflect.DeepEqual(request, original) {
 		t.Fatal("resumed result contains stale state or changed raw history")
 	}
-	replay, err := restarted.Compact(context.Background(), contextwindow.CompactionRequest{SessionID: "s", Invocation: request})
+	replay, err := restarted.Compact(context.Background(), contextwindow.CompactionRequest{RootSessionID: "s", SessionID: "s", Invocation: request})
 	if err != nil || !reflect.DeepEqual(replay, result) || len(restartedModels.requests) != 1 || len(store.entries["s"]) != 2 {
 		t.Fatalf("completed rollup was not reused: calls=%d checkpoints=%d err=%v", len(restartedModels.requests), len(store.entries["s"]), err)
 	}

@@ -91,11 +91,11 @@ func assertLiveSelection(t *testing.T, exports Exports, provider, modelName, lab
 	if err != nil || resolved.Provider != provider || resolved.Model != modelName {
 		t.Fatalf("resolved = %#v, err = %v", resolved, err)
 	}
-	complete, err := exports.Runtime.Complete(context.Background(), model.Request{})
+	complete, err := exports.Runtime.Complete(context.Background(), "s", "s", model.Request{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	stream, err := exports.Streaming.Stream(context.Background(), model.Request{}, func(model.StreamEvent) error { return nil })
+	stream, err := exports.Streaming.Stream(context.Background(), "s", "s", model.Request{}, func(model.StreamEvent) error { return nil })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,7 +110,7 @@ func TestLiveInitialConfigurationAndDefaultSwitch(t *testing.T) {
 	source := &liveSource{}
 	scope := setupTestScope{dir: t.TempDir()}
 	deps := Dependencies{State: scope, ProviderSources: []model.ProviderSource{source}}
-	exports, _, err := New(context.Background(), deps)
+	exports, _, err := newRuntimeForTest(context.Background(), deps)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -133,7 +133,7 @@ func TestLiveInitialConfigurationAndDefaultSwitch(t *testing.T) {
 		}
 		assertLiveSelection(t, exports, name, "model-"+name, label)
 	}
-	restarted, _, err := New(context.Background(), deps)
+	restarted, _, err := newRuntimeForTest(context.Background(), deps)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,14 +151,14 @@ func TestLiveMissingDefaultCanBeRepairedAfterRestart(t *testing.T) {
 	}
 	source := &liveSource{}
 	source.set(liveEntry("new", "new"))
-	exports, _, err := New(context.Background(), Dependencies{State: scope, ProviderSources: []model.ProviderSource{source}})
+	exports, _, err := newRuntimeForTest(context.Background(), Dependencies{State: scope, ProviderSources: []model.ProviderSource{source}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := exports.Runtime.Complete(context.Background(), model.Request{}); !errors.Is(err, model.ErrProviderNotFound) {
+	if _, err := exports.Runtime.Complete(context.Background(), "s", "s", model.Request{}); !errors.Is(err, model.ErrProviderNotFound) {
 		t.Fatalf("missing default error = %v", err)
 	}
-	if _, err := exports.Runtime.Complete(context.Background(), model.Request{Provider: "new"}); err != nil {
+	if _, err := exports.Runtime.Complete(context.Background(), "s", "s", model.Request{Provider: "new"}); err != nil {
 		t.Fatalf("explicit provider was blocked by unused default: %v", err)
 	}
 	channel := &setupTestChannel{respond: func(request interaction.Request) (interaction.Response, error) {
@@ -184,7 +184,7 @@ func TestLiveDirectoryInvalidEntriesAreRecoverable(t *testing.T) {
 	} {
 		source := &liveSource{}
 		source.set(entries...)
-		exports, _, err := New(context.Background(), Dependencies{State: setupTestScope{dir: t.TempDir()}, ProviderSources: []model.ProviderSource{source}})
+		exports, _, err := newRuntimeForTest(context.Background(), Dependencies{State: setupTestScope{dir: t.TempDir()}, ProviderSources: []model.ProviderSource{source}})
 		if err != nil {
 			t.Fatalf("directory validation prevented startup: %v", err)
 		}
@@ -216,7 +216,7 @@ func TestLiveSourceConflictsAndErrorsCanRecover(t *testing.T) {
 				}
 				return []model.ProviderEntry{liveEntry("p", "second")}, sourceError
 			})
-			exports, _, err := New(context.Background(), Dependencies{
+			exports, _, err := newRuntimeForTest(context.Background(), Dependencies{
 				State: setupTestScope{dir: t.TempDir()}, ProviderSources: []model.ProviderSource{first, second},
 			})
 			if err != nil {
@@ -227,8 +227,8 @@ func TestLiveSourceConflictsAndErrorsCanRecover(t *testing.T) {
 				wantErr = ErrInvalidConfig
 			}
 			_, resolveErr := exports.Resolver.ResolveRequest(context.Background(), model.Request{Provider: "p", Model: "m"})
-			_, completeErr := exports.Runtime.Complete(context.Background(), model.Request{Provider: "p", Model: "m"})
-			_, streamErr := exports.Streaming.Stream(context.Background(), model.Request{Provider: "p", Model: "m"}, func(model.StreamEvent) error { return nil })
+			_, completeErr := exports.Runtime.Complete(context.Background(), "s", "s", model.Request{Provider: "p", Model: "m"})
+			_, streamErr := exports.Streaming.Stream(context.Background(), "s", "s", model.Request{Provider: "p", Model: "m"}, func(model.StreamEvent) error { return nil })
 			for _, err := range []error{resolveErr, completeErr, streamErr} {
 				if !errors.Is(err, wantErr) {
 					t.Fatalf("directory error = %v, want %v", err, wantErr)
@@ -282,16 +282,16 @@ func TestLiveInvocationKeepsSnapshotThroughInterceptorRewrite(t *testing.T) {
 				req.Provider = "b"
 				return next(ctx, req, handler)
 			})}
-			exports, _, err := New(context.Background(), deps)
+			exports, _, err := newRuntimeForTest(context.Background(), deps)
 			if err != nil {
 				t.Fatal(err)
 			}
 			invoke := func() (model.Response, error) {
 				req := model.Request{Provider: "a", Model: "m"}
 				if streaming {
-					return exports.Streaming.Stream(ctx, req, func(model.StreamEvent) error { return nil })
+					return exports.Streaming.Stream(ctx, "s", "s", req, func(model.StreamEvent) error { return nil })
 				}
-				return exports.Runtime.Complete(ctx, req)
+				return exports.Runtime.Complete(ctx, "s", "s", req)
 			}
 			type outcome struct {
 				response model.Response
@@ -324,7 +324,7 @@ func TestLiveDefaultsRejectStaleDirectoryAndFailedCommit(t *testing.T) {
 			source := &liveSource{}
 			source.set(liveEntry("a", "a"), liveEntry("b", "b"))
 			scope := setupTestScope{dir: t.TempDir()}
-			exports, _, err := New(context.Background(), Dependencies{State: scope, ProviderSources: []model.ProviderSource{source}})
+			exports, _, err := newRuntimeForTest(context.Background(), Dependencies{State: scope, ProviderSources: []model.ProviderSource{source}})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -378,7 +378,7 @@ func TestLiveDefaultsRejectStaleDirectoryAndFailedCommit(t *testing.T) {
 func TestLiveConcurrentDefaultAndProviderUpdates(t *testing.T) {
 	source := &liveSource{}
 	source.set(liveEntry("a", "a"), liveEntry("b", "b"))
-	exports, _, err := New(context.Background(), Dependencies{State: setupTestScope{dir: filepath.Join(t.TempDir(), "state")}, ProviderSources: []model.ProviderSource{source}})
+	exports, _, err := newRuntimeForTest(context.Background(), Dependencies{State: setupTestScope{dir: filepath.Join(t.TempDir(), "state")}, ProviderSources: []model.ProviderSource{source}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -396,10 +396,10 @@ func TestLiveConcurrentDefaultAndProviderUpdates(t *testing.T) {
 					resolved, err := exports.Resolver.ResolveRequest(context.Background(), model.Request{})
 					provider, modelName, callErr = resolved.Provider, resolved.Model, err
 				case 1:
-					response, err := exports.Runtime.Complete(context.Background(), model.Request{})
+					response, err := exports.Runtime.Complete(context.Background(), "s", "s", model.Request{})
 					provider, modelName, callErr = response.Provider, response.Model, err
 				case 2:
-					response, err := exports.Streaming.Stream(context.Background(), model.Request{}, func(model.StreamEvent) error { return nil })
+					response, err := exports.Streaming.Stream(context.Background(), "s", "s", model.Request{}, func(model.StreamEvent) error { return nil })
 					provider, modelName, callErr = response.Provider, response.Model, err
 				}
 				if callErr != nil || (provider != "a" && provider != "b") || modelName != "model-"+provider {

@@ -25,7 +25,7 @@ type subagentRuntimeControl struct {
 	finishCalls []string
 }
 
-func (c *subagentRuntimeControl) BeginRoot(_ context.Context, id session.ID) (sessioncontrol.Handle, error) {
+func (c *subagentRuntimeControl) BeginRoot(_ context.Context, _ session.ID, id session.ID) (sessioncontrol.Handle, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.nextToken++
@@ -256,9 +256,10 @@ func newSubagentTestRuntime(
 
 func childTestFrame(id session.ID, toolNames ...string) *turnFrame {
 	return newChildFrame(sessioncontrol.Task{
-		Handle:     sessioncontrol.Handle{SessionID: id, Token: 1, Child: true},
-		ToolNames:  toolNames,
-		SubmitTool: childSubmitToolName,
+		RootSessionID: id,
+		Handle:        sessioncontrol.Handle{SessionID: id, Token: 1, Child: true},
+		ToolNames:     toolNames,
+		SubmitTool:    childSubmitToolName,
 	})
 }
 

@@ -271,7 +271,6 @@ func cloneAgentResult(value *agent.Result) *agent.Result {
 }
 
 func cloneOutcome(value agent.Outcome) agent.Outcome {
-	value.Accounting.Models = append([]agent.ModelAccounting(nil), value.Accounting.Models...)
 	if value.Failure != nil {
 		failure := *value.Failure
 		if value.Failure.RoundIndex != nil {

@@ -20,7 +20,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const schemaVersion = 3
+const schemaVersion = 4
 
 const schema = `
 CREATE TABLE IF NOT EXISTS sessions (
@@ -29,7 +29,9 @@ CREATE TABLE IF NOT EXISTS sessions (
     created_at  INTEGER NOT NULL,
     updated_at  INTEGER NOT NULL,
     archived_at INTEGER,
-    meta        TEXT NOT NULL DEFAULT '{}'
+    meta        TEXT NOT NULL DEFAULT '{}',
+    totaltoken  INTEGER NOT NULL DEFAULT 0
+        CHECK (typeof(totaltoken) = 'integer' AND totaltoken >= 0)
 );
 
 CREATE TABLE IF NOT EXISTS entries (
@@ -130,7 +132,7 @@ func (s *store) initialize(ctx context.Context) error {
 	if err := s.db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
 		return fmt.Errorf("inspect session schema version: %w", err)
 	}
-	if version < 0 || version > schemaVersion {
+	if version != 0 && version != schemaVersion {
 		return fmt.Errorf("schema version %d: %w", version, ErrUnsupportedSchema)
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -138,17 +140,17 @@ func (s *store) initialize(ctx context.Context) error {
 		return fmt.Errorf("begin session schema transaction: %w", err)
 	}
 	defer tx.Rollback()
+	if version == 0 {
+		var hasTables bool
+		if err := tx.QueryRowContext(ctx, "SELECT EXISTS (SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name NOT GLOB 'sqlite_*')").Scan(&hasTables); err != nil {
+			return fmt.Errorf("inspect empty session database: %w", err)
+		}
+		if hasTables {
+			return fmt.Errorf("unversioned nonempty database: %w", ErrUnsupportedSchema)
+		}
+	}
 	if _, err := tx.ExecContext(ctx, schema); err != nil {
 		return fmt.Errorf("initialize session schema: %w", err)
-	}
-	hasMeta, err := tableHasColumn(ctx, tx, "sessions", "meta")
-	if err != nil {
-		return fmt.Errorf("inspect session meta migration: %w", err)
-	}
-	if !hasMeta {
-		if _, err := tx.ExecContext(ctx, "ALTER TABLE sessions ADD COLUMN meta TEXT NOT NULL DEFAULT '{}'"); err != nil {
-			return fmt.Errorf("add session meta column: %w", err)
-		}
 	}
 	if _, err := tx.ExecContext(ctx, metaIndexes); err != nil {
 		return fmt.Errorf("create session meta indexes: %w", err)
@@ -555,7 +557,7 @@ func (s *store) List(ctx context.Context) ([]session.Metadata, error) {
 		return nil, context.Canceled
 	}
 	rows, err := s.db.QueryContext(ctx, `
-SELECT id, title, created_at, updated_at, archived_at, meta
+SELECT id, title, created_at, updated_at, archived_at, meta, totaltoken
 FROM sessions
 WHERE COALESCE(json_extract(meta, '$.agent.kind'), '') <> ?
 ORDER BY updated_at DESC, created_at DESC, id ASC`, agent.ChildSessionKind)
@@ -608,7 +610,7 @@ type rowQueryer interface {
 
 func metadataByID(ctx context.Context, queryer rowQueryer, id session.ID) (session.Metadata, error) {
 	metadata, err := scanMetadata(queryer.QueryRowContext(ctx, `
-SELECT id, title, created_at, updated_at, archived_at, meta
+SELECT id, title, created_at, updated_at, archived_at, meta, totaltoken
 FROM sessions
 WHERE id = ?`, string(id)))
 	if errors.Is(err, sql.ErrNoRows) {
@@ -628,7 +630,7 @@ func scanMetadata(scanner metadataScanner) (session.Metadata, error) {
 		archivedAt sql.NullInt64
 		metaText   string
 	)
-	if err := scanner.Scan(&metadata.ID, &metadata.Title, &createdAt, &updatedAt, &archivedAt, &metaText); err != nil {
+	if err := scanner.Scan(&metadata.ID, &metadata.Title, &createdAt, &updatedAt, &archivedAt, &metaText, &metadata.TotalToken); err != nil {
 		return session.Metadata{}, err
 	}
 	decodedMeta, err := decodeMeta([]byte(metaText))

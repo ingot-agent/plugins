@@ -1,4 +1,4 @@
-package usagedefault
+package contextcompact
 
 import (
 	"encoding/json"
@@ -8,7 +8,6 @@ import (
 
 	"github.com/ingot-agent/sdk/content"
 	"github.com/ingot-agent/sdk/model"
-	"github.com/ingot-agent/sdk/tool"
 )
 
 func validateRequest(request model.Request, requireTarget bool) error {
@@ -60,49 +59,4 @@ func validRole(role model.Role) bool {
 	default:
 		return false
 	}
-}
-
-func cloneRequest(request model.Request) model.Request {
-	if request.Messages != nil {
-		messages := make([]model.Message, len(request.Messages))
-		for i, message := range request.Messages {
-			messages[i] = message
-			messages[i].Content = content.Clone(message.Content)
-			if message.ToolCalls != nil {
-				messages[i].ToolCalls = make([]tool.Call, len(message.ToolCalls))
-				for j, call := range message.ToolCalls {
-					messages[i].ToolCalls[j] = call
-					messages[i].ToolCalls[j].Arguments = cloneRawMessage(call.Arguments)
-				}
-			}
-		}
-		request.Messages = messages
-	}
-	if request.Tools != nil {
-		definitions := make([]tool.Definition, len(request.Tools))
-		for i, definition := range request.Tools {
-			definitions[i] = definition
-			definitions[i].InputSchema = cloneRawMessage(definition.InputSchema)
-		}
-		request.Tools = definitions
-	}
-	if request.Temperature != nil {
-		value := *request.Temperature
-		request.Temperature = &value
-	}
-	if request.MaxTokens != nil {
-		value := *request.MaxTokens
-		request.MaxTokens = &value
-	}
-	if request.Stop != nil {
-		request.Stop = append([]string(nil), request.Stop...)
-	}
-	return request
-}
-
-func cloneRawMessage(value json.RawMessage) json.RawMessage {
-	if value == nil {
-		return nil
-	}
-	return append(json.RawMessage(nil), value...)
 }

@@ -26,5 +26,4 @@ use (
 	./tool-runtime
 	./tool-shell
 	./tool-subagent
-	./usage-default
 )

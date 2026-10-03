@@ -35,7 +35,7 @@ func TestObservationProjectsEveryDetailAndPreservesCorrelation(t *testing.T) {
 		{"agent.tool.progress", observation.ToolProgress{Progress: tool.Progress{Channel: "log", Content: content.FromText("working")}}, true, true},
 		{"agent.tool.finished", observation.ToolFinished{Status: observation.StatusFailed, Error: "failed"}, true, true},
 		{"agent.round.finished", observation.RoundFinished{Status: observation.StatusSucceeded, Result: &agent.RoundResult{Decision: model.Message{Role: model.RoleAssistant, Content: content.FromText("answer")}}}, true, false},
-		{"agent.turn.finished", observation.TurnFinished{Status: observation.StatusCanceled, Error: "canceled", Outcome: agent.Outcome{Status: agent.OutcomeCanceled, Accounting: agent.Accounting{Usage: agent.TokenUsage{Coverage: agent.UsagePartial}}}}, false, false},
+		{"agent.turn.finished", observation.TurnFinished{Status: observation.StatusCanceled, Error: "canceled", Outcome: agent.Outcome{Status: agent.OutcomeCanceled, Duration: time.Second}}, false, false},
 	}
 	for i, test := range details {
 		exports.Observer.Observe(observation.Event{Time: when, Sequence: uint64(i + 1), Correlation: observation.Correlation{SessionID: "session", TurnID: "sdk-turn", RoundIndex: 0, ToolCallID: "call"}, Detail: test.detail})
@@ -71,7 +71,7 @@ func TestObservationProjectsEveryDetailAndPreservesCorrelation(t *testing.T) {
 			t.Fatal("first round was lost")
 		}
 	}
-	if !strings.Contains(string(records[3].Data), `"semantic":"reasoning"`) || !strings.Contains(string(records[3].Data), `"partKind":"text"`) || !strings.Contains(string(records[9].Data), `"coverage":"partial"`) {
+	if !strings.Contains(string(records[3].Data), `"semantic":"reasoning"`) || !strings.Contains(string(records[3].Data), `"partKind":"text"`) || !strings.Contains(string(records[9].Data), `"status":"canceled"`) || !strings.Contains(string(records[9].Data), `"durationNs":1000000000`) || strings.Contains(string(records[9].Data), `"usage"`) || strings.Contains(string(records[9].Data), `"accounting"`) {
 		t.Fatal("SDK enum leaked or lost its meaning")
 	}
 	if len(exports.Runtime.Interactions().Pending()) != 0 || len(exports.Runtime.Interactions().States()) != 0 {

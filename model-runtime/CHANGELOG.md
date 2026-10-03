@@ -15,6 +15,12 @@ All notable changes to this plugin are documented in this file.
 
 ### Changed
 
+- Require SDK v0.2.15 for the published Session accounting contracts and
+  validate independently of local workspace replacements.
+
+- Require root/current Session IDs on Complete and Stream. Settle successful
+  provider-reported usage atomically before publishing scoped Session snapshots;
+  persistence and display failures never retry the provider request.
 - Let `providerDefault` bypass the configured default reasoning effort when a
   request explicitly selects the provider's own default.
 - Invoke the required `Complete` and optional `Stream` functions carried by

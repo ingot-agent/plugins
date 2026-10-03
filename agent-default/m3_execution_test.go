@@ -19,7 +19,7 @@ import (
 
 type completeModelFunc func(context.Context, model.Request) (model.Response, error)
 
-func (f completeModelFunc) Complete(ctx context.Context, request model.Request) (model.Response, error) {
+func (f completeModelFunc) Complete(ctx context.Context, _, _ session.ID, request model.Request) (model.Response, error) {
 	return f(ctx, request)
 }
 

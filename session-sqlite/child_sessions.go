@@ -129,7 +129,7 @@ func (s *store) ListChildSessions(ctx context.Context, parentID session.ID, requ
 		return agent.ChildSessionPage{}, err
 	}
 	rows, err := s.db.QueryContext(ctx, `
-SELECT id, title, created_at, updated_at, archived_at, meta
+SELECT id, title, created_at, updated_at, archived_at, meta, totaltoken
 FROM sessions
 WHERE json_extract(meta, '$.agent.parent_session_id') = ?
   AND (? IS NULL OR created_at > ? OR (created_at = ? AND id > ?))
@@ -564,7 +564,7 @@ SELECT child.id
 FROM sessions AS child
 JOIN branch AS parent ON json_extract(child.meta, '$.agent.parent_session_id') = parent.id
 )
-SELECT id, title, created_at, updated_at, archived_at, meta
+SELECT id, title, created_at, updated_at, archived_at, meta, totaltoken
 FROM sessions
 WHERE id IN (SELECT id FROM branch)
 ORDER BY created_at ASC, id ASC`

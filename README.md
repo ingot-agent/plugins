@@ -63,7 +63,7 @@ dependencies, operations/tools, state, defaults and limitations.
 
 | Module directory | Manifest name | Purpose |
 |---|---|---|
-| [agent-default](agent-default/README.md) | `agent.default` | Agent loop, accounting, observations and single-Turn children |
+| [agent-default](agent-default/README.md) | `agent.default` | Agent loop, execution outcomes, observations and single-Turn children |
 | [app-webui](app-webui/README.md) | `app.backend` | Browser workspace, HTTP/SSE, Interaction and Operation host |
 | [asset-local](asset-local/README.md) | `asset.local` | Immutable local binary assets |
 | [context-compact](context-compact/README.md) | `context.compact` | Context summaries and checkpoints |
@@ -81,7 +81,6 @@ dependencies, operations/tools, state, defaults and limitations.
 | [tool-runtime](tool-runtime/README.md) | `tool.runtime` | Lookup, JSON schema validation and interception |
 | [tool-shell](tool-shell/README.md) | `tool.shell` | Session-workspace shell execution |
 | [tool-subagent](tool-subagent/README.md) | `tool.subagent` | Child-agent discovery, creation and control |
-| [usage-default](usage-default/README.md) | `usage.default` | Unicode input-token estimation and accuracy reporting |
 
 ## Repository boundary and validation
 
@@ -106,5 +105,4 @@ jobs, build Core, or publish releases. See [contribution](CONTRIBUTING.md) and
 
 ## License
 
-[MIT](LICENSE). Bundled third-party assets retain their notices, including the
-[tokenizer assets](usage-default/assets/README.md).
+[MIT](LICENSE).

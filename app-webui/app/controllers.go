@@ -77,6 +77,7 @@ type sessionController interface {
 	Restore(context.Context, session.ID) (appbackend.Session, error)
 	Delete(context.Context, session.ID) error
 	Fork(context.Context, session.ID, session.ForkRequest) (appbackend.Session, error)
+	TokenRoot(context.Context, session.ID) (session.ID, error)
 	GetFollowup(context.Context, session.ID) (followup, bool, error)
 	ListFollowups(context.Context, session.ID) ([]followup, error)
 }
@@ -100,7 +101,7 @@ func projectSession(value session.Metadata, err error) (appbackend.Session, erro
 	if err != nil {
 		return appbackend.Session{}, err
 	}
-	result := appbackend.Session{ID: string(value.ID), Title: value.Title, CreatedAt: value.CreatedAt, UpdatedAt: value.UpdatedAt}
+	result := appbackend.Session{ID: string(value.ID), Title: value.Title, CreatedAt: value.CreatedAt, UpdatedAt: value.UpdatedAt, TotalToken: value.TotalToken}
 	if value.ArchivedAt != nil {
 		archived := *value.ArchivedAt
 		result.ArchivedAt = &archived
@@ -228,6 +229,27 @@ func (c *defaultSessionController) GetFollowup(ctx context.Context, id session.I
 		return followup{}, false, err
 	}
 	return followupFromMetadata(metadata)
+}
+
+func (c *defaultSessionController) TokenRoot(ctx context.Context, id session.ID) (session.ID, error) {
+	metadata, err := c.manager.Get(ctx, id)
+	if err != nil {
+		return "", err
+	}
+	note, isFollowup, err := followupFromMetadata(metadata)
+	if err != nil || !isFollowup {
+		return id, err
+	}
+	root, err := c.manager.Get(ctx, session.ID(note.SourceSessionID))
+	if err != nil {
+		return "", fmt.Errorf("resolve followup token root: %w", err)
+	}
+	if _, nested, err := followupFromMetadata(root); err != nil {
+		return "", err
+	} else if nested {
+		return "", fmt.Errorf("followup source cannot be another followup")
+	}
+	return root.ID, nil
 }
 
 func (c *defaultSessionController) ListFollowups(ctx context.Context, source session.ID) ([]followup, error) {

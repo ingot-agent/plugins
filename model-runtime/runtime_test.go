@@ -120,7 +120,7 @@ func TestRuntimeAppliesDefaultsOrdersInterceptorsAndNormalizesTerminal(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	response, err := exports.Runtime.Complete(context.Background(), model.Request{Messages: []model.Message{{Role: model.RoleUser, ToolCalls: nil}}})
+	response, err := exports.Runtime.Complete(context.Background(), "s", "s", model.Request{Messages: []model.Message{{Role: model.RoleUser, ToolCalls: nil}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,7 +152,7 @@ func TestNewAllowsUnconfiguredProviders(t *testing.T) {
 	if exports.Runtime == nil || exports.Streaming == nil || exports.Resolver == nil {
 		t.Fatalf("exports = %#v", exports)
 	}
-	if _, err := exports.Runtime.Complete(context.Background(), model.Request{Provider: "p", Model: "m"}); err == nil {
+	if _, err := exports.Runtime.Complete(context.Background(), "s", "s", model.Request{Provider: "p", Model: "m"}); err == nil {
 		t.Fatal("calling an unconfigured runtime must fail")
 	}
 }
@@ -224,7 +224,7 @@ func TestDefaultsAreAppliedOnlyBeforeInterceptors(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			_, err = exports.Runtime.Complete(context.Background(), model.Request{})
+			_, err = exports.Runtime.Complete(context.Background(), "s", "s", model.Request{})
 			if !errors.Is(err, test.wantError) {
 				t.Fatalf("Complete() error = %v, want %v", err, test.wantError)
 			}
@@ -243,10 +243,10 @@ func TestDefaultModelMayBeSuppliedPerRequest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = exports.Runtime.Complete(context.Background(), model.Request{}); !errors.Is(err, model.ErrModelNotFound) {
+	if _, err = exports.Runtime.Complete(context.Background(), "s", "s", model.Request{}); !errors.Is(err, model.ErrModelNotFound) {
 		t.Fatalf("missing model error = %v", err)
 	}
-	if _, err = exports.Runtime.Complete(context.Background(), model.Request{Model: "explicit"}); err != nil {
+	if _, err = exports.Runtime.Complete(context.Background(), "s", "s", model.Request{Model: "explicit"}); err != nil {
 		t.Fatalf("explicit model: %v", err)
 	}
 }
@@ -306,7 +306,7 @@ func TestShortCircuitIsNotSourceNormalizedAndCallerIsOwned(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	response, err := exports.Runtime.Complete(context.Background(), model.Request{})
+	response, err := exports.Runtime.Complete(context.Background(), "s", "s", model.Request{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -324,7 +324,7 @@ func TestShortCircuitIsNotSourceNormalizedAndCallerIsOwned(t *testing.T) {
 		t.Fatal(err)
 	}
 	original := []byte(`{"x":1}`)
-	_, err = exports.Runtime.Complete(context.Background(), model.Request{Messages: []model.Message{{Role: model.RoleUser, ToolCalls: []tool.Call{{ID: "id", Name: "tool", Arguments: original}}}}})
+	_, err = exports.Runtime.Complete(context.Background(), "s", "s", model.Request{Messages: []model.Message{{Role: model.RoleUser, ToolCalls: []tool.Call{{ID: "id", Name: "tool", Arguments: original}}}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -368,7 +368,7 @@ func TestRequestClonePreservesPresenceAndOwnership(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = exports.Runtime.Complete(context.Background(), request); err != nil {
+	if _, err = exports.Runtime.Complete(context.Background(), "s", "s", request); err != nil {
 		t.Fatal(err)
 	}
 	if string(inline) != "image" || string(messageArguments) != `{"message":true}` || string(toolSchema) != `{"type":"object"}` || stop[0] != "done" || temperature != 0.25 || maxTokens != 128 {
@@ -387,7 +387,7 @@ func TestRequestClonePreservesPresenceAndOwnership(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = exports.Runtime.Complete(context.Background(), model.Request{
+	if _, err = exports.Runtime.Complete(context.Background(), "s", "s", model.Request{
 		Messages: make([]model.Message, 0), Tools: make([]tool.Definition, 0), Stop: make([]string, 0),
 	}); err != nil {
 		t.Fatal(err)
@@ -405,7 +405,7 @@ func TestRequestClonePreservesPresenceAndOwnership(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = exports.Runtime.Complete(context.Background(), model.Request{
+	if _, err = exports.Runtime.Complete(context.Background(), "s", "s", model.Request{
 		Messages: []model.Message{{Role: model.RoleUser, ToolCalls: []tool.Call{{Arguments: make(json.RawMessage, 0)}}}},
 		Tools:    []tool.Definition{{InputSchema: make(json.RawMessage, 0)}},
 	}); err != nil {
@@ -429,7 +429,7 @@ func TestResponseClonePreservesOwnershipAndPresence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	response, err := exports.Runtime.Complete(context.Background(), model.Request{})
+	response, err := exports.Runtime.Complete(context.Background(), "s", "s", model.Request{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -448,7 +448,7 @@ func TestResponseClonePreservesOwnershipAndPresence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	response, err = exports.Runtime.Complete(context.Background(), model.Request{})
+	response, err = exports.Runtime.Complete(context.Background(), "s", "s", model.Request{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -469,7 +469,7 @@ func TestProviderErrorReturnsOwnedPartialResponse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	response, err := exports.Runtime.Complete(context.Background(), model.Request{})
+	response, err := exports.Runtime.Complete(context.Background(), "s", "s", model.Request{})
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("Complete() error = %v", err)
 	}
@@ -517,7 +517,7 @@ func TestTerminalRejectsInvalidResponses(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err = exports.Runtime.Complete(context.Background(), model.Request{}); !errors.Is(err, modelruntime.ErrInvalidResponse) {
+			if _, err = exports.Runtime.Complete(context.Background(), "s", "s", model.Request{}); !errors.Is(err, modelruntime.ErrInvalidResponse) {
 				t.Fatalf("Complete() error = %v, want ErrInvalidResponse", err)
 			}
 		})
@@ -530,11 +530,11 @@ func TestStreamingUnsupportedAndProviderErrors(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = exports.Streaming.Stream(context.Background(), model.Request{}, func(model.StreamEvent) error { return nil })
+	_, err = exports.Streaming.Stream(context.Background(), "s", "s", model.Request{}, func(model.StreamEvent) error { return nil })
 	if !errors.Is(err, model.ErrStreamingUnsupported) {
 		t.Fatalf("streaming error=%v", err)
 	}
-	_, err = exports.Runtime.Complete(context.Background(), model.Request{Provider: "missing", Model: "m"})
+	_, err = exports.Runtime.Complete(context.Background(), "s", "s", model.Request{Provider: "missing", Model: "m"})
 	if !errors.Is(err, model.ErrProviderNotFound) {
 		t.Fatalf("provider error=%v", err)
 	}
@@ -562,7 +562,7 @@ func TestStreamingChainIsIndependentAndOrdered(t *testing.T) {
 		t.Fatal(err)
 	}
 	var chunks []string
-	response, err := exports.Streaming.Stream(context.Background(), model.Request{}, func(event model.StreamEvent) error {
+	response, err := exports.Streaming.Stream(context.Background(), "s", "s", model.Request{}, func(event model.StreamEvent) error {
 		if event.Kind == model.StreamPartDelta {
 			chunks = append(chunks, event.TextDelta)
 		}
@@ -607,7 +607,7 @@ func TestStreamingValidatesMultipleTextAndMediaParts(t *testing.T) {
 		t.Fatal(err)
 	}
 	var received []model.StreamEvent
-	response, err := exports.Streaming.Stream(context.Background(), model.Request{}, func(event model.StreamEvent) error {
+	response, err := exports.Streaming.Stream(context.Background(), "s", "s", model.Request{}, func(event model.StreamEvent) error {
 		received = append(received, event)
 		return nil
 	})
@@ -644,7 +644,7 @@ func TestStreamingRejectsInvalidLifecycleAndFinalMismatch(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err := exports.Streaming.Stream(context.Background(), model.Request{}, func(model.StreamEvent) error { return nil }); !errors.Is(err, modelruntime.ErrInvalidResponse) {
+			if _, err := exports.Streaming.Stream(context.Background(), "s", "s", model.Request{}, func(model.StreamEvent) error { return nil }); !errors.Is(err, modelruntime.ErrInvalidResponse) {
 				t.Fatalf("error=%v", err)
 			}
 		})
@@ -660,7 +660,7 @@ func TestStreamPropagatesHandlerError(t *testing.T) {
 		t.Fatal(err)
 	}
 	wantErr := errors.New("stop chunks")
-	_, err = exports.Streaming.Stream(context.Background(), model.Request{}, func(model.StreamEvent) error { return wantErr })
+	_, err = exports.Streaming.Stream(context.Background(), "s", "s", model.Request{}, func(model.StreamEvent) error { return wantErr })
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("Stream() error = %v, want handler error", err)
 	}
@@ -687,7 +687,7 @@ func TestConcurrentProviderSelection(t *testing.T) {
 		wait.Add(1)
 		go func() {
 			defer wait.Done()
-			response, callErr := exports.Runtime.Complete(context.Background(), model.Request{Provider: provider, Model: "m"})
+			response, callErr := exports.Runtime.Complete(context.Background(), "s", "s", model.Request{Provider: provider, Model: "m"})
 			if callErr != nil {
 				errorsFound <- callErr
 				return

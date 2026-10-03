@@ -27,7 +27,7 @@
 | `tool.edit` | [tool-edit](../../tool-edit/README.md) | [tool.edit_v0.1.md](./tool.edit_v0.1.md) |
 | `tool.runtime` | [tool-runtime](../../tool-runtime/README.md) | [tool.runtime_v0.1.md](./tool.runtime_v0.1.md) |
 | `tool.shell` | [tool-shell](../../tool-shell/README.md) | [tool.shell_v0.1.md](./tool.shell_v0.1.md) |
-| `usage.default` | [usage-default](../../usage-default/README.md) | [usage.default_v0.1.md](./usage.default_v0.1.md) |
+| `usage.default` (retired) | Estimation now lives in [context-compact](../../context-compact/README.md) | [usage.default_v0.1.md](./usage.default_v0.1.md) |
 | 子代理 | [agent-default](../../agent-default/README.md) / [tool-subagent](../../tool-subagent/README.md) | [轻量版方案](./ingot_subagent_轻量版设计方案.md) |
 
 `model-openai-responses`、`skill-runtime` 和 `tool-subagent` 的当前文档直接维护在对应模块 README。这里不补造缺失的历史版本。

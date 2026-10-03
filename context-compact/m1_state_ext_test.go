@@ -6,9 +6,7 @@ import (
 	"reflect"
 	"testing"
 
-	ingotabi "github.com/ingot-agent/ingot-abi"
 	contextcompact "github.com/ingot-agent/plugins/context-compact"
-	"github.com/ingot-agent/sdk/usage"
 
 	"github.com/pelletier/go-toml/v2"
 )
@@ -27,9 +25,6 @@ func (s testStateScope) Dir() string { return s.dir }
 // untouched.
 func withState(t *testing.T, cfg contextcompact.Config, deps contextcompact.Dependencies) contextcompact.Dependencies {
 	t.Helper()
-	if !deps.Counter.Valid {
-		deps.Counter = ingotabi.Some[usage.Counter](contractCounter{})
-	}
 	dir := writeTestConfig(t, cfg)
 	if deps.State != nil {
 		// A test supplied its own scope; persist cfg into it instead of

@@ -16,6 +16,9 @@ is `model-runtime`. The constructor is `New(ctx, deps)`.
 | `ProviderSources` | Ordered `[]model.ProviderSource` |
 | `Interceptors` | Ordered `[]model.Interceptor` for `Complete` |
 | `StreamInterceptors` | Ordered `[]model.StreamInterceptor` for `Stream` |
+| `Sessions` | Required `session.Manager` for pre-request identity validation |
+| `TokenUsage` | Required `session.TokenUsageStore` for durable settlement |
+| `Interactions` | Optional `interaction.ExecutionBinder` for Session snapshots |
 
 Exports are `Runtime model.Runtime`, `Streaming model.StreamingRuntime`,
 `Resolver model.RequestResolver`, `Selection modelselection.Controller`, and
@@ -93,8 +96,30 @@ without redirecting an in-flight call. `Stream` is optional on a provider entry.
 `ResolveRequest` returns an owned copy with defaults materialized and validates
 the selection and basic content. It does not call providers or model interceptors,
 and does not check an adapter's private model allowlist. `agent.default` uses
-this capability to pin selection per turn; `usage.default` uses it to select a
-counting route.
+this capability to pin selection per turn; `context.compact` uses it to resolve
+the model before estimating its input.
+
+`Complete(ctx, rootSessionID, currentSessionID, request)` and
+`Stream(ctx, rootSessionID, currentSessionID, request, handler)` require existing
+Sessions. At each successful provider terminal, valid reported Usage is added
+atomically to each distinct Session, then published with a bound `Channel.Set`
+as `model-runtime.session-usage/<id>` (`sessionId`, `totalToken`). The value is
+the committed cumulative snapshot. Identity never enters the provider request
+or depends on tracing context. Nested children keep the outermost root.
+
+Unreported, illegal or error-returned Usage is not counted. Stream uses only
+the final response. Interceptor short circuits do not count; multiple real
+successful calls each count. Downstream errors do not undo settled tokens.
+Persistence uses a bounded five-second context independent of caller
+cancellation. `ErrUsagePersistence` preserves the storage error and never
+retries the provider or increment. Set failures are logged and preserve the
+model result; metadata queries recover the durable value. Settlement and
+publication are serialized without serializing provider network requests.
+
+Only Session totals are durable. No per-request ledger or idempotency key is
+kept, so a crash after the provider returns but before SQLite commits can lose
+usage. Totals across root and child Sessions must not be summed as a global
+bill, since a child call contributes to both views.
 
 Complete and streaming interceptors are independent chains, executed in injection
 order around their respective terminal. Interceptors may select another provider
@@ -111,9 +136,8 @@ run once around the invocation. Streaming retries only before the provider has
 passed any event to its handler (including reasoning or part-start); after any
 event, failure is returned without replay. Invalid responses, interceptor and
 consumer errors, and unsupported streaming are not retried. A failed attempt
-may have consumed provider resources; `agent.default` model accounting still
-counts logical invocations, not underlying provider attempts. Retry-specific
-observation is intentionally deferred.
+may have consumed provider resources without returning authoritative usage.
+Retry-specific observation is intentionally deferred.
 
 Provider and interceptor responses are validated: the final role must be
 assistant; provider/model identities must be present; usage counts must be

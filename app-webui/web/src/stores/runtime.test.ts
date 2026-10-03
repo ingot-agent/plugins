@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import { command, request } from '../api'
-import type { Interaction, Message, ModelSelectionSnapshot, OperationInvocation, Session, Snapshot } from '../protocol'
+import type { Interaction, InteractionState, Message, ModelSelectionSnapshot, OperationInvocation, Session, Snapshot } from '../protocol'
 import { useRuntime } from './runtime'
 
 vi.mock('../api', async importOriginal => ({
@@ -14,7 +14,7 @@ function deferred<T>() {
   const promise = new Promise<T>(done => { resolve = done })
   return { promise, resolve }
 }
-const session = (title: string): Session => ({ id: 's', title, createdAt: '2026-01-01', updatedAt: '2026-01-01' })
+const session = (title: string): Session => ({ id: 's', title, createdAt: '2026-01-01', updatedAt: '2026-01-01', totalToken: 0 })
 const snapshot = (): Snapshot => ({
   cursor: 4, agent: { capabilities: { run: true, stream: true } },
   workspace: { defaultPath: '/state/workspace' },
@@ -26,6 +26,120 @@ const selection = (revision: string, model: string): ModelSelectionSnapshot => (
 })
 
 beforeEach(() => { setActivePinia(createPinia()); vi.resetAllMocks() })
+
+const usageState = (id: string, totalToken: unknown): InteractionState => ({
+  id: 'model-runtime.session-usage/' + id, name: 'model-runtime.session-usage/' + id,
+  scope: { agent: { sessionId: id } }, values: [{ name: 'sessionId', value: id }, { name: 'totalToken', value: totalToken }],
+})
+
+describe('session token totals', () => {
+  it('merges persisted bootstrap totals and dedicated states without generic panels', () => {
+    const runtime = useRuntime()
+    const state = snapshot()
+    state.sessions[0].totalToken = 10
+    state.interactionStates = [usageState('s', 20), usageState('followup', 7), { id: 'normal', name: 'normal', values: [] }]
+    runtime.bootstrap(state)
+    expect(runtime.totalTokenBySession).toEqual({ s: 20, followup: 7 })
+    expect(Object.keys(runtime.interactionStates)).toEqual(['normal'])
+    runtime.receive(5, { type: 'interaction.state.set', data: usageState('s', 15) })
+    runtime.receive(6, { type: 'interaction.state.set', data: usageState('s', 20) })
+    runtime.receive(7, { type: 'interaction.state.set', data: usageState('child', 3) })
+    expect(runtime.totalTokenBySession).toEqual({ s: 20, followup: 7, child: 3 })
+  })
+
+  it('keeps newer Set ahead of slow session queries and restores hidden sessions', async () => {
+    const runtime = useRuntime()
+    const stale = deferred<Session[]>()
+    vi.mocked(request).mockReturnValueOnce(stale.promise)
+    const pending = runtime.refreshSessions()
+    runtime.receive(1, { type: 'interaction.state.set', data: usageState('s', 30) })
+    stale.resolve([{ ...session('stale'), totalToken: 10 }])
+    await pending
+    expect(runtime.totalTokenBySession.s).toBe(30)
+    vi.mocked(request).mockResolvedValueOnce({ ...session('note'), id: 'followup', totalToken: 11 })
+    await runtime.loadSession('followup')
+    expect(runtime.totalTokenBySession.followup).toBe(11)
+    expect(runtime.sessions).toHaveLength(1)
+  })
+
+  it('rejects forged scope, identities and invalid totals', () => {
+    const runtime = useRuntime()
+    const mismatch = usageState('s', 10)
+    mismatch.scope = { agent: { sessionId: 'other' } }
+    const forged = usageState('s', 10)
+    forged.values[0].value = 'other'
+    const operation = usageState('s', 10)
+    operation.scope!.operation = { invocationId: 'op' }
+    for (const [i, state] of [mismatch, forged, operation, ...[-1, NaN, Infinity, 1.5, '10', Number.MAX_SAFE_INTEGER + 1].map(total => usageState('s', total))].entries()) {
+      runtime.receive(i + 1, { type: 'interaction.state.set', data: state })
+    }
+    expect(runtime.totalTokenBySession).toEqual({})
+    expect(runtime.interactionStates).toEqual({})
+  })
+
+  it('does not resurrect deleted totals from pending queries, late Set or reconnect', async () => {
+    const runtime = useRuntime()
+    runtime.receive(1, { type: 'interaction.state.set', data: usageState('s', 10) })
+    const stale = deferred<Session>()
+    vi.mocked(request).mockReturnValueOnce(stale.promise)
+    const pending = runtime.loadSession('s')
+    runtime.receive(2, { type: 'session.deleted', data: { id: 's' } })
+    runtime.receive(3, { type: 'interaction.state.set', data: usageState('s', 20) })
+    stale.resolve({ ...session('deleted'), totalToken: 30 })
+    await pending
+    const state = snapshot()
+    state.interactionStates = [usageState('s', 40)]
+    runtime.bootstrap(state)
+    expect(runtime.totalTokenBySession.s).toBeUndefined()
+    expect(runtime.sessions).toHaveLength(0)
+  })
+
+  it('starts ordinary forks at their own persisted zero', async () => {
+    const runtime = useRuntime()
+    runtime.receive(1, { type: 'interaction.state.set', data: usageState('s', 189) })
+    vi.mocked(command).mockResolvedValueOnce({ ...session('fork'), id: 'fork', totalToken: 0 })
+    await runtime.mutateSession('s', 'fork', 'fork')
+    expect(runtime.totalTokenBySession).toEqual({ s: 189, fork: 0 })
+  })
+})
+
+const contextState = (id: string, inputTokens: number, turnId = 'turn'): InteractionState => ({
+  id: 'context-compact.session-context/' + id, name: 'context-compact.session-context/' + id,
+  scope: { agent: { sessionId: id } }, values: Object.entries({ sessionId: id, inputTokens, turnId, roundIndex: 0, accuracy: 'estimate', source: 'estimator', provider: 'p', model: 'm' }).map(([name, value]) => ({ name, value })),
+})
+
+describe('session context estimates', () => {
+  it('replaces shrinking estimates and keeps Sessions independent', () => {
+    const runtime = useRuntime()
+    runtime.receive(1, { type: 'interaction.state.set', data: contextState('s', 100) })
+    runtime.receive(2, { type: 'interaction.state.set', data: contextState('child', 30) })
+    runtime.receive(3, { type: 'interaction.state.set', data: contextState('s', 20) })
+    runtime.receive(3, { type: 'interaction.state.set', data: contextState('s', 99) })
+    expect(runtime.contextBySession.s.inputTokens).toBe(20)
+    expect(runtime.contextBySession.child.inputTokens).toBe(30)
+    expect(runtime.interactionStates).toEqual({})
+  })
+
+  it('restores the latest Session context on bootstrap', () => {
+    const runtime = useRuntime()
+    runtime.receive(1, { type: 'interaction.state.set', data: contextState('s', 100, 'old') })
+    const state = snapshot()
+    state.interactionStates = [contextState('s', 40, 'latest')]
+    runtime.bootstrap(state)
+    expect(runtime.contextBySession.s.inputTokens).toBe(40)
+    expect(runtime.contextBySession.s.turnId).toBe('latest')
+    runtime.receive(5, { type: 'interaction.state.clear', data: { id: 'context-compact.session-context/s' } })
+    expect(runtime.contextBySession.s).toBeUndefined()
+  })
+
+  it('clears deleted context and rejects late updates', () => {
+    const runtime = useRuntime()
+    runtime.receive(1, { type: 'interaction.state.set', data: contextState('s', 100) })
+    runtime.receive(2, { type: 'session.deleted', data: { id: 's' } })
+    runtime.receive(3, { type: 'interaction.state.set', data: contextState('s', 200) })
+    expect(runtime.contextBySession.s).toBeUndefined()
+  })
+})
 
 describe('runtime request and event ordering', () => {
   it('keeps a newer model selection event ahead of a pending refresh', async () => {

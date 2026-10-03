@@ -41,8 +41,9 @@ npm run test:e2e
 
 Playwright 启动两个真实 Go HTTP/SSE 服务（`17316` 流式、`17317` Run-only），使用仅存在于 Go 测试代码中的确定性 SDK adapters，不访问模型、不需要凭据。覆盖会话生命周期、审批与自由文本、跨标签页同步、运行中历史阻塞、取消后的部分输出、附件历史、Operation、过期 cursor 和中英文/深色/移动布局。失败时保留 trace、截图及 HTML 报告。
 
-默认 fixture 使用 `GOWORK=off` 验证插件声明的已发布依赖。跨仓库 contract
-尚未发布时，可临时指定本地 workspace，例如
+默认 fixture 使用 `GOWORK=off` 验证插件声明的已发布依赖；当前 Session 用量
+合同已包含在 SDK v0.2.15 中，常规回归无需设置本地 workspace。开发尚未发布的
+跨仓库新合同时，可临时指定本地 workspace，例如
 `INGOT_WEBUI_FIXTURE_GOWORK=/absolute/path/to/go.work npm run test:e2e`；该选项只影响
 测试子进程，不改变插件的发布依赖。
 
@@ -67,4 +68,4 @@ Operation 的 Interaction 表单按层级编辑 Object/List：先显示字段或
 - `forms.ts`：Interaction 字段转换与 Operation 简单 Schema 判断；复杂结构或不安全的大整数保留在 JSON 模式提交，完整校验交给后端。
 - `components/` / `views/`：会话、执行详情、审批、附件和 Operation；用户文本不作为原始 HTML 执行。
 
-Web invocation ID 与 SDK Turn ID 不可互换；仅在会话中能明确关联执行时，将 Observation 放进对应的实时 Turn。Observation 是只读事实，不用它推断 Web 请求是否已成功；终态以 Web invocation 事件、规范结果和 History 协调。执行结束后，正文和工具调用由权威历史替换。刷新/重连不恢复过去的推理分段、用量或详细 trace；运行中快照只能展示已有的汇总文本，后续事件继续向下追加，也不做 Checkpoint/Resume。
+Web invocation ID 与 SDK Turn ID 不可互换；仅在会话中能明确关联执行时，将 Observation 放进对应的实时 Turn。Observation 是只读事实，不用它推断 Web 请求是否已成功；终态以 Web invocation 事件、规范结果和 History 协调。执行结束后，正文和工具调用由权威历史替换。刷新/重连会从 Session 元数据和运行时状态快照恢复累计用量及当前上下文；不会恢复过去的推理分段或详细 trace；运行中快照只能展示已有的汇总文本，后续事件继续向下追加，也不做 Checkpoint/Resume。
