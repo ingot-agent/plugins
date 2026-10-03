@@ -1,4 +1,4 @@
-package usagedefault
+package contextcompact
 
 import (
 	"context"

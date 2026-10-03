@@ -49,7 +49,7 @@ func (*setupTestChannel) Clear(context.Context, string) error           { return
 
 func TestSetupUsesClosedProviderOptionsAndRejectsUnknownProvider(t *testing.T) {
 	scope := setupTestScope{dir: filepath.Join(t.TempDir(), "state")}
-	exports, _, err := New(context.Background(), Dependencies{
+	exports, _, err := newRuntimeForTest(context.Background(), Dependencies{
 		State: scope,
 		ProviderSources: []model.ProviderSource{
 			fixedProviderSource{Name: "first", Complete: setupTestProvider{}.Complete},
@@ -84,7 +84,7 @@ func TestSetupUsesClosedProviderOptionsAndRejectsUnknownProvider(t *testing.T) {
 
 func TestSetupRejectsEmptyProviderWithMultipleOptions(t *testing.T) {
 	scope := setupTestScope{dir: filepath.Join(t.TempDir(), "state")}
-	exports, _, err := New(context.Background(), Dependencies{
+	exports, _, err := newRuntimeForTest(context.Background(), Dependencies{
 		State: scope,
 		ProviderSources: []model.ProviderSource{
 			fixedProviderSource{Name: "first", Complete: setupTestProvider{}.Complete},
@@ -112,7 +112,7 @@ func TestSetupRejectsEmptyProviderWithMultipleOptions(t *testing.T) {
 
 func TestSetupSingleProviderAutomaticIsNotAChange(t *testing.T) {
 	scope := setupTestScope{dir: filepath.Join(t.TempDir(), "state")}
-	exports, _, err := New(context.Background(), Dependencies{
+	exports, _, err := newRuntimeForTest(context.Background(), Dependencies{
 		State:           scope,
 		ProviderSources: []model.ProviderSource{fixedProviderSource{Name: "only", Complete: setupTestProvider{}.Complete}},
 	})
@@ -170,7 +170,7 @@ func TestSetupUsesProviderModelAndReasoningCapabilityChoices(t *testing.T) {
 		},
 		Complete: setupTestProvider{}.Complete,
 	}
-	exports, _, err := New(context.Background(), Dependencies{State: scope, ProviderSources: []model.ProviderSource{entry}})
+	exports, _, err := newRuntimeForTest(context.Background(), Dependencies{State: scope, ProviderSources: []model.ProviderSource{entry}})
 	if err != nil {
 		t.Fatal(err)
 	}

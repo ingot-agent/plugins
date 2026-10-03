@@ -9,6 +9,7 @@ import (
 
 	"github.com/ingot-agent/sdk/content"
 	"github.com/ingot-agent/sdk/model"
+	"github.com/ingot-agent/sdk/session"
 	"github.com/ingot-agent/sdk/tool"
 	"github.com/ingot-agent/sdk/usage"
 )
@@ -69,9 +70,11 @@ type evidenceInput struct {
 
 // The budget is shared by ordinary, partial, and rollup calls in one Compact.
 type callBudget struct {
-	used            int
-	limit           int
-	summaryIdentity *usage.CountResult
+	rootSessionID    session.ID
+	currentSessionID session.ID
+	used             int
+	limit            int
+	summaryIdentity  *usage.CountResult
 }
 
 func (b *callBudget) take() error {
@@ -375,7 +378,7 @@ func (r *compactor) callSummaryText(ctx context.Context, invocation model.Reques
 		return "", "", "", err
 	}
 	request.Provider, request.Model = budget.summaryIdentity.Provider, budget.summaryIdentity.Model
-	response, err := r.model.Complete(ctx, request)
+	response, err := r.model.Complete(ctx, budget.rootSessionID, budget.currentSessionID, request)
 	if err != nil {
 		return "", "", "", fmt.Errorf("summarize context: %w", err)
 	}

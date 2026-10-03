@@ -36,9 +36,42 @@ async function clickHighlightedText(page: Page, passage: string) {
   await page.mouse.click(rect.x, rect.y)
 }
 async function openOperationDebugger(page: Page) {
-  await page.getByRole('button', { name: 'Settings', exact: true }).click()
-  await page.getByRole('link', { name: 'Operation debugger', exact: true }).click()
+  await page.goto('/#/operations')
+  await expect(page.getByLabel('Select an operation')).toBeVisible()
 }
+
+test('workspace picker receives directory paths instead of the default label', async ({ page }) => {
+  const response = await page.request.get('/api/state')
+  expect(response.ok()).toBe(true)
+  const snapshot = await response.json()
+  const defaultPath: string = snapshot.workspace.defaultPath
+  expect(defaultPath).not.toBe('')
+  const customPath = defaultPath + '/selected workspace'
+  const selections = [{ path: defaultPath }, { path: customPath }, {}]
+  const initialPaths: string[] = []
+  await page.route('**/api/workspace/select', async route => {
+    initialPaths.push(route.request().postDataJSON().initialPath)
+    await route.fulfill({ json: selections[initialPaths.length - 1] })
+  })
+  await ready(page)
+  const picker = page.getByRole('button', { name: 'Choose workspace folder', exact: true })
+  const chosen = page.locator('.workspace-chosen')
+
+  await picker.click()
+  await expect.poll(() => initialPaths).toEqual([defaultPath])
+  await expect(chosen).toHaveText('default workspace')
+  await expect(picker).toBeEnabled()
+
+  await picker.click()
+  await expect.poll(() => initialPaths).toEqual([defaultPath, defaultPath])
+  await expect(chosen).toHaveText(customPath)
+  await expect(picker).toBeEnabled()
+
+  await picker.click()
+  await expect.poll(() => initialPaths).toEqual([defaultPath, defaultPath, customPath])
+  await expect(chosen).toHaveText(customPath)
+  await expect(picker).toBeEnabled()
+})
 
 test('model and reasoning controls follow the selected provider', async ({ page }) => {
   await ready(page)
@@ -67,7 +100,7 @@ test('model and reasoning controls follow the selected provider', async ({ page 
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390)
 })
 
-test('conversation creation, streamed output, execution detail, and history refresh', async ({ page }) => {
+test('conversation creation, streamed output, usage sidebar, and history refresh', async ({ page }) => {
   const errors: string[] = []
   page.on('pageerror', error => errors.push(error.message))
   await ready(page)
@@ -75,23 +108,77 @@ test('conversation creation, streamed output, execution detail, and history refr
   await expect(page.getByText('Your workspace is ready. We can take the next step together.', { exact: true })).toHaveCount(1)
   await expect(page.getByRole('button', { name: 'Send message', exact: true })).toBeVisible()
   await page.getByRole('button', { name: 'Execution details', exact: true }).click()
-  await expect(page.getByText('Input tokens', { exact: true })).toBeVisible()
+  const card = page.locator('.session-usage-card')
+  await expect(card.getByTestId('session-total')).toHaveText('72')
+  await expect(card.getByTestId('context-total')).toHaveText('64')
+  await expect(page.locator('.execution-panel > *')).toHaveCount(1)
+  await expect(card.locator('.usage-metrics > div')).toHaveCount(2)
+  await expect(page.locator('.execution-panel').getByText('Model calls', { exact: true })).toHaveCount(0)
+  await expect(card.getByText('Latest request input', { exact: true })).toHaveCount(0)
+  await expect(page.getByText('Input tokens', { exact: true })).toHaveCount(0)
   await page.reload()
   await expect(page.locator('.message-user .message-content')).toHaveText('hello workspace')
   await expect(page.getByText('Your workspace is ready. We can take the next step together.', { exact: true })).toHaveCount(1)
+  await expect(card.getByTestId('session-total')).toHaveText('72')
+  await expect(card.getByTestId('context-total')).toHaveText('64')
+  await expect(page.locator('.execution-panel details, .execution-panel table')).toHaveCount(0)
+  await send(page, 'continue the workspace')
+  await expect(card.getByTestId('session-total')).toHaveText('144')
+  await expect(card.getByTestId('context-total')).toHaveText('192')
+  await expect(page.locator('.execution-panel > *')).toHaveCount(1)
+  await page.screenshot({ path: 'test-results/session-usage-desktop.png' })
+  await page.getByRole('button', { name: 'Execution details', exact: true }).click()
+  await page.setViewportSize({ width: 390, height: 740 })
+  await page.getByRole('button', { name: 'Execution details', exact: true }).click()
+  await expect(card.getByTestId('session-total')).toHaveText('144')
+  await expect(card.getByTestId('context-total')).toHaveText('192')
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390)
+  await page.screenshot({ path: 'test-results/session-usage-mobile.png', animations: 'disabled' })
   expect(errors).toEqual([])
+})
+
+test('sidebar usage card shows only session and context totals in dark Chinese and mobile views', async ({ page }) => {
+  await ready(page)
+  await send(page, 'first usage check')
+  await expect(page.getByText('Your workspace is ready. We can take the next step together.', { exact: true })).toHaveCount(1)
+  await send(page, 'second usage check')
+  await page.getByRole('button', { name: 'Execution details', exact: true }).click()
+  const card = page.locator('.session-usage-card')
+  await expect(card.getByTestId('session-total')).toHaveText('144')
+  await expect(card.getByTestId('context-total')).toHaveText('192')
+  await expect(card.locator('.usage-metrics > div')).toHaveCount(2)
+  await expect(page.locator('.execution-panel details, .execution-panel table')).toHaveCount(0)
+  await expect(card.getByText('Latest request input', { exact: true })).toHaveCount(0)
+  await page.screenshot({ path: 'test-results/usage-card-desktop.png', animations: 'disabled' })
+  await page.evaluate(() => { localStorage.setItem('ingot.language', 'zh'); localStorage.setItem('ingot.theme', 'dark') })
+  await page.reload()
+  await expect(card.getByRole('heading', { name: 'Token 用量', exact: true })).toBeVisible()
+  await expect(card.getByTestId('session-total')).toHaveText('144')
+  await expect(card.getByTestId('context-total')).toHaveText('192')
+  await expect(card.getByText('最近一次请求输入', { exact: true })).toHaveCount(0)
+  await page.screenshot({ path: 'test-results/usage-card-dark-desktop.png', animations: 'disabled' })
+  await page.setViewportSize({ width: 390, height: 740 })
+  await expect(page.getByRole('dialog', { name: '执行详情', exact: true })).toBeVisible()
+  await expect(card.getByTestId('session-total')).toHaveText('144')
+  await expect(card.getByTestId('context-total')).toHaveText('192')
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390)
+  await page.screenshot({ path: 'test-results/usage-card-dark-mobile.png', animations: 'disabled' })
 })
 
 test('selected answer opens a persistent independent follow-up', async ({ page }) => {
   await ready(page)
   await send(page, 'hello workspace')
+  await page.getByRole('button', { name: 'Execution details', exact: true }).click()
   await selectAnswerText(page, 'workspace is ready')
   await page.getByRole('button', { name: 'Follow up', exact: true }).click()
   const note = page.getByRole('dialog', { name: 'Follow up' })
   await expect(note.getByText('workspace is ready', { exact: true })).toBeVisible()
+  await expect(note.locator('.session-usage')).toHaveCount(0)
   await note.getByRole('textbox', { name: 'Ask about this passage…' }).fill('What does ready mean?')
   await note.getByRole('button', { name: 'Send message' }).click()
   await expect(note.getByText('Your workspace is ready. We can take the next step together.', { exact: true })).toBeVisible()
+  await expect(note.locator('.session-usage')).toHaveCount(0)
+  await expect(page.locator('.session-usage-card').getByTestId('session-total')).toHaveText('144')
   const inherited = await page.evaluate(async () => {
     const source = location.hash.split('/').pop()!
     const [item] = await (await fetch(`/api/sessions/${source}/followups`)).json()
@@ -109,16 +196,22 @@ test('selected answer opens a persistent independent follow-up', async ({ page }
   await expect(page.getByText('Connected', { exact: true })).toBeVisible()
   await clickHighlightedText(page, 'workspace is ready')
   await expect(page.getByRole('dialog', { name: 'Follow up' }).getByText('What does ready mean?', { exact: false })).toBeVisible()
+  await expect(note.locator('.session-usage')).toHaveCount(0)
+  await expect(page.locator('.session-usage-card').getByTestId('session-total')).toHaveText('144')
+  await page.getByRole('button', { name: 'Execution details', exact: true }).click()
   await page.setViewportSize({ width: 390, height: 740 })
   await expect.poll(async () => {
     const bounds = await note.boundingBox()
     return bounds && bounds.x >= 0 && bounds.x + bounds.width <= 390 && bounds.y + bounds.height <= 740
   }).toBe(true)
+  await page.screenshot({ path: 'test-results/session-usage-followup-mobile.png' })
   await page.getByRole('dialog', { name: 'Follow up' }).getByRole('button', { name: 'Delete' }).click()
   await page.getByRole('dialog', { name: 'Follow up' }).getByRole('button', { name: 'Delete' }).last().click()
   await expect(note).toHaveCount(0)
   await clickHighlightedText(page, 'workspace is ready')
   await expect(note).toHaveCount(0)
+  await page.getByRole('button', { name: 'Execution details', exact: true }).click()
+  await expect(page.locator('.session-usage-card').getByTestId('session-total')).toHaveText('144')
 })
 
 test('a closed unsent note reopens with its draft and its floating window stays in the viewport', async ({ page }) => {
@@ -314,14 +407,14 @@ test('mixed and tool-only history rounds keep tool spacing after refresh without
   await expect(page.locator('.tool-card')).toHaveCount(0)
   await expect(page.locator('.transcript .message-assistant:visible')).toHaveCount(2)
   const visibleRoundMargins = await page.locator('.transcript .message-assistant:visible').evaluateAll(messages => messages.map(message => getComputedStyle(message).marginBottom))
-  expect(visibleRoundMargins).toEqual(['27px', '27px'])
+  expect(visibleRoundMargins).toEqual(['5px', '5px'])
   await expect(page.locator('.transcript .message-assistant:visible .markdown')).toHaveText(['Checking the workspace before editing.', 'Your workspace is ready. We can take the next step together.'])
   await page.getByRole('button', { name: 'Show tool calls', exact: true }).click()
   await expect(page.locator('.tool-card')).toHaveCount(4)
   await expect(page.locator('.transcript .message-assistant:visible')).toHaveCount(4)
   await expect(page.locator('.message-with-tools')).toHaveCount(3)
   const roundMargins = await page.locator('.message-with-tools').evaluateAll(messages => messages.map(message => getComputedStyle(message).marginBottom))
-  expect(roundMargins).toEqual(['0px', '0px', '0px'])
+  expect(roundMargins).toEqual(['5px', '5px', '5px'])
   await expect(page.locator('.message-with-tools:not(:has(.message-content))')).toHaveCount(2)
   const gaps = await page.locator('.transcript .message-assistant .tool-card').evaluateAll(cards => cards.slice(1).map((card, index) => {
     const previous = cards[index].getBoundingClientRect()
@@ -501,6 +594,10 @@ test('slash command recovers its form when the event stream stops delivering eve
   const dialog = page.getByRole('dialog', { name: '/tool-shell config', exact: true })
   await expect(dialog.getByRole('button', { name: /Rules/ })).toBeVisible()
   await expect(dialog.getByText('Waiting for operation state…')).toHaveCount(0)
+  const canceled = page.waitForResponse(response => response.url().includes('/operation-invocations/') && response.request().method() === 'DELETE')
+  await dialog.getByRole('button', { name: 'Close', exact: true }).first().click()
+  expect((await canceled).ok()).toBe(true)
+  await expect(dialog).toHaveCount(0)
 })
 
 test('nested providers keep complex detail navigation and edit scalar lists inline', async ({ page }) => {
@@ -611,6 +708,10 @@ test('session rename, archive, restore, fork and delete', async ({ page }) => {
   await page.getByLabel('Title', { exact: true }).fill('Fork for testing')
   await page.getByRole('button', { name: 'Save', exact: true }).click()
   await expect(page.getByRole('heading', { name: 'Fork for testing', exact: true })).toBeVisible()
+  await page.getByRole('button', { name: 'Execution details', exact: true }).click()
+  await expect(page.locator('.session-usage-card').getByTestId('session-total')).toHaveText('0')
+  await send(page, 'fork response')
+  await expect(page.locator('.session-usage-card').getByTestId('session-total')).toHaveText('72')
   await page.locator('.conversation-header').getByRole('button', { name: /^Details:/ }).click()
   await page.getByRole('menuitem', { name: 'Delete', exact: true }).click()
   await page.getByRole('button', { name: 'Delete', exact: true }).click()

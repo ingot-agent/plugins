@@ -23,7 +23,7 @@ func selectionFixture(t *testing.T) (Exports, setupTestScope, *liveSource) {
 	second.Models = []model.ModelEntry{{Name: "new", ReasoningEfforts: []model.ReasoningEffort{model.ReasoningEffortLow}}}
 	source := &liveSource{}
 	source.set(first, second)
-	exports, _, err := New(context.Background(), Dependencies{State: scope, ProviderSources: []model.ProviderSource{source}})
+	exports, _, err := newRuntimeForTest(context.Background(), Dependencies{State: scope, ProviderSources: []model.ProviderSource{source}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,7 +65,7 @@ func TestModelSelectionUpdatesRuntimeDefaultsAndPersists(t *testing.T) {
 	if err != nil || stored != (Config{DefaultProvider: "second", DefaultModel: "new"}) {
 		t.Fatalf("stored = %#v, err = %v", stored, err)
 	}
-	restarted, _, err := New(ctx, Dependencies{State: scope, ProviderSources: []model.ProviderSource{source}})
+	restarted, _, err := newRuntimeForTest(ctx, Dependencies{State: scope, ProviderSources: []model.ProviderSource{source}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,7 +127,7 @@ func TestModelSelectionCanConfigureAndRepairDefaults(t *testing.T) {
 		if err := saveConfig(scope.Dir(), cfg); err != nil {
 			t.Fatal(err)
 		}
-		exports, _, err := New(ctx, Dependencies{State: scope, ProviderSources: []model.ProviderSource{source}})
+		exports, _, err := newRuntimeForTest(ctx, Dependencies{State: scope, ProviderSources: []model.ProviderSource{source}})
 		if err != nil {
 			t.Fatal(err)
 		}

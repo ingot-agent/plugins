@@ -10,13 +10,11 @@ import (
 	"testing"
 	"time"
 
-	ingotabi "github.com/ingot-agent/ingot-abi"
 	"github.com/ingot-agent/sdk/asset"
 	"github.com/ingot-agent/sdk/content"
 	"github.com/ingot-agent/sdk/contextwindow"
 	"github.com/ingot-agent/sdk/model"
 	"github.com/ingot-agent/sdk/session"
-	"github.com/ingot-agent/sdk/usage"
 )
 
 type memoryStore struct {
@@ -70,7 +68,7 @@ type blockingSummaryModel struct {
 	release  chan struct{}
 }
 
-func (m *blockingSummaryModel) Complete(ctx context.Context, request model.Request) (model.Response, error) {
+func (m *blockingSummaryModel) Complete(ctx context.Context, _, _ session.ID, request model.Request) (model.Response, error) {
 	m.mu.Lock()
 	m.requests = append(m.requests, cloneRequest(request))
 	call := len(m.requests)
@@ -86,7 +84,7 @@ func (m *blockingSummaryModel) Complete(ctx context.Context, request model.Reque
 	return summaryResponse(`{"summary":"serialized","operations":[]}`), nil
 }
 
-func (m *fakeModel) Complete(_ context.Context, request model.Request) (model.Response, error) {
+func (m *fakeModel) Complete(_ context.Context, _, _ session.ID, request model.Request) (model.Response, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.requests = append(m.requests, cloneRequest(request))
@@ -110,11 +108,11 @@ func TestCompactNoOpReturnsOwnedMessages(t *testing.T) {
 	}
 	store := &memoryStore{entries: map[session.ID][]session.Entry{"s": {}}}
 	models := &fakeModel{}
-	exports, _, err := New(context.Background(), withState(t, Config{TriggerInputTokens: int64(len(raw)) + 2, TargetInputTokens: int64(len(raw)) + 1}, Dependencies{Model: models, Store: store}))
+	exports, _, err := newTestCompactor(context.Background(), withState(t, Config{TriggerInputTokens: int64(len(raw)) + 2, TargetInputTokens: int64(len(raw)) + 1}, testDependencies{Model: models, Store: store}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := exports.Compactor.Compact(context.Background(), contextwindow.CompactionRequest{SessionID: "s", Invocation: request})
+	result, err := exports.Compactor.Compact(context.Background(), contextwindow.CompactionRequest{RootSessionID: "s", SessionID: "s", Invocation: request})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -166,11 +164,11 @@ func TestCompactPreservesRecentRoundsAndPersistsDelta(t *testing.T) {
 		TriggerInputTokens: int64(len(raw)) - 1, TargetInputTokens: int64(len(raw)) - 500,
 		RecentRounds: 1, SummaryChunkTokens: 1000,
 	}
-	exports, _, err := New(context.Background(), withState(t, cfg, Dependencies{Model: models, Store: store}))
+	exports, _, err := newTestCompactor(context.Background(), withState(t, cfg, testDependencies{Model: models, Store: store}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := exports.Compactor.Compact(context.Background(), contextwindow.CompactionRequest{SessionID: "s", Invocation: request})
+	result, err := exports.Compactor.Compact(context.Background(), contextwindow.CompactionRequest{RootSessionID: "s", SessionID: "s", Invocation: request})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -204,11 +202,11 @@ func TestCompactPreservesRecentRoundsAndPersistsDelta(t *testing.T) {
 	}
 
 	restartedModel := &fakeModel{err: errors.New("must reuse checkpoint")}
-	restarted, _, err := New(context.Background(), withState(t, cfg, Dependencies{Model: restartedModel, Store: store}))
+	restarted, _, err := newTestCompactor(context.Background(), withState(t, cfg, testDependencies{Model: restartedModel, Store: store}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	reused, err := restarted.Compactor.Compact(context.Background(), contextwindow.CompactionRequest{SessionID: "s", Invocation: request})
+	reused, err := restarted.Compactor.Compact(context.Background(), contextwindow.CompactionRequest{RootSessionID: "s", SessionID: "s", Invocation: request})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -228,11 +226,11 @@ func TestIncrementalSegmentsKeepFrozenPrefixAndUpdateState(t *testing.T) {
 	models := &fakeModel{responses: responses}
 	store := &memoryStore{entries: map[session.ID][]session.Entry{"s": {}}}
 	cfg := Config{TriggerInputTokens: int64(len(raw)) - 1, TargetInputTokens: int64(len(raw)) - 500, RecentRounds: 1, SummaryChunkTokens: 1000}
-	exports, _, err := New(context.Background(), withState(t, cfg, Dependencies{Model: models, Store: store}))
+	exports, _, err := newTestCompactor(context.Background(), withState(t, cfg, testDependencies{Model: models, Store: store}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	first, err := exports.Compactor.Compact(context.Background(), contextwindow.CompactionRequest{SessionID: "s", Invocation: firstRequest})
+	first, err := exports.Compactor.Compact(context.Background(), contextwindow.CompactionRequest{RootSessionID: "s", SessionID: "s", Invocation: firstRequest})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -248,7 +246,7 @@ func TestIncrementalSegmentsKeepFrozenPrefixAndUpdateState(t *testing.T) {
 		{Role: model.RoleUser, Content: textContent("recent user")},
 		{Role: model.RoleAssistant, Content: textContent("recent assistant")},
 	}}
-	second, err := exports.Compactor.Compact(context.Background(), contextwindow.CompactionRequest{SessionID: "s", Invocation: secondRequest})
+	second, err := exports.Compactor.Compact(context.Background(), contextwindow.CompactionRequest{RootSessionID: "s", SessionID: "s", Invocation: secondRequest})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -292,11 +290,11 @@ func TestRollupBoundsMemoryTokensWithoutChangingState(t *testing.T) {
 		RecentRounds: 1, SummaryChunkTokens: 1000,
 		MemoryTriggerTokens: 1200, MemoryTargetTokens: 1000, MaxSummaryPasses: 4,
 	}
-	exports, _, err := New(context.Background(), withState(t, cfg, Dependencies{Model: models, Store: store}))
+	exports, _, err := newTestCompactor(context.Background(), withState(t, cfg, testDependencies{Model: models, Store: store}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := exports.Compactor.Compact(context.Background(), contextwindow.CompactionRequest{SessionID: "s", Invocation: request})
+	result, err := exports.Compactor.Compact(context.Background(), contextwindow.CompactionRequest{RootSessionID: "s", SessionID: "s", Invocation: request})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -325,12 +323,12 @@ func TestCompactRejectsInvalidHistoryAndOwnedCheckpointVersion(t *testing.T) {
 	t.Parallel()
 	store := &memoryStore{entries: map[session.ID][]session.Entry{"s": {}}}
 	models := &fakeModel{}
-	exports, _, err := New(context.Background(), withState(t, Config{TriggerInputTokens: 100, TargetInputTokens: 50}, Dependencies{Model: models, Store: store}))
+	exports, _, err := newTestCompactor(context.Background(), withState(t, Config{TriggerInputTokens: 100, TargetInputTokens: 50}, testDependencies{Model: models, Store: store}))
 	if err != nil {
 		t.Fatal(err)
 	}
 	_, err = exports.Compactor.Compact(context.Background(), contextwindow.CompactionRequest{
-		SessionID: "s",
+		RootSessionID: "s", SessionID: "s",
 		Invocation: model.Request{Messages: []model.Message{
 			{Role: model.RoleUser, Content: textContent("u")},
 			{Role: model.RoleTool, Content: textContent("orphan"), ToolCallID: "c"},
@@ -341,7 +339,7 @@ func TestCompactRejectsInvalidHistoryAndOwnedCheckpointVersion(t *testing.T) {
 	}
 
 	store.entries["s"] = []session.Entry{{Kind: checkpointEntryKind, Version: checkpointEntryVersion + 1, Payload: json.RawMessage(`{}`)}}
-	_, err = exports.Compactor.Compact(context.Background(), contextwindow.CompactionRequest{SessionID: "s", Invocation: model.Request{Messages: []model.Message{{Role: model.RoleUser, Content: textContent("u")}}}})
+	_, err = exports.Compactor.Compact(context.Background(), contextwindow.CompactionRequest{RootSessionID: "s", SessionID: "s", Invocation: model.Request{Messages: []model.Message{{Role: model.RoleUser, Content: textContent("u")}}}})
 	if !errors.Is(err, ErrUnsupportedCheckpointVersion) {
 		t.Fatalf("version error=%v", err)
 	}
@@ -353,18 +351,18 @@ func TestCompactPreservesModelAndStoreErrors(t *testing.T) {
 	raw, _ := canonicalRequestBytes(request)
 	modelErr := errors.New("model failed")
 	store := &memoryStore{entries: map[session.ID][]session.Entry{"s": {}}}
-	exports, _, err := New(context.Background(), withState(t, Config{TriggerInputTokens: int64(len(raw)) - 1, TargetInputTokens: int64(len(raw)) - 500, RecentRounds: 1, SummaryChunkTokens: 1000}, Dependencies{Model: &fakeModel{err: modelErr}, Store: store}))
+	exports, _, err := newTestCompactor(context.Background(), withState(t, Config{TriggerInputTokens: int64(len(raw)) - 1, TargetInputTokens: int64(len(raw)) - 500, RecentRounds: 1, SummaryChunkTokens: 1000}, testDependencies{Model: &fakeModel{err: modelErr}, Store: store}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = exports.Compactor.Compact(context.Background(), contextwindow.CompactionRequest{SessionID: "s", Invocation: request})
+	_, err = exports.Compactor.Compact(context.Background(), contextwindow.CompactionRequest{RootSessionID: "s", SessionID: "s", Invocation: request})
 	if !errors.Is(err, modelErr) {
 		t.Fatalf("model error=%v", err)
 	}
 
 	loadErr := errors.New("load failed")
 	store.loadErr = loadErr
-	_, err = exports.Compactor.Compact(context.Background(), contextwindow.CompactionRequest{SessionID: "s", Invocation: request})
+	_, err = exports.Compactor.Compact(context.Background(), contextwindow.CompactionRequest{RootSessionID: "s", SessionID: "s", Invocation: request})
 	if !errors.Is(err, loadErr) {
 		t.Fatalf("load error=%v", err)
 	}
@@ -373,11 +371,11 @@ func TestCompactPreservesModelAndStoreErrors(t *testing.T) {
 	store.loadErr = nil
 	store.appendErr = appendErr
 	models := &fakeModel{responses: []model.Response{summaryResponse(`{"summary":"valid","operations":[]}`)}}
-	exports, _, err = New(context.Background(), withState(t, Config{TriggerInputTokens: int64(len(raw)) - 1, TargetInputTokens: int64(len(raw)) - 500, RecentRounds: 1, SummaryChunkTokens: 1000}, Dependencies{Model: models, Store: store}))
+	exports, _, err = newTestCompactor(context.Background(), withState(t, Config{TriggerInputTokens: int64(len(raw)) - 1, TargetInputTokens: int64(len(raw)) - 500, RecentRounds: 1, SummaryChunkTokens: 1000}, testDependencies{Model: models, Store: store}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = exports.Compactor.Compact(context.Background(), contextwindow.CompactionRequest{SessionID: "s", Invocation: request})
+	_, err = exports.Compactor.Compact(context.Background(), contextwindow.CompactionRequest{RootSessionID: "s", SessionID: "s", Invocation: request})
 	if !errors.Is(err, appendErr) {
 		t.Fatalf("append error=%v", err)
 	}
@@ -389,14 +387,14 @@ func TestCompactDoesNotPersistSummaryWithoutSizeBenefit(t *testing.T) {
 	raw, _ := canonicalRequestBytes(request)
 	models := &fakeModel{responses: []model.Response{summaryResponse(`{"summary":"` + strings.Repeat("z", 4000) + `","operations":[]}`)}}
 	store := &memoryStore{entries: map[session.ID][]session.Entry{"s": {}}}
-	exports, _, err := New(context.Background(), withState(t, Config{
+	exports, _, err := newTestCompactor(context.Background(), withState(t, Config{
 		TriggerInputTokens: int64(len(raw)) - 1, TargetInputTokens: int64(len(raw)) - 500,
 		RecentRounds: 1, SummaryChunkTokens: 1000, MaxSummaryPasses: 1,
-	}, Dependencies{Model: models, Store: store}))
+	}, testDependencies{Model: models, Store: store}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = exports.Compactor.Compact(context.Background(), contextwindow.CompactionRequest{SessionID: "s", Invocation: request})
+	_, err = exports.Compactor.Compact(context.Background(), contextwindow.CompactionRequest{RootSessionID: "s", SessionID: "s", Invocation: request})
 	if !errors.Is(err, ErrContextUncompactable) {
 		t.Fatalf("error=%v", err)
 	}
@@ -420,14 +418,14 @@ func TestCompactPreservesRecentMediaAndDoesNotSummarizeIt(t *testing.T) {
 	}
 	models := &fakeModel{responses: []model.Response{summaryResponse(`{"summary":"middle summarized","operations":[]}`)}}
 	store := &memoryStore{entries: map[session.ID][]session.Entry{"s": {}}}
-	exports, _, err := New(context.Background(), withState(t, Config{
+	exports, _, err := newTestCompactor(context.Background(), withState(t, Config{
 		TriggerInputTokens: int64(len(raw)) - 1, TargetInputTokens: int64(len(raw)) - 500,
 		RecentRounds: 1, SummaryChunkTokens: 1000,
-	}, Dependencies{Model: models, Store: store}))
+	}, testDependencies{Model: models, Store: store}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := exports.Compactor.Compact(context.Background(), contextwindow.CompactionRequest{SessionID: "s", Invocation: request})
+	result, err := exports.Compactor.Compact(context.Background(), contextwindow.CompactionRequest{RootSessionID: "s", SessionID: "s", Invocation: request})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -456,14 +454,14 @@ func TestCompactReturnsUncompactableWhenFirstRoundContainsMedia(t *testing.T) {
 	}
 	models := &fakeModel{}
 	store := &memoryStore{entries: map[session.ID][]session.Entry{"s": {}}}
-	exports, _, err := New(context.Background(), withState(t, Config{
+	exports, _, err := newTestCompactor(context.Background(), withState(t, Config{
 		TriggerInputTokens: int64(len(raw)) - 1, TargetInputTokens: int64(len(raw)) - 100,
 		RecentRounds: 1, SummaryChunkTokens: 1000,
-	}, Dependencies{Model: models, Store: store}))
+	}, testDependencies{Model: models, Store: store}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = exports.Compactor.Compact(context.Background(), contextwindow.CompactionRequest{SessionID: "s", Invocation: request})
+	_, err = exports.Compactor.Compact(context.Background(), contextwindow.CompactionRequest{RootSessionID: "s", SessionID: "s", Invocation: request})
 	if !errors.Is(err, ErrContextUncompactable) {
 		t.Fatalf("error=%v", err)
 	}
@@ -503,33 +501,24 @@ func TestConfigAndContextValidation(t *testing.T) {
 	models := &fakeModel{}
 	// An Unconfigured Plugin must still construct: ADR 0003 requires that a
 	// missing configuration cannot prevent first-time setup.
-	if _, _, err := New(context.Background(), withState(t, Config{}, Dependencies{Model: models, Store: store})); err != nil {
+	if _, _, err := newTestCompactor(context.Background(), withState(t, Config{}, testDependencies{Model: models, Store: store})); err != nil {
 		t.Fatalf("unconfigured construction failed: %v", err)
-	}
-	for _, counter := range []usage.Counter{nil, (*canonicalTokenCounter)(nil)} {
-		_, _, err := New(context.Background(), Dependencies{
-			Model: models, Counter: ingotabi.Some[usage.Counter](counter), Store: store,
-			State: testStateScope{dir: writeTestConfig(t, Config{})},
-		})
-		if !errors.Is(err, ErrInvalidConfig) {
-			t.Fatalf("counter=%#v error=%v", counter, err)
-		}
 	}
 	for _, cfg := range []Config{
 		{TriggerInputTokens: 10, TargetInputTokens: 10},
 		{TriggerInputTokens: 10, TargetInputTokens: 5, RecentRounds: -1},
 	} {
-		if _, _, err := New(context.Background(), withState(t, cfg, Dependencies{Model: models, Store: store})); !errors.Is(err, ErrInvalidConfig) {
+		if _, _, err := newTestCompactor(context.Background(), withState(t, cfg, testDependencies{Model: models, Store: store})); !errors.Is(err, ErrInvalidConfig) {
 			t.Fatalf("config=%#v error=%v", cfg, err)
 		}
 	}
-	exports, _, err := New(context.Background(), withState(t, Config{TriggerInputTokens: 10, TargetInputTokens: 5}, Dependencies{Model: models, Store: store}))
+	exports, _, err := newTestCompactor(context.Background(), withState(t, Config{TriggerInputTokens: 10, TargetInputTokens: 5}, testDependencies{Model: models, Store: store}))
 	if err != nil {
 		t.Fatal(err)
 	}
 	canceled, cancel := context.WithCancel(context.Background())
 	cancel()
-	_, err = exports.Compactor.Compact(canceled, contextwindow.CompactionRequest{SessionID: "s"})
+	_, err = exports.Compactor.Compact(canceled, contextwindow.CompactionRequest{RootSessionID: "s", SessionID: "s"})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("context error=%v", err)
 	}
@@ -541,10 +530,10 @@ func TestCompactSerializesSameSessionAndSecondCallReusesCheckpoint(t *testing.T)
 	raw, _ := canonicalRequestBytes(request)
 	models := &blockingSummaryModel{entered: make(chan struct{}), release: make(chan struct{})}
 	store := &memoryStore{entries: map[session.ID][]session.Entry{"s": {}}}
-	exports, _, err := New(context.Background(), withState(t, Config{
+	exports, _, err := newTestCompactor(context.Background(), withState(t, Config{
 		TriggerInputTokens: int64(len(raw)) - 1, TargetInputTokens: int64(len(raw)) - 500,
 		RecentRounds: 1, SummaryChunkTokens: 1000,
-	}, Dependencies{Model: models, Store: store}))
+	}, testDependencies{Model: models, Store: store}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -554,7 +543,7 @@ func TestCompactSerializesSameSessionAndSecondCallReusesCheckpoint(t *testing.T)
 	}
 	results := make(chan outcome, 2)
 	call := func() {
-		result, callErr := exports.Compactor.Compact(context.Background(), contextwindow.CompactionRequest{SessionID: "s", Invocation: request})
+		result, callErr := exports.Compactor.Compact(context.Background(), contextwindow.CompactionRequest{RootSessionID: "s", SessionID: "s", Invocation: request})
 		results <- outcome{result: result, err: callErr}
 	}
 	go call()
@@ -601,14 +590,14 @@ func TestCheckpointReuseRequiresMatchingResolvedModelIdentity(t *testing.T) {
 		TriggerInputTokens: int64(len(raw)) - 1, TargetInputTokens: int64(len(raw)) - 500,
 		RecentRounds: 1, SummaryChunkTokens: 1000,
 	}
-	exports, _, err := New(context.Background(), withState(t, cfg, Dependencies{Model: models, Store: store}))
+	exports, _, err := newTestCompactor(context.Background(), withState(t, cfg, testDependencies{Model: models, Store: store}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := exports.Compactor.Compact(context.Background(), contextwindow.CompactionRequest{SessionID: "s", Invocation: request}); err != nil {
+	if _, err := exports.Compactor.Compact(context.Background(), contextwindow.CompactionRequest{RootSessionID: "s", SessionID: "s", Invocation: request}); err != nil {
 		t.Fatal(err)
 	}
-	second, err := exports.Compactor.Compact(context.Background(), contextwindow.CompactionRequest{SessionID: "s", Invocation: request})
+	second, err := exports.Compactor.Compact(context.Background(), contextwindow.CompactionRequest{RootSessionID: "s", SessionID: "s", Invocation: request})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -616,11 +605,11 @@ func TestCheckpointReuseRequiresMatchingResolvedModelIdentity(t *testing.T) {
 		t.Fatalf("summary calls=%d messages=%#v", len(models.requests), second.Messages)
 	}
 
-	restarted, _, err := New(context.Background(), withState(t, cfg, Dependencies{Model: &fakeModel{err: errors.New("must reuse matching checkpoint")}, Store: store}))
+	restarted, _, err := newTestCompactor(context.Background(), withState(t, cfg, testDependencies{Model: &fakeModel{err: errors.New("must reuse matching checkpoint")}, Store: store}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	reused, err := restarted.Compactor.Compact(context.Background(), contextwindow.CompactionRequest{SessionID: "s", Invocation: request})
+	reused, err := restarted.Compactor.Compact(context.Background(), contextwindow.CompactionRequest{RootSessionID: "s", SessionID: "s", Invocation: request})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -644,14 +633,14 @@ func TestCheckpointWithRuntimeDefaultSelectionIsNotReused(t *testing.T) {
 		TriggerInputTokens: int64(len(raw)) - 1, TargetInputTokens: int64(len(raw)) - 500,
 		RecentRounds: 1, SummaryChunkTokens: 1000,
 	}
-	exports, _, err := New(context.Background(), withState(t, cfg, Dependencies{Model: models, Store: store}))
+	exports, _, err := newTestCompactor(context.Background(), withState(t, cfg, testDependencies{Model: models, Store: store}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := exports.Compactor.Compact(context.Background(), contextwindow.CompactionRequest{SessionID: "s", Invocation: request}); err != nil {
+	if _, err := exports.Compactor.Compact(context.Background(), contextwindow.CompactionRequest{RootSessionID: "s", SessionID: "s", Invocation: request}); err != nil {
 		t.Fatal(err)
 	}
-	second, err := exports.Compactor.Compact(context.Background(), contextwindow.CompactionRequest{SessionID: "s", Invocation: request})
+	second, err := exports.Compactor.Compact(context.Background(), contextwindow.CompactionRequest{RootSessionID: "s", SessionID: "s", Invocation: request})
 	if err != nil {
 		t.Fatal(err)
 	}

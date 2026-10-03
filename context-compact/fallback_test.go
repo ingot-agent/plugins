@@ -37,7 +37,7 @@ func TestFallbackCountAndDefaultThreshold(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Accuracy != usage.AccuracyEstimate || result.Source != fallbackCountSource || result.InputTokens <= 0 || result.Provider != "p" || result.Model != "m" {
+	if result.Accuracy != usage.AccuracyEstimate || result.Source != "unicode-estimate-v1" || result.InputTokens <= 0 || result.Provider != "p" || result.Model != "m" {
 		t.Fatalf("fallback count: %#v", result)
 	}
 	withoutTools := cloneRequest(request)
@@ -61,22 +61,22 @@ func TestFallbackCountsAtCompactionBoundary(t *testing.T) {
 	store := &memoryStore{entries: map[session.ID][]session.Entry{"s": {}}}
 	models := &fakeModel{responses: []model.Response{summaryResponse(`{"summary":"investigation remains open","operations":[]}`)}}
 	cfg := Config{TriggerInputTokens: tokens.InputTokens, TargetInputTokens: tokens.InputTokens / 2, RecentRounds: 1}
-	exports, _, err := New(context.Background(), Dependencies{Model: models, Store: store, State: testStateScope{dir: writeTestConfig(t, cfg)}})
+	exports, _, err := newTestCompactor(context.Background(), testDependencies{Model: models, Store: store, State: testStateScope{dir: writeTestConfig(t, cfg)}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := exports.Compactor.Compact(context.Background(), contextwindow.CompactionRequest{SessionID: "s", Invocation: request})
+	result, err := exports.Compactor.Compact(context.Background(), contextwindow.CompactionRequest{RootSessionID: "s", SessionID: "s", Invocation: request})
 	if err != nil || !result.Changed || len(models.requests) != 1 {
 		t.Fatalf("compact result=%+v err=%v calls=%d", result, err, len(models.requests))
 	}
 	if models.requests[0].Stop != nil {
 		t.Fatal("Responses-incompatible Stop on summary")
 	}
-	restarted, _, err := New(context.Background(), Dependencies{Model: &fakeModel{err: errors.New("unexpected summary")}, Store: store, State: testStateScope{dir: writeTestConfig(t, cfg)}})
+	restarted, _, err := newTestCompactor(context.Background(), testDependencies{Model: &fakeModel{err: errors.New("unexpected summary")}, Store: store, State: testStateScope{dir: writeTestConfig(t, cfg)}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	reused, err := restarted.Compactor.Compact(context.Background(), contextwindow.CompactionRequest{SessionID: "s", Invocation: request})
+	reused, err := restarted.Compactor.Compact(context.Background(), contextwindow.CompactionRequest{RootSessionID: "s", SessionID: "s", Invocation: request})
 	if err != nil || !reflect.DeepEqual(result, reused) {
 		t.Fatalf("checkpoint reuse: %v", err)
 	}
@@ -86,7 +86,7 @@ func TestFallbackResolverAndAccuracy(t *testing.T) {
 	cfg, _ := normalizeConfig(Config{})
 	r := &compactor{cfg: cfg}
 	request := model.Request{Messages: []model.Message{{Role: model.RoleUser, Content: content.FromText("abc")}}}
-	if _, err := r.countRequest(context.Background(), request, nil); !errors.Is(err, ErrInvalidCount) {
+	if _, err := r.countRequest(context.Background(), request, nil); !errors.Is(err, ErrInvalidRequest) {
 		t.Fatalf("no selection: %v", err)
 	}
 	r.resolver = fallbackResolver(func(_ context.Context, got model.Request) (model.Request, error) {
@@ -109,20 +109,9 @@ func TestFallbackResolverAndAccuracy(t *testing.T) {
 }
 
 func TestOptionalDependenciesRejectTypedNil(t *testing.T) {
-	for _, tc := range []struct {
-		name     string
-		counter  ingotabi.Optional[usage.Counter]
-		resolver ingotabi.Optional[model.RequestResolver]
-	}{
-		{name: "counter", counter: ingotabi.Some[usage.Counter]((*canonicalTokenCounter)(nil))},
-		{name: "resolver", resolver: ingotabi.Some[model.RequestResolver]((*nilResolver)(nil))},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			_, _, err := New(context.Background(), Dependencies{Model: &fakeModel{}, Store: &memoryStore{}, State: testStateScope{dir: t.TempDir()}, Counter: tc.counter, Resolver: tc.resolver})
-			if !errors.Is(err, ErrInvalidConfig) {
-				t.Fatal(err)
-			}
-		})
+	_, _, err := New(context.Background(), Dependencies{Model: &fakeModel{}, Store: &memoryStore{}, State: testStateScope{dir: t.TempDir()}, Resolver: ingotabi.Some[model.RequestResolver]((*nilResolver)(nil))})
+	if !errors.Is(err, ErrInvalidConfig) {
+		t.Fatal(err)
 	}
 }
 
@@ -163,14 +152,14 @@ func TestFallbackCompactionResolvesDefaultModel(t *testing.T) {
 	store := &memoryStore{entries: map[session.ID][]session.Entry{"s": {}}}
 	models := &fakeModel{responses: []model.Response{summaryResponse(`{"summary":"continue the investigation","operations":[]}`)}}
 	settings := Config{TriggerInputTokens: count.InputTokens, TargetInputTokens: count.InputTokens / 2, RecentRounds: 1}
-	exports, _, err := New(context.Background(), Dependencies{
+	exports, _, err := newTestCompactor(context.Background(), testDependencies{
 		Model: models, Store: store, State: testStateScope{dir: writeTestConfig(t, settings)},
 		Resolver: ingotabi.Some[model.RequestResolver](resolve),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := exports.Compactor.Compact(context.Background(), contextwindow.CompactionRequest{SessionID: "s", Invocation: request})
+	result, err := exports.Compactor.Compact(context.Background(), contextwindow.CompactionRequest{RootSessionID: "s", SessionID: "s", Invocation: request})
 	if err != nil || !result.Changed || len(models.requests) != 1 {
 		t.Fatalf("compact=%+v err=%v requests=%d", result, err, len(models.requests))
 	}
@@ -214,12 +203,12 @@ func TestDefaultBudgetCompactsLargeHistory(t *testing.T) {
 		}
 		return counted(tokens), nil
 	})
-	deps := Dependencies{Model: models, Store: store, State: testStateScope{dir: t.TempDir()}, Counter: ingotabi.Some[usage.Counter](counter)}
-	exports, _, err := New(context.Background(), deps)
+	deps := testDependencies{Model: models, Store: store, State: testStateScope{dir: t.TempDir()}, Counter: ingotabi.Some[usage.Counter](counter)}
+	exports, _, err := newTestCompactor(context.Background(), deps)
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := exports.Compactor.Compact(context.Background(), contextwindow.CompactionRequest{SessionID: "s", Invocation: request})
+	result, err := exports.Compactor.Compact(context.Background(), contextwindow.CompactionRequest{RootSessionID: "s", SessionID: "s", Invocation: request})
 	if err != nil || !result.Changed || calls == 0 || calls > 8 {
 		t.Fatalf("result changed=%v calls=%d err=%v", result.Changed, calls, err)
 	}

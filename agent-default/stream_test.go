@@ -21,7 +21,7 @@ import (
 
 type modelStreamFunc func(context.Context, model.Request, model.StreamHandler) (model.Response, error)
 
-func (f modelStreamFunc) Stream(ctx context.Context, request model.Request, handler model.StreamHandler) (model.Response, error) {
+func (f modelStreamFunc) Stream(ctx context.Context, _, _ session.ID, request model.Request, handler model.StreamHandler) (model.Response, error) {
 	return f(ctx, request, handler)
 }
 
@@ -80,7 +80,7 @@ func TestRunStreamEquivalentAcrossToolRounds(t *testing.T) {
 		streamCalls := 0
 		streaming := modelStreamFunc(func(ctx context.Context, req model.Request, handler model.StreamHandler) (model.Response, error) {
 			streamCalls++
-			response, err := models.Complete(ctx, req)
+			response, err := models.Complete(ctx, "s", "s", req)
 			if err != nil {
 				return response, err
 			}

@@ -39,7 +39,7 @@ func firstToolRound() model.Request {
 
 func newTokenTestCompactor(t *testing.T, cfg Config, counter usage.Counter, models model.Runtime, store *memoryStore) contextwindow.Compactor {
 	t.Helper()
-	exports, _, err := New(context.Background(), withState(t, cfg, Dependencies{Model: models, Counter: ingotabi.Some[usage.Counter](counter), Store: store}))
+	exports, _, err := newTestCompactor(context.Background(), withState(t, cfg, testDependencies{Model: models, Counter: ingotabi.Some[usage.Counter](counter), Store: store}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,7 +59,7 @@ func TestTokenBudgetUsesCounterInsteadOfCanonicalBytes(t *testing.T) {
 		return counted(10), nil
 	})
 	compactor := newTokenTestCompactor(t, Config{TriggerInputTokens: 20, TargetInputTokens: 15}, counter, models, store)
-	result, err := compactor.Compact(context.Background(), contextwindow.CompactionRequest{SessionID: "s", Invocation: request})
+	result, err := compactor.Compact(context.Background(), contextwindow.CompactionRequest{RootSessionID: "s", SessionID: "s", Invocation: request})
 	if err != nil || result.Changed || !reflect.DeepEqual(result.Messages, original.Messages) || len(models.requests) != 0 {
 		t.Fatalf("result=%+v err=%v calls=%d", result, err, len(models.requests))
 	}
@@ -76,7 +76,7 @@ func TestFirstHugeRoundCompactsThroughSoftRecentAndRestarts(t *testing.T) {
 	store := &memoryStore{entries: map[session.ID][]session.Entry{"s": {}}}
 	cfg := Config{TriggerInputTokens: 3000, TargetInputTokens: 1400, RecentRounds: 4}
 	compactor := newTokenTestCompactor(t, cfg, &canonicalTokenCounter{}, models, store)
-	result, err := compactor.Compact(context.Background(), contextwindow.CompactionRequest{SessionID: "s", Invocation: request})
+	result, err := compactor.Compact(context.Background(), contextwindow.CompactionRequest{RootSessionID: "s", SessionID: "s", Invocation: request})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,7 +98,7 @@ func TestFirstHugeRoundCompactsThroughSoftRecentAndRestarts(t *testing.T) {
 	}
 	restartedModels := &fakeModel{err: errors.New("must not summarize the same first round again")}
 	restarted := newTokenTestCompactor(t, cfg, &canonicalTokenCounter{}, restartedModels, store)
-	reused, err := restarted.Compact(context.Background(), contextwindow.CompactionRequest{SessionID: "s", Invocation: request})
+	reused, err := restarted.Compact(context.Background(), contextwindow.CompactionRequest{RootSessionID: "s", SessionID: "s", Invocation: request})
 	if err != nil || !reflect.DeepEqual(reused, result) {
 		t.Fatalf("reused=%+v err=%v", reused, err)
 	}
@@ -124,7 +124,7 @@ func TestCounterControlsTriggerAndExactTargetIncludingTools(t *testing.T) {
 			models := &fakeModel{responses: []model.Response{summaryResponse(`{"summary":"completed","operations":[]}`)}}
 			store := &memoryStore{entries: map[session.ID][]session.Entry{"s": {}}}
 			compactor := newTokenTestCompactor(t, Config{TriggerInputTokens: 100, TargetInputTokens: 50}, counter, models, store)
-			result, err := compactor.Compact(context.Background(), contextwindow.CompactionRequest{SessionID: "s", Invocation: request})
+			result, err := compactor.Compact(context.Background(), contextwindow.CompactionRequest{RootSessionID: "s", SessionID: "s", Invocation: request})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -145,12 +145,12 @@ func TestResolvedRuntimeDefaultsReuseFrozenCheckpoint(t *testing.T) {
 	models := &fakeModel{responses: []model.Response{summaryResponse(`{"summary":"frozen default model summary","operations":[]}`)}}
 	store := &memoryStore{entries: map[session.ID][]session.Entry{"s": {}}}
 	compactor := newTokenTestCompactor(t, cfg, &canonicalTokenCounter{}, models, store)
-	first, err := compactor.Compact(context.Background(), contextwindow.CompactionRequest{SessionID: "s", Invocation: request})
+	first, err := compactor.Compact(context.Background(), contextwindow.CompactionRequest{RootSessionID: "s", SessionID: "s", Invocation: request})
 	if err != nil {
 		t.Fatal(err)
 	}
 	restarted := newTokenTestCompactor(t, cfg, &canonicalTokenCounter{}, &fakeModel{err: errors.New("must reuse resolved defaults")}, store)
-	second, err := restarted.Compact(context.Background(), contextwindow.CompactionRequest{SessionID: "s", Invocation: request})
+	second, err := restarted.Compact(context.Background(), contextwindow.CompactionRequest{RootSessionID: "s", SessionID: "s", Invocation: request})
 	if err != nil || !reflect.DeepEqual(first, second) {
 		t.Fatalf("default model reuse failed: %v", err)
 	}
@@ -169,7 +169,7 @@ func TestRollupDiscardsFactsWithoutRewritingRetainedValues(t *testing.T) {
 	store := &memoryStore{entries: map[session.ID][]session.Entry{"s": {}}}
 	cfg := Config{TriggerInputTokens: 7000, TargetInputTokens: 5000, StateTriggerTokens: 1400, StateTargetTokens: 700}
 	compactor := newTokenTestCompactor(t, cfg, &canonicalTokenCounter{}, models, store)
-	result, err := compactor.Compact(context.Background(), contextwindow.CompactionRequest{SessionID: "s", Invocation: request})
+	result, err := compactor.Compact(context.Background(), contextwindow.CompactionRequest{RootSessionID: "s", SessionID: "s", Invocation: request})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -191,7 +191,7 @@ func TestRollupDiscardsFactsWithoutRewritingRetainedValues(t *testing.T) {
 		t.Fatal("discarded fact remains in materialized context")
 	}
 	restarted := newTokenTestCompactor(t, cfg, &canonicalTokenCounter{}, &fakeModel{err: errors.New("must reuse rollup")}, store)
-	replay, err := restarted.Compact(context.Background(), contextwindow.CompactionRequest{SessionID: "s", Invocation: request})
+	replay, err := restarted.Compact(context.Background(), contextwindow.CompactionRequest{RootSessionID: "s", SessionID: "s", Invocation: request})
 	if err != nil || !reflect.DeepEqual(result, replay) {
 		t.Fatalf("rollup replay err=%v", err)
 	}
@@ -207,7 +207,7 @@ func TestCheckpointCannotSplitToolRoundAndLegacySequenceAdvances(t *testing.T) {
 			}}
 			store := &memoryStore{entries: map[session.ID][]session.Entry{"s": {}}}
 			compactor := newTokenTestCompactor(t, cfg, &canonicalTokenCounter{}, models, store)
-			if _, err := compactor.Compact(context.Background(), contextwindow.CompactionRequest{SessionID: "s", Invocation: request}); err != nil {
+			if _, err := compactor.Compact(context.Background(), contextwindow.CompactionRequest{RootSessionID: "s", SessionID: "s", Invocation: request}); err != nil {
 				t.Fatal(err)
 			}
 			if legacy {
@@ -218,7 +218,7 @@ func TestCheckpointCannotSplitToolRoundAndLegacySequenceAdvances(t *testing.T) {
 				checkpoint.SourceDigest, _ = messageDigest(request.Messages[1:3])
 				store.entries["s"][0].Payload, _ = json.Marshal(checkpoint)
 			}
-			_, err := compactor.Compact(context.Background(), contextwindow.CompactionRequest{SessionID: "s", Invocation: request})
+			_, err := compactor.Compact(context.Background(), contextwindow.CompactionRequest{RootSessionID: "s", SessionID: "s", Invocation: request})
 			if !legacy {
 				if !errors.Is(err, ErrCorruptCheckpoint) {
 					t.Fatalf("split error=%v", err)
@@ -270,7 +270,7 @@ func TestCounterFailuresCannotPersistCandidate(t *testing.T) {
 			models := &fakeModel{responses: []model.Response{summaryResponse(`{"summary":"done","operations":[]}`)}}
 			store := &memoryStore{entries: map[session.ID][]session.Entry{"s": {}}}
 			compactor := newTokenTestCompactor(t, cfg, counter, models, store)
-			_, err := compactor.Compact(context.Background(), contextwindow.CompactionRequest{SessionID: "s", Invocation: firstToolRound()})
+			_, err := compactor.Compact(context.Background(), contextwindow.CompactionRequest{RootSessionID: "s", SessionID: "s", Invocation: firstToolRound()})
 			expected := ErrInvalidCount
 			if failure == "count error" || failure == "memory error" {
 				expected = cause

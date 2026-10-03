@@ -8,18 +8,24 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"reflect"
 	"slices"
+	"sync"
 	"sync/atomic"
+	"time"
 	"unicode/utf8"
 
 	"github.com/ingot-agent/ingot-abi"
 	"github.com/ingot-agent/ingot-abi/state"
 	"github.com/ingot-agent/plugins/app-webui/modelselection"
 	"github.com/ingot-agent/sdk/content"
+	"github.com/ingot-agent/sdk/execution"
+	"github.com/ingot-agent/sdk/interaction"
 	"github.com/ingot-agent/sdk/model"
 	"github.com/ingot-agent/sdk/operation"
 	"github.com/ingot-agent/sdk/pipeline"
+	"github.com/ingot-agent/sdk/session"
 	"github.com/ingot-agent/sdk/tool"
 )
 
@@ -28,6 +34,9 @@ var (
 	ErrInvalidConfig = errors.New("invalid model.runtime config")
 	// ErrInvalidResponse indicates invalid aggregate data returned by a provider or interceptor.
 	ErrInvalidResponse = errors.New("invalid model response")
+	// ErrUsagePersistence means a provider completed but session usage could
+	// not be confirmed durable. It must not trigger a provider request retry.
+	ErrUsagePersistence = errors.New("model usage persistence failed")
 )
 
 // Config selects defaults used when a request leaves a field empty.
@@ -42,6 +51,9 @@ type Dependencies struct {
 	ProviderSources    []model.ProviderSource
 	Interceptors       []model.Interceptor
 	StreamInterceptors []model.StreamInterceptor
+	Sessions           session.Manager
+	TokenUsage         session.TokenUsageStore
+	Interactions       ingotabi.Optional[interaction.ExecutionBinder]
 	State              state.Scope
 }
 
@@ -62,6 +74,10 @@ type runtime struct {
 	config             atomic.Pointer[Config]
 	interceptors       []model.Interceptor
 	streamInterceptors []model.StreamInterceptor
+	sessions           session.Manager
+	tokenUsage         session.TokenUsageStore
+	interactions       interaction.ExecutionBinder
+	settlementMu       sync.Mutex
 }
 
 // New retains provider sources and loads this Plugin's own configuration.
@@ -74,8 +90,11 @@ func New(ctx context.Context, deps Dependencies) (Exports, ingotabi.Cleanup, err
 	if err := ctx.Err(); err != nil {
 		return Exports{}, nil, err
 	}
-	if isNil(deps.State) {
-		return Exports{}, nil, fmt.Errorf("state dependency is required: %w", ErrInvalidConfig)
+	if isNil(deps.State) || isNil(deps.Sessions) || isNil(deps.TokenUsage) {
+		return Exports{}, nil, fmt.Errorf("state, session manager and token usage dependencies are required: %w", ErrInvalidConfig)
+	}
+	if deps.Interactions.Valid && isNil(deps.Interactions.Value) {
+		return Exports{}, nil, fmt.Errorf("interaction binder is nil: %w", ErrInvalidConfig)
 	}
 	cfg, err := loadConfig(deps.State.Dir())
 	if err != nil {
@@ -109,6 +128,10 @@ func New(ctx context.Context, deps Dependencies) (Exports, ingotabi.Cleanup, err
 		scope:           deps.State,
 		providerSources: slices.Clone(deps.ProviderSources),
 		interceptors:    interceptors, streamInterceptors: streamInterceptors,
+		sessions: deps.Sessions, tokenUsage: deps.TokenUsage,
+	}
+	if deps.Interactions.Valid {
+		instance.interactions = deps.Interactions.Value
 	}
 	instance.config.Store(&cfg)
 	return Exports{Runtime: instance, Streaming: instance, Resolver: instance, Selection: instance, Operations: []operation.Operation{&setupOperation{scope: deps.State, runtime: instance}}}, nil, nil
@@ -139,11 +162,14 @@ func (r *runtime) ResolveRequest(ctx context.Context, request model.Request) (mo
 	return owned, nil
 }
 
-func (r *runtime) Complete(ctx context.Context, request model.Request) (model.Response, error) {
+func (r *runtime) Complete(ctx context.Context, rootSessionID, currentSessionID session.ID, request model.Request) (model.Response, error) {
 	if ctx == nil {
 		return model.Response{}, errors.New("model runtime: nil context")
 	}
 	if err := ctx.Err(); err != nil {
+		return model.Response{}, err
+	}
+	if err := r.validateSessions(ctx, rootSessionID, currentSessionID); err != nil {
 		return model.Response{}, err
 	}
 	owned := cloneRequest(request)
@@ -193,6 +219,9 @@ func (r *runtime) Complete(ctx context.Context, request model.Request) (model.Re
 		if response.Model == "" {
 			response.Model = selected.Model
 		}
+		if err := r.settleUsage(callCtx, rootSessionID, currentSessionID, response.Usage); err != nil {
+			return model.Response{}, err
+		}
 		if err := validateResponse(response); err != nil {
 			return model.Response{}, err
 		}
@@ -208,7 +237,7 @@ func (r *runtime) Complete(ctx context.Context, request model.Request) (model.Re
 	return cloneResponse(response), err
 }
 
-func (r *runtime) Stream(ctx context.Context, request model.Request, handler model.StreamHandler) (model.Response, error) {
+func (r *runtime) Stream(ctx context.Context, rootSessionID, currentSessionID session.ID, request model.Request, handler model.StreamHandler) (model.Response, error) {
 	if ctx == nil {
 		return model.Response{}, errors.New("model streaming runtime: nil context")
 	}
@@ -217,6 +246,9 @@ func (r *runtime) Stream(ctx context.Context, request model.Request, handler mod
 	}
 	if handler == nil {
 		return model.Response{}, errors.New("model streaming runtime: nil handler")
+	}
+	if err := r.validateSessions(ctx, rootSessionID, currentSessionID); err != nil {
+		return model.Response{}, err
 	}
 	owned := cloneRequest(request)
 	selection, err := r.snapshot(ctx)
@@ -274,6 +306,9 @@ func (r *runtime) Stream(ctx context.Context, request model.Request, handler mod
 		response.Provider = selected.Provider
 		if response.Model == "" {
 			response.Model = selected.Model
+		}
+		if err := r.settleUsage(callCtx, rootSessionID, currentSessionID, response.Usage); err != nil {
+			return model.Response{}, err
 		}
 		if err := validateResponse(response); err != nil {
 			return model.Response{}, err
@@ -412,6 +447,72 @@ func validateProviderModels(models []model.ModelEntry) error {
 	return nil
 }
 
+func (r *runtime) validateSessions(ctx context.Context, root, current session.ID) error {
+	if root == "" || current == "" || !utf8.ValidString(string(root)) || !utf8.ValidString(string(current)) {
+		return interaction.ErrInvalidExecutionScope
+	}
+	if _, err := r.sessions.Get(ctx, root); err != nil {
+		return fmt.Errorf("model root session %q: %w", root, err)
+	}
+	if current != root {
+		if _, err := r.sessions.Get(ctx, current); err != nil {
+			return fmt.Errorf("model current session %q: %w", current, err)
+		}
+	}
+	return nil
+}
+
+func (r *runtime) settleUsage(ctx context.Context, root, current session.ID, usage model.Usage) error {
+	if err := validateUsage(usage); err != nil {
+		return err
+	}
+	if !usage.Reported {
+		return nil
+	}
+	// Keep committed snapshots and their publication in the same order without
+	// serializing provider requests. Cancellation cannot erase incurred usage.
+	r.settlementMu.Lock()
+	defer r.settlementMu.Unlock()
+	settleCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	metadata, err := r.tokenUsage.AddTotalTokens(settleCtx, []session.ID{root, current}, int64(usage.TotalTokens))
+	if err != nil {
+		return fmt.Errorf("%w: %w", ErrUsagePersistence, err)
+	}
+	if r.interactions == nil {
+		return nil
+	}
+	for _, value := range metadata {
+		channel, err := r.interactions.Bind(execution.Scope{SessionID: value.ID})
+		if err == nil {
+			err = channel.Set(settleCtx, interaction.State{
+				Name: "model-runtime.session-usage/" + string(value.ID), Level: interaction.LevelInfo,
+				Values: []interaction.Entry{
+					{Name: "sessionId", Value: interaction.StringValue(string(value.ID))},
+					{Name: "totalToken", Value: interaction.IntegerValue(value.TotalToken)},
+				},
+			})
+		}
+		if err != nil && !errors.Is(err, interaction.ErrUnavailable) {
+			slog.Warn("publish session token usage", "session", value.ID, "error", err)
+		}
+	}
+	return nil
+}
+
+func validateUsage(usage model.Usage) error {
+	if !usage.Reported && (usage.InputTokens != 0 || usage.OutputTokens != 0 || usage.TotalTokens != 0) {
+		return fmt.Errorf("response usage has counts without presence: %w", ErrInvalidResponse)
+	}
+	if usage.InputTokens < 0 || usage.OutputTokens < 0 || usage.TotalTokens < 0 {
+		return fmt.Errorf("response usage is negative: %w", ErrInvalidResponse)
+	}
+	if usage.TotalTokens != usage.InputTokens+usage.OutputTokens {
+		return fmt.Errorf("response usage total is inconsistent: %w", ErrInvalidResponse)
+	}
+	return nil
+}
+
 func validateResponse(response model.Response) error {
 	if response.Message.Role != model.RoleAssistant || response.Provider == "" || response.Model == "" {
 		return fmt.Errorf("response requires assistant role, provider, and model: %w", ErrInvalidResponse)
@@ -424,14 +525,8 @@ func validateResponse(response model.Response) error {
 	if err := content.Validate(response.Message.Content); err != nil {
 		return fmt.Errorf("response message content: %w: %w", ErrInvalidResponse, err)
 	}
-	if !response.Usage.Reported && (response.Usage.InputTokens != 0 || response.Usage.OutputTokens != 0 || response.Usage.TotalTokens != 0) {
-		return fmt.Errorf("response usage has counts without presence: %w", ErrInvalidResponse)
-	}
-	if response.Usage.InputTokens < 0 || response.Usage.OutputTokens < 0 || response.Usage.TotalTokens < 0 {
-		return fmt.Errorf("response usage is negative: %w", ErrInvalidResponse)
-	}
-	if response.Usage.TotalTokens != response.Usage.InputTokens+response.Usage.OutputTokens {
-		return fmt.Errorf("response usage total is inconsistent: %w", ErrInvalidResponse)
+	if err := validateUsage(response.Usage); err != nil {
+		return err
 	}
 	for i, call := range response.Message.ToolCalls {
 		if call.ID == "" || call.Name == "" || !utf8.ValidString(call.ID) || !utf8.ValidString(call.Name) ||

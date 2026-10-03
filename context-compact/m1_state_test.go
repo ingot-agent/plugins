@@ -8,9 +8,32 @@ import (
 	"testing"
 
 	ingotabi "github.com/ingot-agent/ingot-abi"
+	"github.com/ingot-agent/ingot-abi/state"
+	"github.com/ingot-agent/sdk/interaction"
+	"github.com/ingot-agent/sdk/model"
+	"github.com/ingot-agent/sdk/session"
 	"github.com/ingot-agent/sdk/usage"
 	"github.com/pelletier/go-toml/v2"
 )
+
+// Only budget tests substitute counts; production always owns its estimator.
+type testDependencies struct {
+	Model           model.Runtime
+	Resolver        ingotabi.Optional[model.RequestResolver]
+	ProviderSources []model.ProviderSource
+	Interactions    ingotabi.Optional[interaction.ExecutionBinder]
+	Store           session.Store
+	State           state.Scope
+	Counter         ingotabi.Optional[usage.Counter]
+}
+
+func newTestCompactor(ctx context.Context, deps testDependencies) (Exports, ingotabi.Cleanup, error) {
+	exports, cleanup, err := New(ctx, Dependencies{Model: deps.Model, Resolver: deps.Resolver, ProviderSources: deps.ProviderSources, Interactions: deps.Interactions, Store: deps.Store, State: deps.State})
+	if err == nil && deps.Counter.Valid {
+		exports.Compactor.(*compactor).counter = deps.Counter.Value
+	}
+	return exports, cleanup, err
+}
 
 // The serialization length is a deterministic test count, not a tokenizer.
 type canonicalTokenCounter struct{}
@@ -44,11 +67,11 @@ type testStateScope struct{ dir string }
 func (s testStateScope) Dir() string { return s.dir }
 
 // withState attaches a Runtime state scope carrying cfg to the supplied
-// Dependencies. The Host never decodes or injects plugin configuration; each
-// Plugin loads its own configuration from its scope. A Dependencies value that
+// testDependencies. The Host never decodes or injects plugin configuration; each
+// Plugin loads its own configuration from its scope. A testDependencies value that
 // already carries a scope (a test exercising scope handling directly) is left
 // untouched.
-func withState(t *testing.T, cfg Config, deps Dependencies) Dependencies {
+func withState(t *testing.T, cfg Config, deps testDependencies) testDependencies {
 	t.Helper()
 	if !deps.Counter.Valid {
 		deps.Counter = ingotabi.Some[usage.Counter](&canonicalTokenCounter{})

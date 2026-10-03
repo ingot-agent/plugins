@@ -247,7 +247,7 @@ allowed_child_types = []
 		t.Fatal(err)
 	}
 
-	rootHandle, err := exports.Control.BeginRoot(context.Background(), "c0_root")
+	rootHandle, err := exports.Control.BeginRoot(context.Background(), "c0_root", "c0_root")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -528,7 +528,7 @@ allowed_child_types = []
 	}
 	t.Cleanup(func() { _ = cleanup(context.Background()) })
 	tree := exports.Control.(*tree)
-	handle, err := tree.BeginRoot(context.Background(), "c0_root")
+	handle, err := tree.BeginRoot(context.Background(), "c0_root", "c0_root")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -643,7 +643,7 @@ func TestBuiltinChildTypesUseInstalledTools(t *testing.T) {
 			t.Errorf("%s has no system prompt", tc.name)
 		}
 	}
-	root, err := exports.Control.BeginRoot(context.Background(), "c0_root")
+	root, err := exports.Control.BeginRoot(context.Background(), "c0_root", "c0_root")
 	if err != nil {
 		t.Fatal(err)
 	}

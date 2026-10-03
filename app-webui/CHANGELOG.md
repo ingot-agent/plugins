@@ -1,5 +1,28 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- Require SDK v0.2.15 for the published Session accounting contracts and
+  validate independently of local workspace replacements.
+
+- Show only cumulative Session tokens and current context totals in the
+  right-sidebar card; omit Turn/Round details and followup header usage.
+- Show cumulative Session tokens in the sidebar and child task
+  details; restore totals from Session metadata and merge scoped Set snapshots.
+- Resolve followup token roots on the server, initialize ordinary forks at
+  zero, and clear deleted Session usage states while ignoring late updates.
+- Remove Turn accounting and its unused summary component from the execution
+  projection and frontend protocol; retain status, duration and failure details.
+
+### Fixed
+
+- Apply the saved tool-call visibility preference to history after refresh
+  and hide tool-only messages when tool calls are hidden.
+- Pass the selected or default Workspace directory to the native folder picker
+  instead of the default Workspace display label.
+
 ## 0.1.1 - 2026-09-28
 
 ### Added

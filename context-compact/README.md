@@ -1,8 +1,8 @@
 # context-compact
 
 `context.compact` incrementally summarizes complete conversation rounds while
-preserving original session entries. Its watermarks are **input tokens** (exact,
-upper-bound or estimated according to the selected counter), not byte counts or
+preserving original session entries. Its watermarks are **estimated input tokens**,
+not byte counts or
 a guaranteed provider context-window limit. See
 the [plugin documentation index](../docs/README.md).
 
@@ -11,10 +11,24 @@ the [plugin documentation index](../docs/README.md).
 The directory is `context-compact`; [the manifest](ingot.plugin.toml) names
 `context.compact`, with component `default` in `.`, compatible with Ingot
 `>=0.3.0 <0.4.0`. `New(ctx, deps)` requires `model.Runtime`, `session.Store`,
-and `state.Scope`. `usage.Counter` and `model.RequestResolver` are optional ABI
-capabilities; `[]model.ProviderSource` supplies live configuration choices.
+and `state.Scope`. It owns its Unicode estimator and bounded cache;
+`model.RequestResolver` is optional and `[]model.ProviderSource` supplies live
+configuration choices.
+The optional `interaction.ExecutionBinder` publishes the final input-token
+estimate as Session-scoped state after successful compaction or checkpoint reuse.
 Exports are `contextwindow.Compactor` and `[]operation.Operation`. Wiring this
 component into `agent.default` runs it before model requests.
+
+## Context Snapshots
+
+`context-compact.session-context/<sessionId>` is an in-memory Interaction Set
+snapshot for the current Session, with `sessionId`, `inputTokens`, `accuracy`,
+`source`, `provider`, and `model`. Matching Observation correlation also supplies
+`turnId` and `roundIndex`. The count covers the final input request, including
+tools and materialized compacted history, before model generation. It may shrink
+after compaction and is not cumulative usage. Publication failures do not fail
+compaction; without a binder, no snapshot is published. Runtime restart clears
+the snapshot until another request is counted.
 
 ## Configuration
 
@@ -37,6 +51,7 @@ memory_target_tokens = 8192
 state_trigger_tokens = 4096
 state_target_tokens = 2048
 max_summary_passes = 8
+token_count_cache_entries = 1024
 allowed_accuracies = ["exact", "upper_bound", "estimate"]
 ```
 
@@ -58,7 +73,7 @@ memory/state trigger and target values control rollups of existing summaries.
 total summarizer calls including fragment extraction and rollups.
 
 `provider`/`model` independently inherit the invocation when empty. The runtime
-can resolve remaining defaults through a Counter or optional RequestResolver.
+can resolve remaining defaults through the optional RequestResolver.
 An explicit unsupported provider fails configuration validation. Negative
 numeric values, unknown TOML fields, malformed config and unknown/empty
 `allowed_accuracies` are rejected. Each token target must be smaller than its
@@ -73,26 +88,25 @@ snapshot. Direct file edits require reconstruction/restart.
 
 ## Counting and selection
 
-When wired, `usage.Counter` counts the complete request, resolves provider/model
-defaults, and supplies its accuracy (`exact`, `upper_bound`, or `estimate`). The
-counter's errors and invalid results are returned rather than silently falling
-back. Without a Counter, the compactor uses a built-in character estimate of
-its canonical request projection: ASCII characters contribute about one token
-per four characters (rounded up), other Unicode characters roughly one each.
-The projection includes message and tool data but not the provider's exact wire
-format. JSON escapes and inline media can distort the estimate; it is **not an
-upper bound** and may undercount some languages, tokenizers or media. The
-fallback returns `accuracy=estimate` with a stable source identity for
-checkpoint validation. If provider/model is not explicit, a
-`model.RequestResolver` (normally exported by `model.runtime`) must be wired;
-otherwise counting returns `ErrInvalidCount` rather than guessing a selection.
-The `allowed_accuracies` setting also applies to the fallback: excluding
-`estimate` disables compaction without a more precise Counter.
+The built-in `unicode-estimate-v1` counts text, message framing, tool-call
+arguments and tool-definition schemas. ASCII text contributes about one token
+per four bytes (rounded up), other Unicode runes roughly one each. It preserves
+the former usage plugin's effective algorithm and returns `accuracy=estimate`.
+Non-text content is skipped; this is not an upper bound or a multimodal token
+count. The bounded cache defaults to 1024 entries and shares concurrent work
+for identical requests. Changing its capacity applies to subsequent counts.
+
+If provider/model is not explicit, `model.RequestResolver` (normally exported
+by `model.runtime`) must be wired; otherwise counting returns
+`ErrInvalidRequest`. Errors do not silently select a different algorithm.
+Excluding `estimate` from `allowed_accuracies` returns `ErrUnsupportedAccuracy`.
+The independent `usage.default` plugin, tokenizer routes and setup operation
+have been removed. Its old state files are no longer read.
 
 Checkpoints are policy-bound: changing these watermarks, the counting source or
 resolved model selection prevents reuse of an incompatible chain. Input usage
-is not model output usage or a price estimate. A counter can itself report
-`estimate`; this component never assumes every installed Counter is exact.
+is not model output usage or a price estimate and is never persisted as actual
+Session token usage.
 
 ## Compaction contract
 
@@ -110,6 +124,11 @@ narrative summaries with `set`/`delete` state operations, or a rollup of old
 summaries. Empty, malformed, oversized, non-text or tool-calling responses fail.
 Model-specific limitations beyond `Stop` may still apply; real provider/model
 summarization is not guaranteed by build-time validation.
+
+`CompactionRequest` requires both `RootSessionID` and current `SessionID`.
+Every fragment, segment and rollup call passes these identities unchanged to
+the Runtime. Checkpoints belong to current; provider usage is settled by the
+Runtime even if summary parsing later fails.
 
 Successful reduction appends version-2 `context.compact.checkpoint` entries,
 including source and policy digests, sequence, coverage, state operations or

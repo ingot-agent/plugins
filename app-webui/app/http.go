@@ -219,7 +219,13 @@ func (a *application) handleCreateTurn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.sessionMu.Lock()
-	id, err := a.turns.Start(agent.Turn{SessionID: session.ID(request.SessionID), Input: request.Input, Attachments: attachments})
+	root, err := a.sessions.TokenRoot(r.Context(), session.ID(request.SessionID))
+	if err != nil {
+		a.sessionMu.Unlock()
+		writeError(w, err)
+		return
+	}
+	id, err := a.turns.Start(agent.Turn{RootSessionID: root, SessionID: session.ID(request.SessionID), Input: request.Input, Attachments: attachments})
 	a.sessionMu.Unlock()
 	if err != nil {
 		writeError(w, err)
@@ -498,6 +504,7 @@ func (a *application) handleDeleteSession(w http.ResponseWriter, r *http.Request
 	}
 	err = a.sessions.Delete(r.Context(), id)
 	if err == nil {
+		a.clearSessionUsage(r.Context(), id)
 		_ = a.backend.Events().Publish(appbackend.Event{Type: "session.deleted", Data: map[string]string{"id": string(id)}})
 	}
 	a.sessionMu.Unlock()

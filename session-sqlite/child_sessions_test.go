@@ -2,7 +2,6 @@ package sessionsqlite
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -459,40 +458,5 @@ func TestRecoverChildSessionsAddsRestartDiagnosticAndPreservesStopCertainty(t *t
 	failed, err = created.GetChildSession(ctx, failed.Session.ID)
 	if err != nil || failed.Agent.State != agent.ChildFailed || failed.Agent.ExecutionStopped != nil || failed.Agent.Error == nil || *failed.Agent.Error != existing {
 		t.Fatalf("calibrated failed=%#v err=%v", failed, err)
-	}
-}
-
-func TestSchemaV2MigratesMetaInPlace(t *testing.T) {
-	ctx := context.Background()
-	path := filepath.Join(t.TempDir(), "sessions.sqlite3")
-	db, err := sql.Open("sqlite", "file:"+filepath.ToSlash(path))
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = db.ExecContext(ctx, `
-CREATE TABLE sessions (id TEXT PRIMARY KEY, title TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, archived_at INTEGER);
-CREATE TABLE entries (session_id TEXT NOT NULL, sequence INTEGER NOT NULL, kind TEXT NOT NULL, version INTEGER NOT NULL, payload BLOB NOT NULL, PRIMARY KEY (session_id, sequence), FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE);
-CREATE TABLE session_workspaces (session_id TEXT PRIMARY KEY, root TEXT NOT NULL, FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE);
-INSERT INTO sessions (id, title, created_at, updated_at, archived_at) VALUES ('legacy', 'Legacy', 1, 1, NULL);
-PRAGMA user_version = 2;`)
-	if err != nil {
-		_ = db.Close()
-		t.Fatal(err)
-	}
-	if err := db.Close(); err != nil {
-		t.Fatal(err)
-	}
-	created, err := openStore(ctx, path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = created.close() })
-	metadata, err := created.Get(ctx, "legacy")
-	if err != nil || len(metadata.Meta) != 0 {
-		t.Fatalf("migrated metadata=%#v err=%v", metadata, err)
-	}
-	var version int
-	if err := created.db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil || version != schemaVersion {
-		t.Fatalf("schema version=%d err=%v", version, err)
 	}
 }

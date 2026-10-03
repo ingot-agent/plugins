@@ -50,7 +50,7 @@ func TestNewValidatesSourcesWithoutResolvingDynamicProviders(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			sources := test.sources
-			exports, cleanup, err := New(context.Background(), withState(t, Config{Provider: "removed"}, Dependencies{Model: setupProvider{}, Store: &memoryStore{}, ProviderSources: sources}))
+			exports, cleanup, err := newTestCompactor(context.Background(), withState(t, Config{Provider: "removed"}, testDependencies{Model: &fakeModel{}, Store: &memoryStore{}, ProviderSources: sources}))
 			if test.wantErr {
 				if !errors.Is(err, ErrInvalidConfig) {
 					t.Fatalf("New error = %v, want ErrInvalidConfig", err)

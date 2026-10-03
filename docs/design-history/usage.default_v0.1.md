@@ -2,7 +2,7 @@
 
 > **历史设计 / Historical design — 非当前使用或 API 规范。**
 > 本文于 2026-09-22 从 Core 的 `docs/plugin-designs/usage.default_v0.1.md` 迁入本仓库，保留原始设计用于追溯。
-> 当前行为、配置和能力以 [usage.default README](../../usage-default/README.md)、源码及测试为准。
+> 2026-10-02：独立 usage 插件已删除，当前有效的 Unicode 预估和缓存已内置到 [context.compact](../../context-compact/README.md)。本文仅保留历史设计，不代表当前架构。
 > 当前 Component 构造函数为 `New(ctx, deps)`；配置由 Plugin 在自己的 state.Scope 中管理，旧版 Config 参数和全局配置示例不再适用。
 > 配置 Operation 的生效方式见[当前配置说明](../configuration.md)。
 

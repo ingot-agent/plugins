@@ -100,6 +100,7 @@ func (a *application) deleteFollowup(ctx context.Context, note followup) error {
 	if err := a.sessions.Delete(ctx, session.ID(note.ID)); err != nil && !errors.Is(err, session.ErrNotFound) {
 		return err
 	}
+	a.clearSessionUsage(ctx, session.ID(note.ID))
 	_ = a.backend.Events().Publish(appbackend.Event{Type: "session.deleted", Data: map[string]string{"id": note.ID}})
 	_ = a.backend.Events().Publish(appbackend.Event{Type: "followup.deleted", Data: note})
 	return nil

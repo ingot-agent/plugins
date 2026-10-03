@@ -43,7 +43,7 @@ func TestHubSequencesClonesAndIsolatesObservers(t *testing.T) {
 			detail.Result.Decision.Content[0].Text = "mutated"
 		case observation.TurnFinished:
 			detail.Result.Output[0].Text = "mutated"
-			detail.Outcome.Accounting.Models[0].Model = "mutated"
+			detail.Outcome.Duration = 9 * time.Second
 			*detail.Outcome.Failure.RoundIndex = 9
 		}
 		panic("observer failure")
@@ -81,9 +81,9 @@ func TestHubSequencesClonesAndIsolatesObservers(t *testing.T) {
 	exports.Consumer.Emit(ctx, observation.TurnFinished{
 		Status: observation.StatusSucceeded, Result: &agent.Result{Output: content.FromText("ok")},
 		Outcome: agent.Outcome{
-			Status:     agent.OutcomeSucceeded,
-			Accounting: agent.Accounting{Models: []agent.ModelAccounting{{Provider: "p", Model: "m"}}},
-			Failure:    &agent.Failure{Stage: agent.FailureModel, RoundIndex: &roundIndex},
+			Status:   agent.OutcomeSucceeded,
+			Duration: time.Second,
+			Failure:  &agent.Failure{Stage: agent.FailureModel, RoundIndex: &roundIndex},
 		},
 	})
 	if err := cleanup(context.Background()); err != nil {
@@ -111,7 +111,7 @@ func TestHubSequencesClonesAndIsolatesObservers(t *testing.T) {
 		t.Fatal("terminal or tool progress snapshots aliased")
 	}
 	finished := second[8].Detail.(observation.TurnFinished)
-	if finished.Result.Output[0].Text != "ok" || finished.Outcome.Accounting.Models[0].Model != "m" ||
+	if finished.Result.Output[0].Text != "ok" || finished.Outcome.Duration != time.Second ||
 		*finished.Outcome.Failure.RoundIndex != 1 {
 		t.Fatalf("turn outcome snapshots aliased: %#v", finished)
 	}

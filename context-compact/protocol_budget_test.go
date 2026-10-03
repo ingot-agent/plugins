@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/ingot-agent/sdk/session"
 	"reflect"
 	"strings"
 	"testing"
@@ -18,7 +19,7 @@ import (
 
 type protocolModelFunc func(context.Context, model.Request) (model.Response, error)
 
-func (f protocolModelFunc) Complete(ctx context.Context, request model.Request) (model.Response, error) {
+func (f protocolModelFunc) Complete(ctx context.Context, _, _ session.ID, request model.Request) (model.Response, error) {
 	return f(ctx, request)
 }
 

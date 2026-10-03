@@ -13,6 +13,7 @@ import (
 	"github.com/ingot-agent/ingot-abi"
 	"github.com/ingot-agent/ingot-abi/state"
 	"github.com/ingot-agent/sdk/contextwindow"
+	"github.com/ingot-agent/sdk/interaction"
 	"github.com/ingot-agent/sdk/model"
 	"github.com/ingot-agent/sdk/operation"
 	"github.com/ingot-agent/sdk/session"
@@ -50,30 +51,31 @@ var (
 // Config controls input-token watermarks, softly preserved rounds, and memory bounds.
 // Zero numeric values use defaults. SummaryMaxBytes is a data-size guard only.
 type Config struct {
-	Provider            string           `toml:"provider"`
-	Model               string           `toml:"model"`
-	TriggerInputTokens  int64            `toml:"trigger_input_tokens"`
-	TargetInputTokens   int64            `toml:"target_input_tokens"`
-	RecentRounds        int              `toml:"recent_rounds"`
-	SummaryChunkTokens  int64            `toml:"summary_chunk_tokens"`
-	SummaryInputTokens  int64            `toml:"summary_input_tokens"`
-	SummaryMaxTokens    int              `toml:"summary_max_tokens"`
-	RollupMaxTokens     int              `toml:"rollup_max_tokens"`
-	SummaryMaxBytes     int              `toml:"summary_max_bytes"`
-	MemoryTriggerTokens int64            `toml:"memory_trigger_tokens"`
-	MemoryTargetTokens  int64            `toml:"memory_target_tokens"`
-	StateTriggerTokens  int64            `toml:"state_trigger_tokens"`
-	StateTargetTokens   int64            `toml:"state_target_tokens"`
-	MaxSummaryPasses    int              `toml:"max_summary_passes"`
-	AllowedAccuracies   []usage.Accuracy `toml:"allowed_accuracies,omitempty"`
+	Provider               string           `toml:"provider"`
+	Model                  string           `toml:"model"`
+	TriggerInputTokens     int64            `toml:"trigger_input_tokens"`
+	TargetInputTokens      int64            `toml:"target_input_tokens"`
+	RecentRounds           int              `toml:"recent_rounds"`
+	SummaryChunkTokens     int64            `toml:"summary_chunk_tokens"`
+	SummaryInputTokens     int64            `toml:"summary_input_tokens"`
+	SummaryMaxTokens       int              `toml:"summary_max_tokens"`
+	RollupMaxTokens        int              `toml:"rollup_max_tokens"`
+	SummaryMaxBytes        int              `toml:"summary_max_bytes"`
+	MemoryTriggerTokens    int64            `toml:"memory_trigger_tokens"`
+	MemoryTargetTokens     int64            `toml:"memory_target_tokens"`
+	StateTriggerTokens     int64            `toml:"state_trigger_tokens"`
+	StateTargetTokens      int64            `toml:"state_target_tokens"`
+	MaxSummaryPasses       int              `toml:"max_summary_passes"`
+	AllowedAccuracies      []usage.Accuracy `toml:"allowed_accuracies,omitempty"`
+	TokenCountCacheEntries int              `toml:"token_count_cache_entries"`
 }
 
 // Dependencies contains the model and counting capabilities and append-oriented store.
 type Dependencies struct {
 	Model           model.Runtime
-	Counter         ingotabi.Optional[usage.Counter]
 	Resolver        ingotabi.Optional[model.RequestResolver]
 	ProviderSources []model.ProviderSource
+	Interactions    ingotabi.Optional[interaction.ExecutionBinder]
 	Store           session.Store
 	State           state.Scope
 }
@@ -93,16 +95,18 @@ type normalizedConfig struct {
 	stateTriggerTokens, stateTargetTokens              int64
 	maxSummaryPasses                                   int
 	allowedAccuracies                                  uint8
+	tokenCountCacheEntries                             int
 }
 
 type compactor struct {
-	model    model.Runtime
-	counter  usage.Counter
-	resolver model.RequestResolver
-	store    session.Store
-	cfg      normalizedConfig
-	config   atomic.Pointer[normalizedConfig]
-	gates    *gateManager
+	model        model.Runtime
+	counter      usage.Counter
+	resolver     model.RequestResolver
+	interactions interaction.ExecutionBinder
+	store        session.Store
+	cfg          normalizedConfig
+	config       atomic.Pointer[normalizedConfig]
+	gates        *gateManager
 }
 
 func New(ctx context.Context, deps Dependencies) (Exports, ingotabi.Cleanup, error) {
@@ -114,6 +118,9 @@ func New(ctx context.Context, deps Dependencies) (Exports, ingotabi.Cleanup, err
 	}
 	if isNil(deps.Model) || isNil(deps.Store) || isNil(deps.State) {
 		return Exports{}, nil, fmt.Errorf("model, store, and state dependencies are required: %w", ErrInvalidConfig)
+	}
+	if deps.Interactions.Valid && isNil(deps.Interactions.Value) {
+		return Exports{}, nil, fmt.Errorf("interaction binder is nil: %w", ErrInvalidConfig)
 	}
 	for i, source := range deps.ProviderSources {
 		if isNil(source) {
@@ -128,13 +135,6 @@ func New(ctx context.Context, deps Dependencies) (Exports, ingotabi.Cleanup, err
 	if err != nil {
 		return Exports{}, nil, err
 	}
-	var counter usage.Counter
-	if deps.Counter.Valid {
-		if isNil(deps.Counter.Value) {
-			return Exports{}, nil, fmt.Errorf("counter is typed nil: %w", ErrInvalidConfig)
-		}
-		counter = deps.Counter.Value
-	}
 	var resolver model.RequestResolver
 	if deps.Resolver.Valid {
 		if isNil(deps.Resolver.Value) {
@@ -142,9 +142,14 @@ func New(ctx context.Context, deps Dependencies) (Exports, ingotabi.Cleanup, err
 		}
 		resolver = deps.Resolver.Value
 	}
+	counter := newCounter(resolver, unicodeEstimateProfile{}, normalized.tokenCountCacheEntries)
 	instance := &compactor{model: deps.Model, counter: counter, resolver: resolver, store: deps.Store, cfg: normalized, gates: newGateManager()}
+	if deps.Interactions.Valid {
+		instance.interactions = deps.Interactions.Value
+	}
 	instance.config.Store(&normalized)
-	return Exports{Compactor: instance, Operations: []operation.Operation{&setupOperation{scope: deps.State, providerSources: append([]model.ProviderSource(nil), deps.ProviderSources...), compactor: instance}}}, nil, nil
+	cleanup := ingotabi.Cleanup(func(context.Context) error { counter.close(); return nil })
+	return Exports{Compactor: instance, Operations: []operation.Operation{&setupOperation{scope: deps.State, providerSources: append([]model.ProviderSource(nil), deps.ProviderSources...), compactor: instance}}}, cleanup, nil
 }
 
 func normalizeConfig(cfg Config) (normalizedConfig, error) {
@@ -198,6 +203,7 @@ func normalizeConfigForProviders(cfg Config, providerNames []string) (normalized
 		{"rollup_max_tokens", &cfg.RollupMaxTokens, defaultRollupMaxTokens},
 		{"summary_max_bytes", &cfg.SummaryMaxBytes, defaultSummaryMaxBytes},
 		{"max_summary_passes", &cfg.MaxSummaryPasses, defaultMaxSummaryPasses},
+		{"token_count_cache_entries", &cfg.TokenCountCacheEntries, defaultCacheEntries},
 	} {
 		if *field.value < 0 {
 			return normalizedConfig{}, fmt.Errorf("%s must be positive: %w", field.name, ErrInvalidConfig)
@@ -232,6 +238,7 @@ func normalizeConfigForProviders(cfg Config, providerNames []string) (normalized
 		memoryTriggerTokens: cfg.MemoryTriggerTokens, memoryTargetTokens: cfg.MemoryTargetTokens,
 		stateTriggerTokens: cfg.StateTriggerTokens, stateTargetTokens: cfg.StateTargetTokens,
 		maxSummaryPasses: cfg.MaxSummaryPasses, allowedAccuracies: mask,
+		tokenCountCacheEntries: cfg.TokenCountCacheEntries,
 	}, nil
 }
 

@@ -6,11 +6,20 @@ All notable changes to this plugin are documented in this file.
 
 ### Changed
 
+- Require SDK v0.2.15 for the published Session accounting contracts and
+  validate independently of local workspace replacements.
+
+- Publish final request context estimates through optional Session-bound
+  Interaction Set snapshots, including accuracy and matching Turn correlation.
 - Default compaction to 800k input tokens with a 250k target for a nominal
   1M-token context; increase summary chunk/input budgets to 128k/256k so the
   default call limit can cover larger histories, and show effective defaults
   in the configuration form.
-- Make `usage.Counter` optional and estimate character-based input tokens when absent; optionally resolve provider/model defaults through `model.RequestResolver`.
+- Embed the `unicode-estimate-v1` context counter with a bounded configurable
+  cache and resolved provider/model defaults; remove external Counter injection
+  and the separate fallback estimate path.
+- Forward root/current Session IDs to every fragment, segment and rollup call
+  so ModelRuntime accounts for compaction's provider-reported usage.
 - Leave summary `Stop` nil so the Responses adapter accepts compaction requests.
 - Replace byte watermarks with input-token budgets. Legacy byte/turn/anchor
   configuration requires explicit migration.

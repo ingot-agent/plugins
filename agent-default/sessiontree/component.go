@@ -62,14 +62,15 @@ type tree struct {
 }
 
 type executionState struct {
-	handle     sessioncontrol.Handle
-	rootID     session.ID
-	parentID   session.ID
-	depth      uint32
-	ctx        context.Context
-	cancel     context.CancelFunc
-	done       chan struct{}
-	definition agent.ChildDefinition
+	handle      sessioncontrol.Handle
+	rootID      session.ID
+	tokenRootID session.ID
+	parentID    session.ID
+	depth       uint32
+	ctx         context.Context
+	cancel      context.CancelFunc
+	done        chan struct{}
+	definition  agent.ChildDefinition
 
 	closing   bool
 	started   bool

@@ -1,4 +1,4 @@
-package usagedefault
+package contextcompact
 
 import (
 	"context"
@@ -13,7 +13,9 @@ import (
 	"github.com/ingot-agent/sdk/usage"
 )
 
-func (c *counter) CountInput(ctx context.Context, request usage.CountRequest) (usage.CountResult, error) {
+var errCounterClosed = errors.New("context token counter is closed")
+
+func (c *inputCounter) CountInput(ctx context.Context, request usage.CountRequest) (usage.CountResult, error) {
 	if ctx == nil {
 		return usage.CountResult{}, fmt.Errorf("count model input: nil context: %w", ErrInvalidRequest)
 	}
@@ -24,9 +26,13 @@ func (c *counter) CountInput(ctx context.Context, request usage.CountRequest) (u
 	if err := validateRequest(owned, false); err != nil {
 		return usage.CountResult{}, err
 	}
-	resolved, err := c.resolver.ResolveRequest(ctx, owned)
-	if err != nil {
-		return usage.CountResult{}, fmt.Errorf("resolve model request: %w", err)
+	resolved := owned
+	if c.resolver != nil {
+		var err error
+		resolved, err = c.resolver.ResolveRequest(ctx, owned)
+		if err != nil {
+			return usage.CountResult{}, fmt.Errorf("resolve model request: %w", err)
+		}
 	}
 	resolved = cloneRequest(resolved)
 	if err := validateRequest(resolved, true); err != nil {
@@ -45,13 +51,13 @@ func (c *counter) CountInput(ctx context.Context, request usage.CountRequest) (u
 	selected := c.profile
 	key, err := requestCacheKey(selected.Source(), resolved)
 	if err != nil {
-		return usage.CountResult{}, fmt.Errorf("build count cache key: %w: %w", ErrCountFailed, err)
+		return usage.CountResult{}, fmt.Errorf("build count cache key: %w: %w", ErrInvalidCount, err)
 	}
 
 	c.mu.Lock()
 	if c.closed {
 		c.mu.Unlock()
-		return usage.CountResult{}, ErrClosed
+		return usage.CountResult{}, errCounterClosed
 	}
 	if element, hit := c.cache[key]; hit {
 		c.recent.MoveToFront(element)
@@ -78,10 +84,10 @@ func (c *counter) CountInput(ctx context.Context, request usage.CountRequest) (u
 		if errors.Is(countErr, context.Canceled) || errors.Is(countErr, context.DeadlineExceeded) {
 			countErr = fmt.Errorf("profile %q: %w", selected.Source(), countErr)
 		} else {
-			countErr = fmt.Errorf("profile %q: %w: %w", selected.Source(), ErrCountFailed, countErr)
+			countErr = fmt.Errorf("profile %q: %w: %w", selected.Source(), ErrInvalidCount, countErr)
 		}
 	} else if count < 0 {
-		countErr = fmt.Errorf("profile %q returned a negative count: %w", selected.Source(), ErrCountFailed)
+		countErr = fmt.Errorf("profile %q returned a negative count: %w", selected.Source(), ErrInvalidCount)
 	} else {
 		result = usage.CountResult{
 			InputTokens: count,
@@ -104,7 +110,7 @@ func (c *counter) CountInput(ctx context.Context, request usage.CountRequest) (u
 	return result, countErr
 }
 
-func (c *counter) addCache(key string, result usage.CountResult) {
+func (c *inputCounter) addCache(key string, result usage.CountResult) {
 	element := c.recent.PushFront(cacheEntry{key: key, result: result})
 	c.cache[key] = element
 	if c.recent.Len() <= c.config.Load().capacity {

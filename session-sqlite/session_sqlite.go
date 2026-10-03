@@ -47,6 +47,7 @@ type Exports struct {
 	Manager       session.Manager
 	Query         session.Query
 	ChildSessions agent.ChildSessionRepository
+	TokenUsage    session.TokenUsageStore
 
 	WorkspaceResolver workspace.Resolver
 	WorkspaceManager  workspace.Manager
@@ -76,7 +77,7 @@ func New(ctx context.Context, deps Dependencies) (Exports, ingotabi.Cleanup, err
 		}
 		return errors.Join(cleanupCtx.Err(), closeErr)
 	})
-	return Exports{Store: created, Manager: created, Query: created, ChildSessions: created, WorkspaceResolver: created, WorkspaceManager: created}, cleanup, nil
+	return Exports{Store: created, Manager: created, Query: created, ChildSessions: created, TokenUsage: created, WorkspaceResolver: created, WorkspaceManager: created}, cleanup, nil
 }
 
 func isNil(value any) bool {

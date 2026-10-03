@@ -25,11 +25,12 @@ type Handle struct {
 // Context is owned by the session tree and remains independent of the parent
 // Turn's normal completion.
 type Task struct {
-	Handle     Handle
-	Context    context.Context
-	Input      string
-	ToolNames  []string
-	SubmitTool string
+	RootSessionID session.ID
+	Handle        Handle
+	Context       context.Context
+	Input         string
+	ToolNames     []string
+	SubmitTool    string
 }
 
 // FinishIntent is a candidate final report accepted from the submit tool. It
@@ -43,7 +44,7 @@ type FinishIntent struct {
 // Control coordinates root Turn registration, child dispatch, result
 // submission confirmation, and final settlement.
 type Control interface {
-	BeginRoot(context.Context, session.ID) (Handle, error)
+	BeginRoot(context.Context, session.ID, session.ID) (Handle, error)
 	EndRoot(context.Context, Handle, bool) error
 	Next(context.Context) (Task, error)
 	FinishIntent(Handle, string) (FinishIntent, bool, error)

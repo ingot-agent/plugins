@@ -73,7 +73,7 @@ remain available. Invalid or duplicate directory entries require repair before
 the directory can be used.
 
 Provider choices in `model-runtime` and `context-compact`
-use current source snapshots. `usage-default` estimates input tokens with
+use current source snapshots. `context-compact` internally estimates input tokens with
 `unicode-estimate-v1` for every resolved model and has no provider route
 configuration. Non-text content is skipped by this estimate. Existing forms
 remain immutable; closed choices are revalidated

@@ -64,6 +64,7 @@ type Session struct {
 	Workspace  string     `json:"workspace,omitempty"`
 	CreatedAt  time.Time  `json:"createdAt"`
 	UpdatedAt  time.Time  `json:"updatedAt"`
+	TotalToken int64      `json:"totalToken"`
 	ArchivedAt *time.Time `json:"archivedAt,omitempty"`
 }
 

@@ -8,5 +8,5 @@ name = "default"
 package = "."
 
 [state]
-schema_version = 3
-min_reader_version = 1
+schema_version = 4
+min_reader_version = 4

@@ -63,7 +63,7 @@ func (s *failingAppendStore) Append(ctx context.Context, id session.ID, entry se
 
 type panicModel struct{}
 
-func (panicModel) Complete(context.Context, model.Request) (model.Response, error) {
+func (panicModel) Complete(context.Context, session.ID, session.ID, model.Request) (model.Response, error) {
 	panic("model panic")
 }
 
@@ -86,7 +86,7 @@ func TestExecutionObservationLifecycleProgressCorrelationAndSequence(t *testing.
 		{Message: model.Message{Role: model.RoleAssistant, Content: content.FromText("done")}},
 	}}
 	streaming := modelStreamFunc(func(ctx context.Context, request model.Request, handler model.StreamHandler) (model.Response, error) {
-		response, err := models.Complete(ctx, request)
+		response, err := models.Complete(ctx, "s", "s", request)
 		if err != nil {
 			return model.Response{}, err
 		}

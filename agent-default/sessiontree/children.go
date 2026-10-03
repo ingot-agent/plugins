@@ -182,14 +182,15 @@ func (t *tree) CreateChild(ctx context.Context, scope execution.Scope, request a
 	t.nextToken++
 	childCtx, cancel := context.WithTimeout(context.Background(), childTaskTimeout)
 	exec := &executionState{
-		handle:     sessioncontrol.Handle{SessionID: record.Session.ID, Token: t.nextToken, Child: true},
-		rootID:     rootID,
-		parentID:   scope.SessionID,
-		depth:      depth,
-		ctx:        childCtx,
-		cancel:     cancel,
-		done:       make(chan struct{}),
-		definition: cloneDefinition(definition.definition),
+		handle:      sessioncontrol.Handle{SessionID: record.Session.ID, Token: t.nextToken, Child: true},
+		rootID:      rootID,
+		tokenRootID: parent.tokenRootID,
+		parentID:    scope.SessionID,
+		depth:       depth,
+		ctx:         childCtx,
+		cancel:      cancel,
+		done:        make(chan struct{}),
+		definition:  cloneDefinition(definition.definition),
 	}
 	t.active[record.Session.ID] = exec
 	t.ready = append(t.ready, record.Session.ID)
