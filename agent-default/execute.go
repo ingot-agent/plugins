@@ -21,7 +21,8 @@ import (
 // selection for all rounds of one turn. It is never persisted by the Agent.
 type turnConfig struct {
 	Config
-	selection model.Request
+	selection     model.Request
+	rootSessionID session.ID
 }
 
 func (r *runtime) execute(ctx context.Context, turn agent.Turn, handler agent.StreamHandler) (execution agent.Execution, err error) {
@@ -32,7 +33,10 @@ func (r *runtime) executeFrame(ctx context.Context, turn agent.Turn, handler age
 	if ctx == nil {
 		return agent.Execution{}, fmt.Errorf("run agent: nil context: %w", ErrInvalidTurn)
 	}
-	if turn.SessionID == "" || !utf8.ValidString(string(turn.SessionID)) || !utf8.ValidString(turn.Input) {
+	if turn.RootSessionID == "" {
+		turn.RootSessionID = turn.SessionID
+	}
+	if turn.SessionID == "" || !utf8.ValidString(string(turn.SessionID)) || !utf8.ValidString(string(turn.RootSessionID)) || !utf8.ValidString(turn.Input) {
 		return agent.Execution{}, ErrInvalidTurn
 	}
 	if err := content.ValidateAttachments(turn.Attachments); err != nil {
@@ -41,7 +45,7 @@ func (r *runtime) executeFrame(ctx context.Context, turn agent.Turn, handler age
 	if err := ctx.Err(); err != nil {
 		return agent.Execution{}, err
 	}
-	configuration := turnConfig{Config: *r.config.Load()}
+	configuration := turnConfig{Config: *r.config.Load(), rootSessionID: turn.RootSessionID}
 	turnID, err := newTurnID()
 	if err != nil {
 		return agent.Execution{}, fmt.Errorf("generate turn id: %w", err)
@@ -92,13 +96,13 @@ func (r *runtime) executeFrame(ctx context.Context, turn agent.Turn, handler age
 		return agent.Execution{}, err
 	}
 	if frame != nil {
-		if !frame.handle.Child || frame.handle.SessionID != turn.SessionID {
+		if !frame.handle.Child || frame.handle.SessionID != turn.SessionID || frame.rootSessionID != turn.RootSessionID {
 			controlErr := fmt.Errorf("child frame does not match Session %q: %w", turn.SessionID, ErrInvalidTurn)
 			recorder.recordFailure(controlErr, agent.FailureTurnControl, nil, "")
 			return agent.Execution{}, controlErr
 		}
 	} else if r.control != nil {
-		handle, beginErr := r.control.BeginRoot(ctx, turn.SessionID)
+		handle, beginErr := r.control.BeginRoot(ctx, turn.RootSessionID, turn.SessionID)
 		if beginErr != nil {
 			recorder.recordFailure(beginErr, agent.FailureSessionGate, nil, "")
 			return agent.Execution{}, beginErr
@@ -134,7 +138,7 @@ func (r *runtime) executeFrame(ctx context.Context, turn agent.Turn, handler age
 			recorder.recordFailure(handlerErr, agent.FailureStreamConsumer, nil, "")
 			return agent.Result{}, handlerErr
 		}
-		if selected.SessionID != originalSessionID {
+		if selected.SessionID != originalSessionID || selected.RootSessionID != turn.RootSessionID {
 			controlErr := fmt.Errorf("agent interceptor changed session id from %q to %q: %w", originalSessionID, selected.SessionID, ErrInvalidTurn)
 			recorder.recordFailure(controlErr, agent.FailureTurnControl, nil, "")
 			return agent.Result{}, controlErr
@@ -253,7 +257,6 @@ func (r *runtime) observeRound(
 	correlation.ToolCallID = ""
 	ctx = observation.WithCorrelation(ctx, correlation)
 	recorder := executionRecorderFrom(ctx)
-	recorder.accounting.roundStarted()
 	recorder.emit(ctx, observation.RoundStarted{})
 	defer func() {
 		if recovered := recover(); recovered != nil {
@@ -275,7 +278,7 @@ func (r *runtime) observeRound(
 	return result, resultErr
 }
 
-func (r *runtime) compactRequest(ctx context.Context, sessionID session.ID, request model.Request) (model.Request, error) {
+func (r *runtime) compactRequest(ctx context.Context, rootSessionID, sessionID session.ID, request model.Request) (model.Request, error) {
 	if !r.compactor.Valid {
 		return request, nil
 	}
@@ -284,8 +287,9 @@ func (r *runtime) compactRequest(ctx context.Context, sessionID session.ID, requ
 		return model.Request{}, err
 	}
 	result, err := r.compactor.Value.Compact(ctx, contextwindow.CompactionRequest{
-		SessionID:  sessionID,
-		Invocation: cloneModelRequest(request),
+		RootSessionID: rootSessionID,
+		SessionID:     sessionID,
+		Invocation:    cloneModelRequest(request),
 	})
 	if err != nil {
 		correlation, _ := observation.CorrelationFromContext(ctx)

@@ -27,7 +27,7 @@ func TestSoftRecentExpandsUnprofitableOldRoundIntoCompleteRecentRound(t *testing
 	compactor := newTokenTestCompactor(t, Config{
 		TriggerInputTokens: 3000, TargetInputTokens: 1500, RecentRounds: 1,
 	}, &canonicalTokenCounter{}, models, store)
-	result, err := compactor.Compact(context.Background(), contextwindow.CompactionRequest{SessionID: "s", Invocation: request})
+	result, err := compactor.Compact(context.Background(), contextwindow.CompactionRequest{RootSessionID: "s", SessionID: "s", Invocation: request})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,7 +75,7 @@ func TestSoftRecentCannotExpandIntoIncompleteToolRound(t *testing.T) {
 	compactor := newTokenTestCompactor(t, Config{
 		TriggerInputTokens: 3000, TargetInputTokens: 1500, RecentRounds: 1,
 	}, &canonicalTokenCounter{}, models, store)
-	_, err := compactor.Compact(context.Background(), contextwindow.CompactionRequest{SessionID: "s", Invocation: request})
+	_, err := compactor.Compact(context.Background(), contextwindow.CompactionRequest{RootSessionID: "s", SessionID: "s", Invocation: request})
 	if !errors.Is(err, ErrContextUncompactable) || len(models.requests) != 1 || len(store.entries["s"]) != 0 {
 		t.Fatalf("error=%v calls=%d entries=%d", err, len(models.requests), len(store.entries["s"]))
 	}
@@ -101,7 +101,7 @@ func TestSoftRecentExpansionSharesSummaryCallBudget(t *testing.T) {
 	compactor := newTokenTestCompactor(t, Config{
 		TriggerInputTokens: 3000, TargetInputTokens: 1500, RecentRounds: 1, MaxSummaryPasses: 1,
 	}, &canonicalTokenCounter{}, models, store)
-	_, err := compactor.Compact(context.Background(), contextwindow.CompactionRequest{SessionID: "s", Invocation: request})
+	_, err := compactor.Compact(context.Background(), contextwindow.CompactionRequest{RootSessionID: "s", SessionID: "s", Invocation: request})
 	if !errors.Is(err, ErrContextUncompactable) || len(models.requests) != 1 || len(store.entries["s"]) != 0 {
 		t.Fatalf("error=%v calls=%d entries=%d", err, len(models.requests), len(store.entries["s"]))
 	}

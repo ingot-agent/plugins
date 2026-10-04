@@ -5,9 +5,20 @@ export interface Session {
   workspace?: string
   createdAt: string
   updatedAt: string
+  totalToken: number
   archivedAt?: string
 }
 export interface WorkspaceSelection { path: string | null }
+export interface ContextUsage {
+  sessionId: string
+  inputTokens: number
+  accuracy: 'exact' | 'upper_bound' | 'estimate'
+  source: string
+  provider: string
+  model: string
+  turnId?: string
+  roundIndex?: number
+}
 export interface Part {
   kind: string
   text?: string
@@ -39,13 +50,6 @@ export interface ErrorDetail { code: string; message: string }
 export interface Outcome {
   status: Status
   durationNs: number
-  accounting: {
-    rounds: number
-    modelInvocations: number
-    toolCalls: number
-    usage: { inputTokens: number; outputTokens: number; totalTokens: number; coverage: string }
-    models?: unknown[]
-  }
   failure?: { stage: string; roundIndex?: number; toolCallId?: string }
 }
 export interface Turn {

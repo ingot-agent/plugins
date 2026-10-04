@@ -7,16 +7,18 @@ import (
 
 	"github.com/ingot-agent/plugins/agent-default/sessioncontrol"
 	"github.com/ingot-agent/sdk/agent"
+	"github.com/ingot-agent/sdk/session"
 	"github.com/ingot-agent/sdk/tool"
 )
 
 const childSubmitToolName = "submit_agent_result"
 
 type turnFrame struct {
-	handle     sessioncontrol.Handle
-	toolNames  map[string]struct{}
-	submitTool string
-	confirmed  *sessioncontrol.FinishIntent
+	handle        sessioncontrol.Handle
+	rootSessionID session.ID
+	toolNames     map[string]struct{}
+	submitTool    string
+	confirmed     *sessioncontrol.FinishIntent
 }
 
 func newChildFrame(task sessioncontrol.Task) *turnFrame {
@@ -24,7 +26,7 @@ func newChildFrame(task sessioncontrol.Task) *turnFrame {
 	for _, name := range task.ToolNames {
 		names[name] = struct{}{}
 	}
-	return &turnFrame{handle: task.Handle, toolNames: names, submitTool: task.SubmitTool}
+	return &turnFrame{handle: task.Handle, rootSessionID: task.RootSessionID, toolNames: names, submitTool: task.SubmitTool}
 }
 
 func definitionsForFrame(definitions []tool.Definition, frame *turnFrame, lastAllowed bool) []tool.Definition {
@@ -86,7 +88,7 @@ func (r *runtime) runChild(task sessioncontrol.Task) {
 		}
 		_ = r.control.Settle(task.Context, task.Handle, frame.confirmed, execution, runErr)
 	}()
-	execution, runErr = r.executeFrame(task.Context, agent.Turn{SessionID: task.Handle.SessionID, Input: task.Input}, nil, frame)
+	execution, runErr = r.executeFrame(task.Context, agent.Turn{RootSessionID: task.RootSessionID, SessionID: task.Handle.SessionID, Input: task.Input}, nil, frame)
 }
 
 func (r *runtime) cleanup(ctx context.Context) error {

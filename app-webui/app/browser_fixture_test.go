@@ -42,6 +42,7 @@ type browserAgent struct {
 	history     map[session.ID][]model.Message
 	active      map[session.ID]chan struct{}
 	interaction interaction.ExecutionBinder
+	tokenUsage  session.TokenUsageStore
 	observer    observation.Observer
 	sequence    atomic.Uint64
 }
@@ -111,7 +112,6 @@ func (b *browserAgent) Stream(ctx context.Context, turn agent.Turn, handler agen
 		}
 		result.Outcome = agent.Outcome{
 			Status: outcomeStatus, Duration: time.Since(start),
-			Accounting: agent.Accounting{Rounds: 1, ModelInvocations: 1, ToolCalls: 1, Usage: agent.TokenUsage{InputTokens: 48, OutputTokens: 24, TotalTokens: 72, Coverage: agent.UsageComplete}},
 		}
 		message := ""
 		if err != nil {
@@ -227,6 +227,27 @@ func (b *browserAgent) Stream(ctx context.Context, turn agent.Turn, handler agen
 	if len(turn.Attachments) > 0 {
 		output = "Attachment received."
 	}
+	correlation.ToolCallID = ""
+	ctx = observation.WithCorrelation(ctx, correlation)
+	b.mu.Lock()
+	contextTokens := int64(len(b.history[turn.SessionID]) * 64)
+	b.mu.Unlock()
+	if err = interactionChannel.Set(ctx, interaction.State{
+		Name: "context-compact.session-context/" + string(turn.SessionID),
+		Values: []interaction.Entry{
+			{Name: "sessionId", Value: interaction.StringValue(string(turn.SessionID))},
+			{Name: "inputTokens", Value: interaction.IntegerValue(contextTokens)},
+			{Name: "accuracy", Value: interaction.StringValue("estimate")},
+			{Name: "source", Value: interaction.StringValue("fixture-estimate")},
+			{Name: "provider", Value: interaction.StringValue("fixture")},
+			{Name: "model", Value: interaction.StringValue("chat")},
+			{Name: "turnId", Value: interaction.StringValue(string(correlation.TurnID))},
+			{Name: "roundIndex", Value: interaction.IntegerValue(0)},
+		},
+	}); err != nil {
+		return result, err
+	}
+	emit(observation.ModelStarted{Request: model.Request{Provider: "fixture", Model: "chat"}})
 	for _, chunk := range strings.SplitAfter(output, " ") {
 		select {
 		case <-ctx.Done():
@@ -237,7 +258,32 @@ func (b *browserAgent) Stream(ctx context.Context, turn agent.Turn, handler agen
 			return result, err
 		}
 	}
+	settleCtx, settleCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer settleCancel()
+	metadata, err := b.tokenUsage.AddTotalTokens(settleCtx, []session.ID{turn.RootSessionID, turn.SessionID}, 72)
+	if err != nil {
+		return result, err
+	}
+	for _, item := range metadata {
+		channel, bindErr := b.interaction.Bind(execution.Scope{SessionID: item.ID})
+		if bindErr != nil {
+			return result, bindErr
+		}
+		if err := channel.Set(settleCtx, interaction.State{
+			Name: "model-runtime.session-usage/" + string(item.ID), Level: interaction.LevelInfo,
+			Values: []interaction.Entry{
+				{Name: "sessionId", Value: interaction.StringValue(string(item.ID))},
+				{Name: "totalToken", Value: interaction.IntegerValue(item.TotalToken)},
+			},
+		}); err != nil {
+			return result, err
+		}
+	}
 	result.Result = &agent.Result{Output: content.FromText(output)}
+	emit(observation.ModelFinished{Status: observation.StatusSucceeded, Response: &model.Response{
+		Provider: "fixture", Model: "chat", Message: model.Message{Role: model.RoleAssistant, Content: result.Result.Output},
+		Usage: model.Usage{InputTokens: 48, OutputTokens: 24, TotalTokens: 72, Reported: true},
+	}})
 	b.mu.Lock()
 	b.history[turn.SessionID] = append(b.history[turn.SessionID], model.Message{Role: model.RoleAssistant, Content: result.Result.Output})
 	b.mu.Unlock()
@@ -294,7 +340,7 @@ func TestBrowserFixture(t *testing.T) {
 		t.Fatal(err)
 	}
 	a.backend = host.Runtime
-	b := &browserAgent{history: make(map[session.ID][]model.Message), active: make(map[session.ID]chan struct{}), interaction: host.ExecutionInteractions, observer: host.Observer}
+	b := &browserAgent{history: make(map[session.ID][]model.Message), active: make(map[session.ID]chan struct{}), interaction: host.ExecutionInteractions, tokenUsage: a.sessions.(*defaultSessionController).store.(*testStore), observer: host.Observer}
 	streaming := ingotabi.Some[agent.StreamingRuntime](b)
 	if os.Getenv("INGOT_WEBUI_FIXTURE_RUN_ONLY") == "1" {
 		streaming = ingotabi.None[agent.StreamingRuntime]()

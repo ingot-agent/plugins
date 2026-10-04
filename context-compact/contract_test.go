@@ -14,7 +14,7 @@ import (
 
 type contractModel struct{}
 
-func (contractModel) Complete(context.Context, model.Request) (model.Response, error) {
+func (contractModel) Complete(context.Context, session.ID, session.ID, model.Request) (model.Response, error) {
 	return model.Response{}, nil
 }
 
@@ -38,8 +38,11 @@ func TestPublicComponentContract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cleanup != nil {
-		t.Fatal("cleanup must be nil")
+	if cleanup == nil {
+		t.Fatal("cleanup must close the internal estimator")
+	}
+	if err := cleanup(context.Background()); err != nil {
+		t.Fatal(err)
 	}
 	var _ contextwindow.Compactor = exports.Compactor
 }

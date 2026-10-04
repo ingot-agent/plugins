@@ -139,17 +139,12 @@ func ModelProgress(event model.StreamEvent) map[string]any {
 	return result
 }
 
-// Outcome preserves accounting and explicit coverage, including on failure.
+// Outcome preserves execution status, duration and failure information.
 func Outcome(outcome agent.Outcome) any {
 	if outcome.Status == 0 {
 		return nil
 	}
-	models := make([]map[string]any, len(outcome.Accounting.Models))
-	for i, item := range outcome.Accounting.Models {
-		models[i] = map[string]any{"provider": item.Provider, "model": item.Model, "completedInvocations": item.CompletedInvocations, "usage": tokenUsage(item.Usage)}
-	}
-	result := map[string]any{"status": map[agent.OutcomeStatus]string{agent.OutcomeSucceeded: "succeeded", agent.OutcomeFailed: "failed", agent.OutcomeCanceled: "canceled"}[outcome.Status], "durationNs": outcome.Duration.Nanoseconds(),
-		"accounting": map[string]any{"rounds": outcome.Accounting.Rounds, "modelInvocations": outcome.Accounting.ModelInvocations, "toolCalls": outcome.Accounting.ToolCalls, "usage": tokenUsage(outcome.Accounting.Usage), "models": models}}
+	result := map[string]any{"status": map[agent.OutcomeStatus]string{agent.OutcomeSucceeded: "succeeded", agent.OutcomeFailed: "failed", agent.OutcomeCanceled: "canceled"}[outcome.Status], "durationNs": outcome.Duration.Nanoseconds()}
 	if failure := outcome.Failure; failure != nil {
 		stage := map[agent.FailureStage]string{
 			agent.FailureSessionGate: "session_gate", agent.FailureHistoryLoad: "history_load", agent.FailureRecovery: "recovery", agent.FailureUserPersistence: "user_persistence",
@@ -159,9 +154,4 @@ func Outcome(outcome agent.Outcome) any {
 		result["failure"] = map[string]any{"stage": stage, "roundIndex": failure.RoundIndex, "toolCallId": failure.ToolCallID}
 	}
 	return result
-}
-
-func tokenUsage(usage agent.TokenUsage) map[string]any {
-	return map[string]any{"inputTokens": usage.InputTokens, "outputTokens": usage.OutputTokens, "totalTokens": usage.TotalTokens,
-		"coverage": map[agent.UsageCoverage]string{agent.UsageUnavailable: "unavailable", agent.UsagePartial: "partial", agent.UsageComplete: "complete"}[usage.Coverage]}
 }

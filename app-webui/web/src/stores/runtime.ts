@@ -4,10 +4,13 @@ import { APIError, command, errorMessage, isAbort, request, segment } from '../a
 import { subscribe } from '../sse'
 import { bootstrapTurns, indexById, reduceOperation, reduceTurn } from '../state'
 import { equalInteractionValue } from '../forms'
-import type { Attachment, Followup, FollowupAnchor, Interaction, InteractionState, LiveTurn, Message, ModelSelection, ModelSelectionSnapshot, Notice, Operation, OperationInvocation, Session, Snapshot, TraceEvent, WebEvent, WorkspaceSelection } from '../protocol'
+import { parseContextUsage } from '../usage'
+import type { Attachment, ContextUsage, Followup, FollowupAnchor, Interaction, InteractionState, LiveTurn, Message, ModelSelection, ModelSelectionSnapshot, Notice, Operation, OperationInvocation, Session, Snapshot, TraceEvent, WebEvent, WorkspaceSelection } from '../protocol'
 
 export const useRuntime = defineStore('runtime', () => {
   const sessions = ref<Session[]>([])
+  const totalTokenBySession = ref<Record<string, number>>({})
+  const contextBySession = ref<Record<string, ContextUsage>>({})
   const followups = ref<Record<string, Followup[]>>({})
   const capabilities = ref({ run: false, stream: false })
   const assets = ref({ available: false, maxBytes: 0 })
@@ -36,6 +39,7 @@ export const useRuntime = defineStore('runtime', () => {
   let modelSelectionRevision = 0
   let noticeId = 0
   const dismissedOperations = new Set<string>()
+  const deletedSessions = new Set<string>()
   const historyRequests = new Map<string, AbortController>()
   const orderedSessions = computed(() => [...sessions.value].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)))
   const pendingCount = computed(() => Object.values(interactions.value).filter(item => {
@@ -54,8 +58,51 @@ export const useRuntime = defineStore('runtime', () => {
   function running(sessionId: string) {
     return Object.values(turns.value).filter(turn => turn.sessionId === sessionId && turn.status === 'running')
   }
+  function mergeSessionTotal(id: string, total: unknown) {
+    if (!id || deletedSessions.has(id) || typeof total !== 'number' || !Number.isSafeInteger(total) || total < 0) return
+    totalTokenBySession.value[id] = Math.max(totalTokenBySession.value[id] ?? 0, total)
+  }
+  function mergeSession(item: Session) {
+    mergeSessionTotal(item.id, item.totalToken)
+    return item
+  }
+  function acceptState(item: InteractionState) {
+    if (item.name?.startsWith('context-compact.session-context/')) {
+      const context = parseContextUsage(item)
+      if (!context || deletedSessions.has(context.sessionId)) return
+      contextBySession.value[context.sessionId] = context
+      return
+    }
+    if (item.name?.startsWith('model-runtime.session-usage/')) {
+      const id = item.scope?.agent?.sessionId
+      if (!id || deletedSessions.has(id) || item.scope?.operation || item.id !== item.name || item.name !== 'model-runtime.session-usage/' + id) return
+      const identity = item.values?.filter(value => value.name === 'sessionId')
+      const total = item.values?.filter(value => value.name === 'totalToken')
+      if (identity?.length !== 1 || identity[0]?.value !== id || total?.length !== 1) return
+      mergeSessionTotal(id, total[0]?.value)
+      return
+    }
+    interactionStates.value[item.id] = item
+  }
+  function forgetSession(id: string) {
+    deletedSessions.add(id)
+    delete totalTokenBySession.value[id]
+    delete contextBySession.value[id]
+    delete traces.value[id]
+    delete interactionStates.value['model-runtime.session-usage/' + id]
+    historyRequests.get(id)?.abort()
+  }
+  async function loadSession(id: string) {
+    const generation = epoch
+    try {
+      const item = await request<Session>('/sessions/' + segment(id))
+      if (generation === epoch && !deletedSessions.has(id)) mergeSession(item)
+    } catch (error) {
+      if (generation === epoch && !isAbort(error) && !(error instanceof APIError && error.status === 404)) notify(errorMessage(error))
+    }
+  }
   async function loadHistory(id: string) {
-    if (!id) return
+    if (!id || deletedSessions.has(id)) return
     historyRequests.get(id)?.abort()
     const controller = new AbortController()
     historyRequests.set(id, controller)
@@ -87,7 +134,7 @@ export const useRuntime = defineStore('runtime', () => {
     const revision = ++sessionRevision
     try {
       const items = await request<Session[]>('/sessions')
-      if (generation === epoch && revision === sessionRevision) sessions.value = items || []
+      if (generation === epoch && revision === sessionRevision) sessions.value = (items || []).filter(item => !deletedSessions.has(item.id)).map(mergeSession)
     } catch (error) { if (!isAbort(error)) notify(errorMessage(error)) }
   }
   function bootstrap(snapshot: Snapshot) {
@@ -104,7 +151,7 @@ export const useRuntime = defineStore('runtime', () => {
     historyLoading.value = {}
     historyErrors.value = {}
     cursor.value = snapshot.cursor
-    sessions.value = snapshot.sessions || []
+    sessions.value = (snapshot.sessions || []).filter(item => !deletedSessions.has(item.id)).map(mergeSession)
     capabilities.value = snapshot.agent.capabilities
     assets.value = snapshot.assets || { available: false, maxBytes: 0 }
     defaultWorkspace.value = snapshot.workspace?.defaultPath || ''
@@ -122,13 +169,16 @@ export const useRuntime = defineStore('runtime', () => {
       const id = item.scope?.operation?.invocationId
       return id ? [[id, previousInteractions[item.id] ? !!previousSuspended[id] : true]] : []
     }))
-    interactionStates.value = indexById(snapshot.interactionStates)
+    interactionStates.value = {}
+    contextBySession.value = {}
+    for (const item of snapshot.interactionStates || []) acceptState(item)
     operations.value = snapshot.operations || []
     operationInvocations.value = indexById(snapshot.operationInvocations)
     // Process-local identifiers may be reused after a server restart.
     traces.value = {}
     optimistic.value = {}
     if (activeSession.value) {
+      void loadSession(activeSession.value)
       void loadHistory(activeSession.value)
       void loadFollowups(activeSession.value).catch(error => notify(errorMessage(error)))
     }
@@ -145,17 +195,21 @@ export const useRuntime = defineStore('runtime', () => {
     } else if (event.type.startsWith('agent.invocation.') || event.type === 'agent.output.delta' || event.type === 'agent.reasoning.delta') {
       if (event.type === 'agent.invocation.finished') {
         const sid = event.scope?.agent?.sessionId
-        if (sid && (sid === activeSession.value || histories.value[sid])) void loadHistory(sid)
+        if (sid && (sid === activeSession.value || histories.value[sid])) {
+          void loadHistory(sid)
+          void loadSession(sid)
+        }
         void refreshSessions()
         const settled = Object.values(turns.value).filter(turn => turn.status !== 'running')
         for (const turn of settled.slice(0, -128)) delete turns.value[turn.id]
       }
     } else if (/^agent\.(turn|round|model|tool)\./.test(event.type)) {
       const sid = event.scope?.agent?.sessionId
-      if (sid) traces.value[sid] = [...(traces.value[sid] || []), { ...event, cursor: id }].slice(-500)
+      if (sid && !deletedSessions.has(sid)) traces.value[sid] = [...(traces.value[sid] || []), { ...event, cursor: id }].slice(-500)
     } else if (event.type.startsWith('session.')) {
       sessionRevision++
       if (event.type === 'session.deleted') {
+        forgetSession(data.id)
         sessions.value = sessions.value.filter(session => session.id !== data.id)
         delete histories.value[data.id]
         delete followups.value[data.id]
@@ -163,6 +217,8 @@ export const useRuntime = defineStore('runtime', () => {
         historyRequests.get(data.id)?.abort()
       } else {
         const item = data as Session
+        if (deletedSessions.has(item.id)) return
+        mergeSession(item)
         sessions.value = [...sessions.value.filter(session => session.id !== item.id), item]
       }
     } else if (event.type === 'followup.created' || event.type === 'followup.deleted') {
@@ -186,9 +242,10 @@ export const useRuntime = defineStore('runtime', () => {
         delete suspendedOperations.value[invocationId]
       }
     } else if (event.type === 'interaction.state.set') {
-      interactionStates.value[data.id] = data as InteractionState
+      acceptState(data as InteractionState)
     } else if (event.type === 'interaction.state.clear') {
       delete interactionStates.value[data.id]
+      if (typeof data.id === 'string' && data.id.startsWith('context-compact.session-context/')) delete contextBySession.value[data.id.slice('context-compact.session-context/'.length)]
     } else if (event.type === 'interaction.event') {
       notify(data.message || data.name, data.level || 'info', event.scope)
     }
@@ -255,28 +312,32 @@ export const useRuntime = defineStore('runtime', () => {
   async function createSession(title: string, workspace: string) {
     const session = await command<Session>('/sessions', 'POST', { title, workspace })
     sessionRevision++
+    mergeSession(session)
     sessions.value = [...sessions.value.filter(item => item.id !== session.id), session]
     return session
   }
   async function loadFollowups(id: string) {
     const generation = epoch
     const items = await request<Followup[]>('/sessions/' + segment(id) + '/followups')
-    if (generation === epoch) followups.value[id] = items || []
+    if (generation === epoch && !deletedSessions.has(id)) followups.value[id] = (items || []).filter(item => !deletedSessions.has(item.id))
   }
   async function createFollowup(id: string, anchor: FollowupAnchor) {
     const item = await command<Followup>('/sessions/' + segment(id) + '/followups', 'POST', anchor)
     followups.value[id] = [...(followups.value[id] || []).filter(note => note.id !== item.id), item]
     histories.value[item.id] = []
+    mergeSessionTotal(item.id, 0)
     return item
   }
   async function deleteFollowup(item: Followup) {
     await command('/followups/' + segment(item.id), 'DELETE')
+    forgetSession(item.id)
     followups.value[item.sourceSessionId] = (followups.value[item.sourceSessionId] || []).filter(note => note.id !== item.id)
     delete histories.value[item.id]
   }
   async function assignWorkspace(id: string, workspace: string) {
     const session = await command<Session>('/sessions/' + segment(id) + '/workspace', 'POST', { workspace })
     sessionRevision++
+    mergeSession(session)
     sessions.value = [...sessions.value.filter(item => item.id !== session.id), session]
     return session
   }
@@ -290,9 +351,11 @@ export const useRuntime = defineStore('runtime', () => {
     )
     sessionRevision++
     if (action === 'delete') {
+      forgetSession(id)
       sessions.value = sessions.value.filter(session => session.id !== id)
       delete histories.value[id]
     } else if (item) {
+      mergeSession(item)
       sessions.value = [...sessions.value.filter(session => session.id !== item.id), item]
     }
     return item
@@ -390,10 +453,10 @@ export const useRuntime = defineStore('runtime', () => {
   function suspendOperation(id: string) { suspendedOperations.value[id] = true }
   function resumeOperation(id: string) { delete suspendedOperations.value[id] }
   return {
-    sessions, followups, orderedSessions, capabilities, assets, defaultWorkspace, turns, interactions, interactionDrafts, interactionStates,
+    sessions, totalTokenBySession, contextBySession, followups, orderedSessions, capabilities, assets, defaultWorkspace, turns, interactions, interactionDrafts, interactionStates,
     operations, modelSelection, operationInvocations, histories, historyLoading, historyErrors, optimistic,
     traces, notices, connection, connectionError, activeSession, cursor, pendingCount, pendingOperationRequests,
-    notify, running, loadHistory, refreshSessions, refreshModelSelection, updateModelSelection, refreshOperationState, bootstrap, receive, connect, disconnect,
+    notify, running, loadSession, loadHistory, refreshSessions, refreshModelSelection, updateModelSelection, refreshOperationState, bootstrap, receive, connect, disconnect,
     createSession, loadFollowups, createFollowup, deleteFollowup, assignWorkspace, pickWorkspace, mutateSession, send, stop, respond, invoke, cancelOperation, dismissOperationInteractions, suspendOperation, resumeOperation,
   }
 })

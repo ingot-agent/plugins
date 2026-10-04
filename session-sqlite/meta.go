@@ -2,8 +2,6 @@ package sessionsqlite
 
 import (
 	"bytes"
-	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -76,32 +74,4 @@ func cloneMeta(meta session.Meta) session.Meta {
 		result[namespace] = append(json.RawMessage(nil), raw...)
 	}
 	return result
-}
-
-func tableHasColumn(ctx context.Context, tx *sql.Tx, table, column string) (bool, error) {
-	rows, err := tx.QueryContext(ctx, "PRAGMA table_info("+table+")")
-	if err != nil {
-		return false, err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var (
-			position     int
-			name         string
-			dataType     string
-			notNull      int
-			defaultValue sql.NullString
-			primaryKey   int
-		)
-		if err := rows.Scan(&position, &name, &dataType, &notNull, &defaultValue, &primaryKey); err != nil {
-			return false, err
-		}
-		if name == column {
-			return true, nil
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return false, err
-	}
-	return false, nil
 }

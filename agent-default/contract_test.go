@@ -20,7 +20,7 @@ import (
 
 type modelRuntime struct{}
 
-func (modelRuntime) Complete(context.Context, model.Request) (model.Response, error) {
+func (modelRuntime) Complete(context.Context, session.ID, session.ID, model.Request) (model.Response, error) {
 	return model.Response{}, nil
 }
 

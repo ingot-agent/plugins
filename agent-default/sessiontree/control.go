@@ -12,8 +12,8 @@ import (
 	"github.com/ingot-agent/sdk/tool"
 )
 
-func (t *tree) BeginRoot(ctx context.Context, sessionID session.ID) (sessioncontrol.Handle, error) {
-	if ctx == nil || sessionID == "" {
+func (t *tree) BeginRoot(ctx context.Context, rootSessionID, sessionID session.ID) (sessioncontrol.Handle, error) {
+	if ctx == nil || sessionID == "" || rootSessionID == "" {
 		return sessioncontrol.Handle{}, agent.ErrChildUnauthorized
 	}
 	if err := ctx.Err(); err != nil {
@@ -42,11 +42,12 @@ func (t *tree) BeginRoot(ctx context.Context, sessionID session.ID) (sessioncont
 	t.nextToken++
 	handle := sessioncontrol.Handle{SessionID: sessionID, Token: t.nextToken}
 	t.active[sessionID] = &executionState{
-		handle: handle,
-		rootID: sessionID,
-		ctx:    ctx,
-		done:   make(chan struct{}),
-		depth:  0,
+		handle:      handle,
+		rootID:      sessionID,
+		tokenRootID: rootSessionID,
+		ctx:         ctx,
+		done:        make(chan struct{}),
+		depth:       0,
 	}
 	return handle, nil
 }
@@ -157,11 +158,12 @@ func (t *tree) Next(ctx context.Context) (sessioncontrol.Task, error) {
 		exec.started = true
 		definition := cloneDefinition(exec.definition)
 		task := sessioncontrol.Task{
-			Handle:     exec.handle,
-			Context:    exec.ctx,
-			Input:      childInput(record.Agent.Task, record.Agent.Context),
-			ToolNames:  definition.Tools,
-			SubmitTool: submitToolName,
+			RootSessionID: exec.tokenRootID,
+			Handle:        exec.handle,
+			Context:       exec.ctx,
+			Input:         childInput(record.Agent.Task, record.Agent.Context),
+			ToolNames:     definition.Tools,
+			SubmitTool:    submitToolName,
 		}
 		t.mu.Unlock()
 		return task, nil

@@ -39,12 +39,14 @@ ingot start web
   `zenity --file-selection --directory`，仅在找不到 Zenity 时回退到 KDialog；Windows 使用纯
   Go 代码调用 COM `IFileOpenDialog`，并限制为真实文件系统目录。用户取消统一返回
   `{ "path": null }`。
+  选择器的 `initialPath` 使用已选择目录或 `workspace.defaultPath` 的绝对路径，
+  界面上的默认工作区文案不作为路径传递。
 - Linux Host 必须运行在设置了 `DISPLAY` 或 `WAYLAND_DISPLAY` 的桌面会话中，并安装
   `zenity` 或 `kdialog`。SSH 和无界面服务器不会打开选择器，接口返回
   `workspace_picker_unavailable`；默认工作区仍可直接使用。
 - 会话搜索、新建、重命名、归档/恢复、分叉与确认删除；正在执行时禁用生命周期变更。
 - 对话消息不显示 Ingot 图标/名称；实时执行仍展示状态徽标。工具调用显示开关保存在浏览器本地偏好中，刷新后也会应用到历史消息；隐藏纯工具消息时不影响最终回答。
-- Markdown、代码高亮/复制、折叠推理、工具调用卡片和独立执行详情；Turn、Round、Model、Tool 与用量信息来自公开 SDK 能力。
+- Markdown、代码高亮/复制、折叠推理、工具调用卡片和独立执行详情；Turn、Round、Model、Tool 与 Session 累计用量来自公开 SDK 能力。
 - 流式输出及 Run-only 降级、停止执行、内联审批/自由输入、跨会话待处理请求抽屉。
 - 拖放、选择及粘贴图片上传；历史附件按需预览或下载。Asset 能力缺失时禁用上传。
 - Operation 简单表单与复杂 JSON 输入、服务端 Schema 校验、结果恢复和取消；JSON 模式保留提交的原始文本，不经数值转换。
@@ -126,11 +128,28 @@ Agent 不再保存独立的模型覆盖配置。契约保留在 WebUI 的公开�
 
 Turn 完成后会从运行中注册表移除，完整历史仍以 `agent.History` 为准。
 
-`agent.invocation.started` 携带运行中 Turn 的快照。`agent.invocation.finished` 携带 `invocationId`、状态、执行结果统计，以及规范的 `result.output` 或错误详情。这些 Web 生命周期事件也能表示 SDK Turn 生命周期建立前发生的失败。
+`agent.invocation.started` 携带运行中 Turn 的快照。`agent.invocation.finished` 携带 `invocationId`、状态、耗时和失败信息，以及规范的 `result.output` 或错误详情。这些 Web 生命周期事件也能表示 SDK Turn 生命周期建立前发生的失败。
 
 十种 `agent.turn/round/model/tool.*` 事件仅来自 Observation，并保留 SDK correlation、sequence 和物化时间。需要将 `host` 导出的 Observer 接入 Observation Consumer 才会收到这些事件；后端本身不会创建 Consumer，也不会合成执行事实。Web invocation ID 与 SDK turn ID 始终是两个独立标识。
 
 历史消息和规范结果使用有序内容数组、字符串形式的 `kind`，以及显式的媒体来源。内联输出字节在 JSON 中编码为 base64；URI 和 Asset 输出来源会原样保留，不会被后端读取。Turn 输入仅接受基于 Asset 的附件。空文本和仅含附件的 Turn 会交由 Agent 的领域校验处理。未绑定 Workspace 的历史 Session 会在创建 Turn 前自动绑定默认工作区。
+
+## Session Token 用量
+
+会话查询和 `/api/state` 的 Session 投影包含 `totalToken`，来自 Session 持久化的累计值。右侧栏的 Token 卡片只显示当前会话累计 Token 和当前上下文总量，展开后的子任务工具详情显示子会话累计 Token；追问便签标题不显示用量。Turn 结果仅保留状态、耗时和失败信息，不再采集执行次数统计。
+
+Token 卡片同时显示 `context-compact.session-context/<sessionId>` 的 `inputTokens`，
+表示压缩插件对最近一次实际请求输入的估算，包含系统提示词、工具和压缩后的历史，
+不包含尚未计入下一次请求的新输出，允许压缩后数值下降。
+当前 Runtime 的状态快照可在页面刷新后恢复该值；Runtime 重启后，未计数的会话显示不可用。
+
+右侧栏不渲染 Turn、Round 执行详情或逐 Turn 用量，也不显示模型标识、估算精度和最近请求输入说明。
+
+模型供应商成功报告用量后，由 ModelRuntime 先持久化，再通过绑定 Session 的 `interaction.Channel.Set` 发布 `model-runtime.session-usage/<sessionId>`。Values 为 `sessionId` 和 `totalToken`；每个 Session 使用独立状态名，前端按累计快照的最大值归并，重复事件或旧查询不会重复加数。刷新与重开会从 Session 查询恢复，不依赖 Turn 或 Observation 回放。
+
+普通会话与普通 Fork 的 root/current 均为自身，Fork 初值为 0。追问的 root 由服务端读取其 `Meta["app-webui"].sourceSessionId` 并校验，current 为便签自身；浏览器只提交 current。根会话累计包含所属子任务、压缩和追问，不能把全部 Session 的累计值相加作为全局消耗。删除成功后 Clear 对应状态，前端忽略已删除 Session 的晚到快照。
+
+此合同使用 SDK v0.2.15 发布的 Runtime 双 Session 参数及 `session.Metadata.TotalToken`，应组合相容版本的 Agent、ModelRuntime、Compactor 和 Session 插件。独立模块与浏览器回归使用 `go.mod` 中的已发布依赖（`GOWORK=off`），无需本地 SDK 源码替换。
 
 ## Asset 上传与读取
 
@@ -186,7 +205,7 @@ GET /api/events?after=<cursor>
 
 前端每次重连都重新引导，不自动重发 Turn、Operation 或 Interaction 提交。历史加载与 SSE 独立：Agent 正在执行时，History 可能等待该 Turn 收尾，但审批、流式输出和取消仍可使用。输出与推理共享 revision，重叠回放不会重复追加。
 
-持久消息以 `agent.History` 为准；终态 Turn 用量、推理和 Observation 详情仅在当前连接的内存中可见，刷新/重连后不提供历史执行回放。Operation 结果按服务端保留策略恢复。未发送草稿和敏感输入不写入本地存储；只有语言、主题与面板偏好会保存。
+持久消息以 `agent.History` 为准；Session 累计 Token 从 Session 查询恢复。终态 Turn 执行指标、推理和 Observation 详情仅在当前连接的内存中可见，刷新/重连后不提供历史执行回放。Operation 结果按服务端保留策略恢复。未发送草稿和敏感输入不写入本地存储；只有语言、主题与面板偏好会保存。
 
 ## 生命周期
 

@@ -135,7 +135,7 @@ func (c *recordingCompactor) Compact(_ context.Context, request contextwindow.Co
 	return contextwindow.CompactionResult{Messages: cloneMessages(c.outputs[index])}, nil
 }
 
-func (m *sequenceModel) Complete(_ context.Context, request model.Request) (model.Response, error) {
+func (m *sequenceModel) Complete(_ context.Context, _, _ session.ID, request model.Request) (model.Response, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.requests = append(m.requests, request)
@@ -557,7 +557,7 @@ type blockingModel struct {
 	calls   int
 }
 
-func (m *blockingModel) Complete(ctx context.Context, _ model.Request) (model.Response, error) {
+func (m *blockingModel) Complete(ctx context.Context, _, _ session.ID, _ model.Request) (model.Response, error) {
 	m.mu.Lock()
 	m.calls++
 	call := m.calls

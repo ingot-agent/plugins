@@ -8,8 +8,8 @@ See the [plugin documentation index](../docs/README.md).
 
 The directory/module suffix is `session-sqlite`; [the manifest](ingot.plugin.toml)
 names `session.sqlite`, with component `default` in `.` and Ingot compatibility
-`>=0.3.0 <0.4.0`. It declares state `schema_version = 3` and
-`min_reader_version = 1`.
+`>=0.3.0 <0.4.0`. It declares state `schema_version = 4` and
+`min_reader_version = 4`.
 
 `New(ctx, deps)` requires `State state.Scope` with a nonempty absolute directory.
 All exports share the same database-backed implementation:
@@ -19,6 +19,7 @@ All exports share the same database-backed implementation:
 | `Store` | `session.Store` (`Append`, `Load`) |
 | `Manager` | `session.Manager` (create/get/rename/archive/restore/delete/fork) |
 | `Query` | `session.Query` (`List`) |
+| `TokenUsage` | `session.TokenUsageStore` (`AddTotalTokens`) |
 | `ChildSessions` | `agent.ChildSessionRepository` |
 | `WorkspaceResolver` | `workspace.Resolver` |
 | `WorkspaceManager` | `workspace.Manager` |
@@ -36,16 +37,19 @@ timeout, and limits each store instance to one open connection. It does not
 explicitly enable WAL mode. The directory is created with mode `0700` and the
 database chmod is `0600` where the platform implements Unix permissions.
 
-The current SQLite `PRAGMA user_version` is 3. Startup runs schema initialization
-and migrations in a transaction: it creates missing tables, adds `sessions.meta`
-to older databases where needed, creates child-metadata indexes, and records
-version 3. Versions above 3 fail with `ErrUnsupportedSchema`. The manifest's state
+The current SQLite `PRAGMA user_version` is 4. Startup initializes an empty
+database in a transaction, creating tables with `sessions.meta` and the
+independent `sessions.totaltoken` INTEGER column, child-metadata indexes, and
+recording version 4. Existing databases must already use version 4. Other
+versions and unversioned nonempty databases fail with `ErrUnsupportedSchema`;
+there is no automatic migration or history backfill.
+The manifest's state
 version and SQLite's `user_version` are distinct checks; neither is permission to
 downgrade a database with an older binary.
 
 | Table | Stored data |
 | --- | --- |
-| `sessions` | ID, title, UTC creation/update/archive times, namespaced JSON metadata |
+| `sessions` | ID, title, UTC creation/update/archive times, namespaced JSON metadata, independent nonnegative INTEGER `totaltoken` |
 | `entries` | Ordered opaque payloads with kind/version, keyed by session ID and sequence |
 | `session_workspaces` | One durable root path per session |
 
@@ -54,6 +58,17 @@ Entry payload interpretation belongs to the producing plugin. For example,
 The session store preserves payload bytes and does not decode those formats.
 Metadata namespace names must be nonempty UTF-8, and each namespace value must be
 one JSON object. The child repository uses the `agent` namespace and JSON indexes.
+
+`Metadata.TotalToken` reads the independent column, never `meta` JSON.
+`AddTotalTokens` deduplicates targets and uses SQL increments in one transaction,
+returning committed metadata in target order. Missing targets and int64
+overflow roll back all targets. Zero increments and archived targets are
+allowed. Settlement does not change `updated_at`; new Sessions, children and
+forks start at zero. Deleting a child does not deduct its usage from the root.
+
+The manifest's `min_reader_version` is 4. During development, stop the runtime
+and manually delete `sessions.sqlite3` to replace an older database; the next
+startup creates the current schema. This discards its Session history and usage.
 
 ## Session lifecycle
 
@@ -112,6 +127,6 @@ state; raw session entries can reference assets stored by another plugin.
 See [session_sqlite.go](session_sqlite.go), [store.go](store.go), [meta.go](meta.go),
 and [child_sessions.go](child_sessions.go). Run `go test ./...` in this module.
 [session_sqlite_test.go](session_sqlite_test.go), [store_test.go](store_test.go),
-and [child_sessions_test.go](child_sessions_test.go) cover persistence, migrations,
+and [child_sessions_test.go](child_sessions_test.go) cover persistence, schema rejection,
 transactional operations, workspace bindings, and restart recovery.
 See [CONTRIBUTING](../CONTRIBUTING.md) for workspace instructions.

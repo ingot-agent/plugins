@@ -24,7 +24,7 @@ func TestExplicitProviderDefaultSuppressesRuntimeReasoningDefault(t *testing.T) 
 			return model.Response{Message: model.Message{Role: model.RoleAssistant, Content: content.FromText("ok")}}, nil
 		},
 	})
-	exports, _, err := New(ctx, Dependencies{State: scope, ProviderSources: []model.ProviderSource{source}})
+	exports, _, err := newRuntimeForTest(ctx, Dependencies{State: scope, ProviderSources: []model.ProviderSource{source}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -33,7 +33,7 @@ func TestExplicitProviderDefaultSuppressesRuntimeReasoningDefault(t *testing.T) 
 	if err != nil || resolved.ReasoningEffort != "" {
 		t.Fatalf("resolved = %#v, err = %v", resolved, err)
 	}
-	if _, err := exports.Runtime.Complete(ctx, request); err != nil || observed.ReasoningEffort != "" {
+	if _, err := exports.Runtime.Complete(ctx, "s", "s", request); err != nil || observed.ReasoningEffort != "" {
 		t.Fatalf("provider request = %#v, err = %v", observed, err)
 	}
 	if resolved, err := exports.Resolver.ResolveRequest(ctx, model.Request{}); err != nil || resolved.ReasoningEffort != model.ReasoningEffortHigh {

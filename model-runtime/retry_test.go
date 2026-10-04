@@ -53,7 +53,7 @@ func TestCompleteRetriesOnlyProviderHint(t *testing.T) {
 				intercepts++
 				return next(ctx, req)
 			})}})
-			_, err := exports.Runtime.Complete(context.Background(), model.Request{})
+			_, err := exports.Runtime.Complete(context.Background(), "s", "s", model.Request{})
 			if calls != tc.wantCalls || intercepts != 1 || (err != nil) != (tc.wantCalls == 1) {
 				t.Fatalf("calls=%d intercepts=%d err=%v", calls, intercepts, err)
 			}
@@ -71,7 +71,7 @@ func TestCompleteRetryKeepsRequestAndStopsAtLimit(t *testing.T) {
 		request.Messages[0].Content[0].Text = "mutated"
 		return model.Response{}, temporary
 	}}, modelruntime.Dependencies{})
-	_, err := exports.Runtime.Complete(context.Background(), model.Request{Messages: []model.Message{{Role: model.RoleUser, Content: content.FromText("original")}}})
+	_, err := exports.Runtime.Complete(context.Background(), "s", "s", model.Request{Messages: []model.Message{{Role: model.RoleUser, Content: content.FromText("original")}}})
 	if !errors.Is(err, temporary) || calls != 3 || !reflect.DeepEqual(observed, []string{"original", "original", "original"}) {
 		t.Fatalf("calls=%d observed=%v err=%v", calls, observed, err)
 	}
@@ -105,7 +105,7 @@ func TestStreamRetryBeforeFirstEventOnly(t *testing.T) {
 				}
 				return goodResponse(), nil
 			}}, modelruntime.Dependencies{})
-			_, err := exports.Streaming.Stream(context.Background(), model.Request{}, func(model.StreamEvent) error { events++; return nil })
+			_, err := exports.Streaming.Stream(context.Background(), "s", "s", model.Request{}, func(model.StreamEvent) error { events++; return nil })
 			if calls != tc.wantCalls || (err != nil) != tc.emit || (tc.emit && events != 1) || (!tc.emit && events != 3) {
 				t.Fatalf("calls=%d events=%d err=%v", calls, events, err)
 			}
@@ -121,7 +121,7 @@ func TestRetryWaitHonorsCancellation(t *testing.T) {
 		cancel()
 		return model.Response{}, retryableError{delay: time.Hour}
 	}}, modelruntime.Dependencies{})
-	_, err := exports.Runtime.Complete(ctx, model.Request{})
+	_, err := exports.Runtime.Complete(ctx, "s", "s", model.Request{})
 	if !errors.Is(err, context.Canceled) || calls != 1 {
 		t.Fatalf("calls=%d err=%v", calls, err)
 	}
@@ -134,7 +134,7 @@ func TestStreamHandlerErrorNeverRetries(t *testing.T) {
 		calls++
 		return model.Response{}, handler(model.StreamEvent{Kind: model.StreamPartStart, PartKind: content.KindText})
 	}}, modelruntime.Dependencies{})
-	_, err := exports.Streaming.Stream(context.Background(), model.Request{}, func(model.StreamEvent) error { return consumerErr })
+	_, err := exports.Streaming.Stream(context.Background(), "s", "s", model.Request{}, func(model.StreamEvent) error { return consumerErr })
 	if !errors.Is(err, consumerErr) || calls != 1 {
 		t.Fatalf("calls=%d err=%v", calls, err)
 	}

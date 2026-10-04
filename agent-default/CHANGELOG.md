@@ -18,6 +18,13 @@ All notable changes to this plugin are documented in this file.
 
 ### Changed
 
+- Require SDK v0.2.15 for the published Session accounting contracts and
+  validate independently of local workspace replacements.
+
+- Forward root/current Session IDs through model and compaction calls. Nested
+  children inherit the topmost token root independently of lifecycle ownership.
+- Remove Turn accounting and per-model aggregation; retain execution status,
+  duration and failure details.
 - Delegate model selection to model-runtime; remove Agent provider/model/effort
   settings and direct provider-directory dependencies. Retired configuration
   keys are ignored on load and removed on save.

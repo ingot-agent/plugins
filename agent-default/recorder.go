@@ -15,7 +15,6 @@ type recorderContextKey struct{}
 
 type executionRecorder struct {
 	startedAt   time.Time
-	accounting  *turnAccounting
 	observation observation.Consumer
 
 	mu         sync.Mutex
@@ -24,7 +23,7 @@ type executionRecorder struct {
 }
 
 func newExecutionRecorder(consumer observation.Consumer) *executionRecorder {
-	return &executionRecorder{startedAt: time.Now(), accounting: newTurnAccounting(), observation: consumer}
+	return &executionRecorder{startedAt: time.Now(), observation: consumer}
 }
 
 func withExecutionRecorder(ctx context.Context, recorder *executionRecorder) context.Context {
@@ -60,7 +59,7 @@ func (r *executionRecorder) recordFailure(err error, stage agent.FailureStage, r
 
 func (r *executionRecorder) finalize(result *agent.Result, err error) agent.Execution {
 	outcome := agent.Outcome{
-		Status: terminalOutcomeStatus(err), Duration: time.Since(r.startedAt), Accounting: r.accounting.snapshot(),
+		Status: terminalOutcomeStatus(err), Duration: time.Since(r.startedAt),
 	}
 	if err != nil {
 		r.mu.Lock()
@@ -83,7 +82,6 @@ func (r *executionRecorder) finalize(result *agent.Result, err error) agent.Exec
 }
 
 func cloneOutcome(value agent.Outcome) agent.Outcome {
-	value.Accounting.Models = append([]agent.ModelAccounting(nil), value.Accounting.Models...)
 	if value.Failure != nil {
 		failure := *value.Failure
 		if value.Failure.RoundIndex != nil {

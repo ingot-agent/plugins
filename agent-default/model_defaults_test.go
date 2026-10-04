@@ -51,7 +51,7 @@ func TestTurnRetainsResolvedModelDefaults(t *testing.T) {
 				})
 				if streaming {
 					deps.Streaming = ingotabi.Some[model.StreamingRuntime](modelStreamFunc(func(ctx context.Context, request model.Request, _ model.StreamHandler) (model.Response, error) {
-						return models.Complete(ctx, request)
+						return models.Complete(ctx, "s", "s", request)
 					}))
 				}
 				// Retired overrides must not win over model-runtime, even in old files.

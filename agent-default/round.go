@@ -36,12 +36,12 @@ func (r *runtime) invokeRoundModel(
 		MaxTokens:       copyInt(configuration.MaxTokens),
 		ReasoningEffort: configuration.selection.ReasoningEffort,
 	}
-	request, err := r.compactRequest(ctx, sessionID, request)
+	request, err := r.compactRequest(ctx, configuration.rootSessionID, sessionID, request)
 	if err != nil {
 		return agent.Round{}, err
 	}
 	invocation := cloneModelRequest(request)
-	response, err := r.invokeModel(ctx, cloneModelRequest(request), handler)
+	response, err := r.invokeModel(ctx, configuration.rootSessionID, sessionID, cloneModelRequest(request), handler)
 	if err != nil {
 		executionRecorderFrom(ctx).recordFailure(err, agent.FailureModel, &index, "")
 		return agent.Round{}, err
@@ -246,7 +246,6 @@ func (r *runtime) executeTool(ctx context.Context, invocation tool.Invocation) (
 	correlation.ToolCallID = call.ID
 	ctx = observation.WithCorrelation(ctx, correlation)
 	recorder := executionRecorderFrom(ctx)
-	recorder.accounting.toolStarted()
 	recorder.emit(ctx, observation.ToolStarted{Call: call})
 	defer func() {
 		if recovered := recover(); recovered != nil {

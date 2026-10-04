@@ -28,7 +28,7 @@ type tracedModel struct {
 	responses []model.Response
 }
 
-func (m *tracedModel) Complete(context.Context, model.Request) (model.Response, error) {
+func (m *tracedModel) Complete(context.Context, session.ID, session.ID, model.Request) (model.Response, error) {
 	*m.trace = append(*m.trace, "model")
 	response := m.responses[0]
 	m.responses = m.responses[1:]

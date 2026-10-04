@@ -95,10 +95,12 @@ decision mutations, permits only a valid text/content-only short-circuit result,
 and rejects repeated terminal execution or rewriting a result after it has been
 committed. See [round.go](round.go) for the precise extension contract.
 
-`Run` and `Stream` return `agent.Execution`, including execution outcome/accounting
-and a canonical result on success. Accounting distinguishes complete, partial,
-and unavailable provider-reported token usage; a missing usage report is not
-treated as an observed zero-token call.
+`Run` and `Stream` return `agent.Execution`, including termination status, duration,
+failure details, and a canonical result on success. Provider tokens are settled at Session
+level by ModelRuntime. `Turn.RootSessionID` defaults to current for ordinary
+entry points and is inherited unchanged by nested children and compaction.
+Followup entry points must pass the actual main Session; ordinary forks use
+their own new identity for both root and current.
 
 `Stream` requires a handler. With no model streaming capability it uses complete
 invocation. It also falls back to complete when streaming returns
@@ -201,7 +203,7 @@ See [runtime.go](runtime.go), [execute.go](execute.go), [round.go](round.go),
 [history.go](history.go), [stream.go](stream.go),
 [sessiontree/config.go](sessiontree/config.go), and
 [observation/hub.go](observation/hub.go). Run `go test ./...` in this module.
-Existing round, execution/accounting, stream, recovery, setup, and child-tree
+Existing round, execution outcome, stream, recovery, setup, and child-tree
 tests cover these contracts, including [round_contract_test.go](round_contract_test.go),
 [subagent_runtime_test.go](subagent_runtime_test.go), and
 [sessiontree/tree_test.go](sessiontree/tree_test.go).

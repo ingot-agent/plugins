@@ -33,7 +33,10 @@ function visibleParts(message: Message, index: number) {
 }
 watch(noteId, id => {
   question.value = id ? readPreference('followup-draft.' + id, '') : ''
-  if (id) void runtime.loadHistory(id)
+  if (id) {
+    void runtime.loadSession(id)
+    void runtime.loadHistory(id)
+  }
 }, { immediate: true })
 watch(question, value => { if (noteId.value) savePreference('followup-draft.' + noteId.value, value) })
 function fitInput() {

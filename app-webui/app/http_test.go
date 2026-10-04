@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -136,6 +137,41 @@ func (s *testStore) Get(_ context.Context, id session.ID) (session.Metadata, err
 	}
 	return session.Metadata{}, session.ErrNotFound
 }
+
+func (s *testStore) AddTotalTokens(ctx context.Context, targets []session.ID, delta int64) ([]session.Metadata, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if len(targets) == 0 || delta < 0 {
+		return nil, errors.New("invalid token settlement")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	seen := make(map[session.ID]bool)
+	result := make([]session.Metadata, 0, len(targets))
+	for _, id := range targets {
+		if seen[id] {
+			continue
+		}
+		item, ok := s.findLocked(id)
+		if !ok {
+			return nil, session.ErrNotFound
+		}
+		if item.TotalToken > math.MaxInt64-delta {
+			return nil, errors.New("token overflow")
+		}
+		seen[id] = true
+		item.TotalToken += delta
+		result = append(result, item)
+	}
+	for i := range s.items {
+		if seen[s.items[i].ID] {
+			s.items[i].TotalToken += delta
+		}
+	}
+	return result, nil
+}
+
 func (s *testStore) Archive(_ context.Context, id session.ID) (session.Metadata, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
