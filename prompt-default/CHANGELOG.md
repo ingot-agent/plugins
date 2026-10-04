@@ -6,6 +6,9 @@ All notable changes to this plugin are documented in this file.
 
 ### Changed
 
+- Always include a built-in source explanation for plugin-input user messages,
+  even with empty configuration. Count it and its separators in the system byte
+  budget without prescribing instruction priority or model response behavior.
 - Apply prompt content and limit updates to the running renderer immediately
   and return `restart_required:false`.
 - Expose configuration as `/prompt-default config` using a stable plugin Group and local operation Name.

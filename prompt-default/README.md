@@ -28,11 +28,11 @@ max_system_bytes = 262144
 | --- | --- | --- |
 | `system_prompt` | empty string | Static text preceding contributor blocks |
 | `max_block_bytes` | 64 KiB | Maximum content size of one contributed block |
-| `max_system_bytes` | 256 KiB | Maximum combined system content including headings and separators |
+| `max_system_bytes` | 256 KiB | Maximum combined system content including the built-in plugin-input notice, headings and separators |
 
 Zero numeric limits select defaults; negatives are invalid. The configured text
 must be UTF-8 and fit within `max_system_bytes`. Missing configuration is valid
-and starts with empty system text. Malformed TOML and unknown fields fail startup.
+and starts with empty configured system text. Malformed TOML and unknown fields fail startup.
 
 The `config` operation in group `prompt-default` (`/prompt-default config`) accepts
 `{}` with no extra input fields and collects these three settings interactively.
@@ -47,13 +47,14 @@ return `ErrConfigConflict`. Direct edits to the file are read on construction.
 Each receives its own cloned request, so one contributor cannot alter another's
 input. The resulting message sequence is:
 
-1. One system message when configured text or contributed blocks exist.
+1. One system message containing configured text, the built-in plugin-input
+   source notice, and contributor blocks, even when configuration is empty.
 2. The supplied history, in its existing order.
 3. One user message containing the current input, including valid attachments.
 
 Each block is prefixed with `## <block name>\n`; adjacent blocks are separated by
-two newlines. Configured system text is also separated from the first block by
-two newlines. Block names must be nonempty UTF-8 and contain no CR/LF. Blocks
+two newlines. Configured text, the built-in notice, and the first block are
+separated by two newlines. Block names must be nonempty UTF-8 and contain no CR/LF. Blocks
 remain in contributor order; names are not used to sort or deduplicate them.
 
 Byte limits count UTF-8 text bytes and inline media bytes. URI/asset references do
@@ -68,6 +69,13 @@ This renderer validates content and composes messages; it does not implement
 template substitution, load workspace files itself, truncate history, count
 tokens, or enforce model-specific role ordering. Such behavior belongs to
 contributors, the agent, the compactor, or the provider.
+
+The built-in notice only identifies messages enclosed in
+`<system source="plugin" plugin="...">...</system>` as plugin-supplied inputs.
+It prescribes no business meaning, instruction priority, or model execution or
+acknowledgement behavior. Users and plugin authors define those rules. The
+notice is always included and charged to `max_system_bytes`; a smaller budget
+can therefore fail Render even with empty configured text.
 
 ## Source and checks
 

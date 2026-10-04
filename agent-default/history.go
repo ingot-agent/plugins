@@ -4,11 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"encoding/xml"
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"unicode/utf8"
 
+	"github.com/ingot-agent/sdk/agent"
 	"github.com/ingot-agent/sdk/content"
 	"github.com/ingot-agent/sdk/model"
 	"github.com/ingot-agent/sdk/session"
@@ -125,9 +128,27 @@ func (r *runtime) loadHistory(ctx context.Context, id session.ID) ([]model.Messa
 		return nil, err
 	}
 	messages := make([]model.Message, 0, len(entries))
+	var pendingPluginInputs []model.Message
+	var round *trailingRound
 	for i, entry := range entries {
 		if err := ctx.Err(); err != nil {
 			return nil, err
+		}
+		if entry.Kind == agent.PluginInputKind {
+			input, err := agent.DecodePluginInput(entry)
+			if err != nil {
+				return nil, fmt.Errorf("entry %d: %w", i, err)
+			}
+			message, err := pluginInputMessage(input)
+			if err != nil {
+				return nil, fmt.Errorf("entry %d: %w", i, err)
+			}
+			if round != nil {
+				pendingPluginInputs = append(pendingPluginInputs, message)
+			} else {
+				messages = append(messages, message)
+			}
+			continue
 		}
 		if entry.Kind != agentMessageKind {
 			continue
@@ -139,12 +160,35 @@ func (r *runtime) loadHistory(ctx context.Context, id session.ID) ([]model.Messa
 		if err != nil {
 			return nil, fmt.Errorf("entry %d: %w", i, err)
 		}
+		round, err = inspectHistoryMessage(round, message, len(messages))
+		if err != nil {
+			return nil, fmt.Errorf("entry %d: %w", i, err)
+		}
 		messages = append(messages, message)
-	}
-	if _, err := inspectHistory(messages); err != nil {
-		return nil, err
+		if round == nil && len(pendingPluginInputs) != 0 {
+			messages = append(messages, pendingPluginInputs...)
+			pendingPluginInputs = nil
+		}
 	}
 	return messages, nil
+}
+
+func pluginInputMessage(input agent.PluginInput) (model.Message, error) {
+	var text strings.Builder
+	encoder := xml.NewEncoder(&text)
+	start := xml.StartElement{Name: xml.Name{Local: "system"}, Attr: []xml.Attr{
+		{Name: xml.Name{Local: "source"}, Value: "plugin"},
+		{Name: xml.Name{Local: "plugin"}, Value: input.Plugin},
+	}}
+	for _, token := range []xml.Token{start, xml.CharData("\n" + input.Text + "\n"), start.End()} {
+		if err := encoder.EncodeToken(token); err != nil {
+			return model.Message{}, fmt.Errorf("format plugin input: %w", err)
+		}
+	}
+	if err := encoder.Flush(); err != nil {
+		return model.Message{}, fmt.Errorf("format plugin input: %w", err)
+	}
+	return model.Message{Role: model.RoleUser, Content: content.FromText(text.String())}, nil
 }
 
 func (r *runtime) recoverTrailingRound(ctx context.Context, id session.ID, history []model.Message) ([]model.Message, error) {
@@ -158,46 +202,54 @@ func (r *runtime) recoverTrailingRound(ctx context.Context, id session.ID, histo
 	if round == nil || round.matched == len(round.calls) {
 		return history, nil
 	}
-	result := cloneMessages(history)
 	for _, call := range round.calls[round.matched:] {
 		message := model.Message{Role: model.RoleTool, Content: content.FromText(interruptedContent), ToolCallID: call.ID}
-		message, err = r.appendMessage(ctx, id, message)
+		_, err = r.appendMessage(ctx, id, message)
 		if err != nil {
 			return nil, fmt.Errorf("recover tool call %q: %w", call.ID, err)
 		}
-		result = append(result, message)
 	}
-	return result, nil
+	// Rebuild from durable entries so inputs deferred inside this round are kept.
+	return r.loadHistory(ctx, id)
 }
 
 func inspectHistory(messages []model.Message) (*trailingRound, error) {
 	var round *trailingRound
 	for i, message := range messages {
-		if err := validateStoredMessage(message); err != nil {
-			return nil, fmt.Errorf("message %d: %w", i, err)
+		var err error
+		round, err = inspectHistoryMessage(round, message, i)
+		if err != nil {
+			return nil, err
 		}
-		if round != nil && round.matched < len(round.calls) {
-			if message.Role != model.RoleTool {
-				return nil, fmt.Errorf("message %d follows incomplete tool round: %w", i, ErrCorruptHistory)
-			}
-			expected := round.calls[round.matched]
-			if message.ToolCallID != expected.ID {
-				return nil, fmt.Errorf("message %d tool_call_id %q want %q: %w", i, message.ToolCallID, expected.ID, ErrCorruptHistory)
-			}
-			round.matched++
-			continue
-		}
-		if message.Role == model.RoleTool {
-			return nil, fmt.Errorf("message %d has no pending tool call: %w", i, ErrCorruptHistory)
-		}
-		if message.Role == model.RoleAssistant && len(message.ToolCalls) > 0 {
-			round = &trailingRound{calls: cloneCalls(message.ToolCalls)}
-		}
-	}
-	if round != nil && round.matched == len(round.calls) {
-		return nil, nil
 	}
 	return round, nil
+}
+
+func inspectHistoryMessage(round *trailingRound, message model.Message, i int) (*trailingRound, error) {
+	if err := validateStoredMessage(message); err != nil {
+		return nil, fmt.Errorf("message %d: %w", i, err)
+	}
+	if round != nil {
+		if message.Role != model.RoleTool {
+			return nil, fmt.Errorf("message %d follows incomplete tool round: %w", i, ErrCorruptHistory)
+		}
+		expected := round.calls[round.matched]
+		if message.ToolCallID != expected.ID {
+			return nil, fmt.Errorf("message %d tool_call_id %q want %q: %w", i, message.ToolCallID, expected.ID, ErrCorruptHistory)
+		}
+		round.matched++
+		if round.matched == len(round.calls) {
+			return nil, nil
+		}
+		return round, nil
+	}
+	if message.Role == model.RoleTool {
+		return nil, fmt.Errorf("message %d has no pending tool call: %w", i, ErrCorruptHistory)
+	}
+	if message.Role == model.RoleAssistant && len(message.ToolCalls) > 0 {
+		return &trailingRound{calls: cloneCalls(message.ToolCalls)}, nil
+	}
+	return nil, nil
 }
 
 func validateStoredMessage(message model.Message) error {

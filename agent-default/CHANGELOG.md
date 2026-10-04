@@ -6,6 +6,11 @@ All notable changes to this plugin are documented in this file.
 
 ### Added
 
+- Decode versioned `agent.plugin_input` records from Session storage and project
+  escaped, source-tagged user messages. Defer inputs inside tool rounds until
+  their results are complete, and rebuild history after interrupted recovery.
+  Appends do not change the current Turn snapshot or define business priority.
+  Requires the unreleased SDK PluginInput API during branch development.
 - Enable three built-in child types (`coder`, `explorer`, `reviewer`) when no
   `subagents.toml` exists and the composed tool runtime includes
   `submit_agent_result`; filter their tool allowlists by installed tools.

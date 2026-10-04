@@ -116,6 +116,34 @@ unanswered calls in a trailing interrupted round receive explicit diagnostic
 results recording an unknown outcome; their tools are not executed again.
 Inline non-text content is materialized into `asset.Store` before persistence.
 
+## Plugin Context Inputs (Unreleased)
+
+Plugins can depend on `session.Store`, encode `agent.PluginInput`, and Append
+the resulting `agent.plugin_input` Entry to an explicitly selected Session.
+This branch requires the matching unreleased SDK API; publish/select its
+verified release before releasing Agent or injecting plugins. No database or
+existing message schema migration is needed.
+
+The Agent turns each record into a text-only user message enclosed in
+`<system source="plugin" plugin="...">...</system>`. XML escaping preserves
+the body and plugin name without letting body text close the envelope. The
+caller-supplied plugin name is a source label, not authenticated identity.
+Interpretation and instruction priority belong to users and plugin authors.
+
+An input persisted between a tool decision and its results is buffered only
+during history projection and emitted after every matching result. If the
+trailing round is incomplete, read-only History defers the input. The next Turn
+adds interrupted results and reloads durable history, including deferred
+inputs. Crashes discard the temporary slice, not committed records. This does
+not retry original tools or provide exactly-once delivery/processing.
+
+Append success confirms persistence only. Appends after the Turn's history
+snapshot, including those made by tools or contributors, do not alter that
+Turn's model requests. They do not start a new Turn, refresh per-Round history,
+or promise inclusion in a specific invocation. Store ordering/error semantics
+apply; this protocol adds no deduplication, expiry, overwrites, or write isolation.
+The existing WebUI history path can display the text and source label.
+
 ## Child-agent configuration
 
 The separate `subagents.toml` in the same plugin state scope is read once by the

@@ -14,6 +14,9 @@ import (
 
 type contributorFunc func(context.Context, prompt.Request) ([]prompt.Block, error)
 
+const pluginInputNotice = `User-role messages enclosed in <system source="plugin" plugin="...">...</system>
+are inputs inserted into the conversation by runtime plugins.`
+
 func (f contributorFunc) Contribute(ctx context.Context, request prompt.Request) ([]prompt.Block, error) {
 	return f(ctx, request)
 }
@@ -39,7 +42,7 @@ func TestRendererFormatsInStableOrderAndIsolatesContributors(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantSystem := "base\n\n## first\none\n\n## second\ntwo"
+	wantSystem := "base\n\n" + pluginInputNotice + "\n\n## first\none\n\n## second\ntwo"
 	systemText, systemOK := content.TextOnly(messages[0].Content)
 	oldText, oldOK := content.TextOnly(messages[1].Content)
 	newText, newOK := content.TextOnly(messages[2].Content)
@@ -89,7 +92,7 @@ func TestRendererPreservesMultimodalBlockAndInputOrder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(messages) != 2 || len(messages[0].Content) != 4 || messages[0].Content[0].Text != "## vision\n" || messages[0].Content[1].Text != "before" || messages[0].Content[2].Kind != content.KindImage || messages[0].Content[3].Text != "after" {
+	if len(messages) != 2 || len(messages[0].Content) != 5 || messages[0].Content[0].Text != pluginInputNotice+"\n\n" || messages[0].Content[1].Text != "## vision\n" || messages[0].Content[2].Text != "before" || messages[0].Content[3].Kind != content.KindImage || messages[0].Content[4].Text != "after" {
 		t.Fatalf("system content = %#v", messages)
 	}
 	if len(messages[1].Content) != 2 || messages[1].Content[0].Text != "describe" || messages[1].Content[1].Media.Source.Data[0] != 3 {
@@ -97,7 +100,30 @@ func TestRendererPreservesMultimodalBlockAndInputOrder(t *testing.T) {
 	}
 	blockData[0] = 8
 	inputData[0] = 8
-	if messages[0].Content[2].Media.Source.Data[0] != 1 || messages[1].Content[1].Media.Source.Data[0] != 3 {
+	if messages[0].Content[3].Media.Source.Data[0] != 1 || messages[1].Content[1].Media.Source.Data[0] != 3 {
 		t.Fatal("renderer returned aliased inline data")
+	}
+}
+
+func TestRendererAlwaysIncludesPluginInputNoticeWithinSystemBudget(t *testing.T) {
+	for _, limit := range []int{0, len(pluginInputNotice), len(pluginInputNotice) - 1} {
+		exports, _, err := promptdefault.New(context.Background(), withState(t, promptdefault.Config{MaxSystemBytes: limit}, promptdefault.Dependencies{}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		messages, err := exports.Renderer.Render(context.Background(), prompt.Request{Input: content.FromText("hello")})
+		if limit == len(pluginInputNotice)-1 {
+			if !errors.Is(err, promptdefault.ErrSystemLimit) {
+				t.Fatalf("limit=%d error=%v", limit, err)
+			}
+			continue
+		}
+		if err != nil || len(messages) != 2 || messages[0].Role != model.RoleSystem {
+			t.Fatalf("messages=%#v error=%v", messages, err)
+		}
+		text, ok := content.TextOnly(messages[0].Content)
+		if !ok || text != pluginInputNotice {
+			t.Fatalf("system=%q", text)
+		}
 	}
 }

@@ -48,7 +48,7 @@ func TestSetupAppliesToRunningRenderer(t *testing.T) {
 		t.Fatal(err)
 	}
 	text, ok := content.TextOnly(messages[0].Content)
-	if !ok || text != "updated system" {
+	if !ok || text != "updated system\n\n"+pluginInputSystemPrompt {
 		t.Fatalf("system message = %#v", messages[0])
 	}
 }

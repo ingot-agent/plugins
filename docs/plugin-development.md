@@ -141,6 +141,39 @@ source publishes new configured providers. See the
 concurrency and duplicate-name rules. Static graphs do not imply that every
 capability's configuration is frozen until restart.
 
+## Appending Plugin Context (Unreleased)
+
+With an SDK revision containing `agent.PluginInput`, declare a `session.Store`
+dependency and pass the target Session ID explicitly from your invocation.
+Append a record without depending on the Agent implementation:
+
+```go
+entry, err := agent.EncodePluginInput(agent.PluginInput{
+    Plugin: "example.index",
+    Text:   "context supplied by this plugin",
+})
+if err != nil {
+    return err
+}
+return deps.Store.Append(ctx, invocation.Scope.SessionID, entry)
+```
+
+The supporting Agent projects this record to a user message with an escaped
+`<system source="plugin" plugin="...">...</system>` envelope. Inputs inside tool
+rounds are deferred until the matching results are complete or recovered.
+Committed records survive restarts; the temporary projection buffer is rebuilt.
+
+Append success means storage only, with no guaranteed Turn/Round inclusion or
+automatic model invocation. A running Turn keeps its existing history snapshot.
+Do not retry blindly after an error; the Store may have committed. There is no
+deduplication, per-plugin write isolation, or authenticated source identity.
+Text must be nonempty XML-compatible UTF-8 and at most 64 KiB. Content semantics
+and instruction priority are defined by users and plugin authors.
+
+This feature is unreleased. Compose the local SDK and supporting Agent/Prompt
+for development; publish the SDK and select its verified version in consumers
+before release. An older Agent ignores the new Entry Kind.
+
 ## Local composition and verification
 
 Run module checks in isolation with the same settings as CI:
