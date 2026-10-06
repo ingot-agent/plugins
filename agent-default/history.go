@@ -4,14 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"encoding/xml"
 	"errors"
 	"fmt"
 	"io"
-	"strings"
 	"unicode/utf8"
 
-	"github.com/ingot-agent/sdk/agent"
 	"github.com/ingot-agent/sdk/content"
 	"github.com/ingot-agent/sdk/model"
 	"github.com/ingot-agent/sdk/session"
@@ -134,23 +131,19 @@ func (r *runtime) loadHistory(ctx context.Context, id session.ID) ([]model.Messa
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		if entry.Kind == agent.PluginInputKind {
-			input, err := agent.DecodePluginInput(entry)
+		if entry.Kind != agentMessageKind {
+			message, recognized, err := r.projectPluginInput(entry)
 			if err != nil {
 				return nil, fmt.Errorf("entry %d: %w", i, err)
 			}
-			message, err := pluginInputMessage(input)
-			if err != nil {
-				return nil, fmt.Errorf("entry %d: %w", i, err)
+			if !recognized {
+				continue
 			}
 			if round != nil {
 				pendingPluginInputs = append(pendingPluginInputs, message)
 			} else {
 				messages = append(messages, message)
 			}
-			continue
-		}
-		if entry.Kind != agentMessageKind {
 			continue
 		}
 		if entry.Version != agentMessageVersion {
@@ -171,24 +164,6 @@ func (r *runtime) loadHistory(ctx context.Context, id session.ID) ([]model.Messa
 		}
 	}
 	return messages, nil
-}
-
-func pluginInputMessage(input agent.PluginInput) (model.Message, error) {
-	var text strings.Builder
-	encoder := xml.NewEncoder(&text)
-	start := xml.StartElement{Name: xml.Name{Local: "system"}, Attr: []xml.Attr{
-		{Name: xml.Name{Local: "source"}, Value: "plugin"},
-		{Name: xml.Name{Local: "plugin"}, Value: input.Plugin},
-	}}
-	for _, token := range []xml.Token{start, xml.CharData("\n" + input.Text + "\n"), start.End()} {
-		if err := encoder.EncodeToken(token); err != nil {
-			return model.Message{}, fmt.Errorf("format plugin input: %w", err)
-		}
-	}
-	if err := encoder.Flush(); err != nil {
-		return model.Message{}, fmt.Errorf("format plugin input: %w", err)
-	}
-	return model.Message{Role: model.RoleUser, Content: content.FromText(text.String())}, nil
 }
 
 func (r *runtime) recoverTrailingRound(ctx context.Context, id session.ID, history []model.Message) ([]model.Message, error) {

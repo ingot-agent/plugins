@@ -46,6 +46,7 @@ func (a *application) routes() http.Handler {
 	mux.HandleFunc("POST /api/interactions/{id}/response", a.handleInteractionResponse)
 
 	mux.HandleFunc("POST /api/assets", a.handleUploadAsset)
+	mux.HandleFunc("POST /api/files/select", a.handleSelectFiles)
 	mux.HandleFunc("GET /api/assets/{id}", a.handleReadAsset)
 	mux.HandleFunc("POST /api/workspace/select", a.handleSelectWorkspace)
 	mux.HandleFunc("GET /api/operations", func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, http.StatusOK, a.operations.List()) })
@@ -74,6 +75,7 @@ func (a *application) handleState(w http.ResponseWriter, r *http.Request) {
 		Cursor:               cursor,
 		Agent:                appbackend.AgentState{Capabilities: a.agent.Capabilities()},
 		Assets:               appbackend.AssetState{Available: a.assets != nil, MaxBytes: a.config.MaxAssetBytes},
+		Files:                appbackend.AssetState{Available: a.filePicker != nil && a.pluginInputs != nil, MaxBytes: a.config.MaxAssetBytes},
 		Workspace:            appbackend.WorkspaceState{DefaultPath: a.defaultWorkspace},
 		Sessions:             sessions,
 		Operations:           a.operations.List(),
@@ -204,16 +206,16 @@ func (a *application) handleCreateTurn(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusBadRequest, "session_id_required", "sessionId is required")
 		return
 	}
-	attachments := make([]content.Attachment, len(request.Attachments))
-	for i, attachment := range request.Attachments {
-		kind := map[string]content.Kind{"image": content.KindImage, "audio": content.KindAudio, "video": content.KindVideo, "file": content.KindFile}[attachment.Kind]
-		attachments[i] = content.Attachment{Kind: kind, Media: content.Media{MIMEType: attachment.MIMEType, Name: attachment.Name, Source: content.Source{Kind: content.SourceAsset, Asset: asset.Reference{ID: attachment.AssetID}}}}
-	}
-	if err := content.ValidateAttachments(attachments); err != nil {
+	attachments, fileNotice, err := a.prepareAttachments(r.Context(), request.Attachments)
+	if err != nil {
 		writeError(w, err)
 		return
 	}
-	_, err := a.ensureWorkspace(r.Context(), session.ID(request.SessionID))
+	if fileNotice != nil && a.pluginInputs == nil {
+		writeError(w, fmt.Errorf("file notices require a plugin input writer: %w", appbackend.ErrCapabilityUnavailable))
+		return
+	}
+	_, err = a.ensureWorkspace(r.Context(), session.ID(request.SessionID))
 	if err != nil {
 		writeError(w, err)
 		return
@@ -225,13 +227,22 @@ func (a *application) handleCreateTurn(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
+	if fileNotice != nil {
+		if err := a.pluginInputs.Append(r.Context(), session.ID(request.SessionID), *fileNotice); err != nil {
+			a.sessionMu.Unlock()
+			writeError(w, fmt.Errorf("append file notice: %w", err))
+			return
+		}
+	}
 	id, err := a.turns.Start(agent.Turn{RootSessionID: root, SessionID: session.ID(request.SessionID), Input: request.Input, Attachments: attachments})
 	a.sessionMu.Unlock()
 	if err != nil {
 		writeError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusAccepted, map[string]string{"id": id})
+	writeJSON(w, http.StatusAccepted, struct {
+		ID string `json:"id"`
+	}{ID: id})
 }
 
 func (a *application) handleCancelTurn(w http.ResponseWriter, r *http.Request) {
@@ -630,6 +641,14 @@ func apiError(err error) (int, appbackend.ErrorDetail) {
 		status, code = http.StatusServiceUnavailable, "workspace_picker_unavailable"
 	case errors.Is(err, errWorkspacePickerFailed):
 		status, code = http.StatusInternalServerError, "workspace_picker_failed"
+	case errors.Is(err, errFilePickerUnavailable):
+		status, code = http.StatusServiceUnavailable, "file_picker_unavailable"
+	case errors.Is(err, errFilePickerFailed):
+		status, code = http.StatusInternalServerError, "file_picker_failed"
+	case errors.Is(err, errLocalFileTooLarge):
+		status, code = http.StatusRequestEntityTooLarge, "file_too_large"
+	case errors.Is(err, errInvalidLocalFile):
+		status, code = http.StatusBadRequest, "invalid_local_file"
 	case errors.Is(err, context.Canceled):
 		status, code = http.StatusRequestTimeout, "canceled"
 	case errors.Is(err, context.DeadlineExceeded):

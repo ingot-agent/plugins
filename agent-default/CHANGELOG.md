@@ -6,11 +6,14 @@ All notable changes to this plugin are documented in this file.
 
 ### Added
 
-- Decode versioned `agent.plugin_input` records from Session storage and project
-  escaped, source-tagged user messages. Defer inputs inside tool rounds until
+- Inject the optional SDK `agent.PluginInputProjector` capability and delegate
+  record recognition/projection to its provider. Defer inputs inside tool rounds until
   their results are complete, and rebuild history after interrupted recovery.
-  Appends do not change the current Turn snapshot or define business priority.
-  Requires the unreleased SDK PluginInput API during branch development.
+  Read plugin entries at Turn start. Subsequent rounds retain that context;
+  later appends are read in a future Turn. Ordinary `agent.message`
+  records remain version 1; plugins own input association through Store Appends.
+  Requires SDK v0.2.16 and a provider such as `context.input`; the Agent owns no
+  plugin-input wire format.
 - Enable three built-in child types (`coder`, `explorer`, `reviewer`) when no
   `subagents.toml` exists and the composed tool runtime includes
   `submit_agent_result`; filter their tool allowlists by installed tools.
@@ -23,8 +26,8 @@ All notable changes to this plugin are documented in this file.
 
 ### Changed
 
-- Require SDK v0.2.15 for the published Session accounting contracts and
-  validate independently of local workspace replacements.
+- Require SDK v0.2.16 for the published plugin-input and Session accounting
+  contracts, and validate independently of local workspace replacements.
 
 - Forward root/current Session IDs through model and compaction calls. Nested
   children inherit the topmost token root independently of lifecycle ownership.

@@ -77,6 +77,7 @@ type Dependencies struct {
 	Store             session.Store
 	Assets            asset.Store
 	Prompt            prompt.Renderer
+	PluginInputs      ingotabi.Optional[agent.PluginInputProjector]
 	Compactor         ingotabi.Optional[contextwindow.Compactor]
 	Interceptors      []agent.Interceptor
 	RoundInterceptors []agent.RoundInterceptor
@@ -99,6 +100,7 @@ type runtime struct {
 	store             session.Store
 	assets            asset.Store
 	prompt            prompt.Renderer
+	pluginInputs      agent.PluginInputProjector
 	compactor         ingotabi.Optional[contextwindow.Compactor]
 	interceptors      []agent.Interceptor
 	roundInterceptors []agent.RoundInterceptor
@@ -138,6 +140,9 @@ func New(ctx context.Context, deps Dependencies) (Exports, ingotabi.Cleanup, err
 	if deps.Resolver.Valid && isNil(deps.Resolver.Value) {
 		return Exports{}, nil, fmt.Errorf("resolver dependency is typed nil: %w", ErrInvalidConfig)
 	}
+	if deps.PluginInputs.Valid && isNil(deps.PluginInputs.Value) {
+		return Exports{}, nil, fmt.Errorf("plugin input projector is typed nil: %w", ErrInvalidConfig)
+	}
 	normalized, err := normalizeConfig(cfg)
 	if err != nil {
 		return Exports{}, nil, err
@@ -167,6 +172,9 @@ func New(ctx context.Context, deps Dependencies) (Exports, ingotabi.Cleanup, err
 		gates: newGateManager(), resolver: deps.Resolver,
 	}
 	instance.config.Store(&normalized)
+	if deps.PluginInputs.Valid {
+		instance.pluginInputs = deps.PluginInputs.Value
+	}
 	var cleanup ingotabi.Cleanup
 	if !isNil(deps.Control) {
 		if err := deps.Control.ValidateTools(deps.Tools.Definitions()); err != nil {

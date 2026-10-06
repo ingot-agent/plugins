@@ -38,6 +38,7 @@ type Dependencies struct {
 	Workspaces        workspace.Manager
 	WorkspaceResolver workspace.Resolver
 	Assets            ingotabi.Optional[asset.Store]
+	PluginInputs      ingotabi.Optional[agent.PluginInputWriter]
 	Operations        []operation.Operation
 	ModelSelection    ingotabi.Optional[modelselection.Controller]
 	Invocation        invocation.Invocation
@@ -58,6 +59,7 @@ type application struct {
 	modelSelection       modelselection.Controller
 	operationInvocations *operationRegistry
 	assets               asset.Store
+	pluginInputs         agent.PluginInputWriter
 	server               *http.Server
 	listener             net.Listener
 	serveDone            chan struct{}
@@ -66,6 +68,7 @@ type application struct {
 	workspacePickerMu    sync.Mutex
 	defaultWorkspace     string
 	workspacePicker      workspacePicker
+	filePicker           filePicker
 }
 
 // New loads this Plugin's own configuration from its state scope, validates
@@ -110,6 +113,9 @@ func New(ctx context.Context, deps Dependencies) (Exports, ingotabi.Cleanup, err
 	if deps.ModelSelection.Valid && isNil(deps.ModelSelection.Value) {
 		return Exports{}, nil, fmt.Errorf("nil model selection controller: %w", appbackend.ErrInvalidConfig)
 	}
+	if deps.PluginInputs.Valid && isNil(deps.PluginInputs.Value) {
+		return Exports{}, nil, fmt.Errorf("nil plugin input writer: %w", appbackend.ErrInvalidConfig)
+	}
 	if deps.Invocation.Mode() == invocation.ModeCheck {
 		return Exports{}, nil, nil
 	}
@@ -129,6 +135,7 @@ func New(ctx context.Context, deps Dependencies) (Exports, ingotabi.Cleanup, err
 		serveDone:        make(chan struct{}),
 		defaultWorkspace: defaultWorkspace,
 		workspacePicker:  nativeWorkspacePicker{},
+		filePicker:       nativeFilePicker{},
 	}
 	instance.turns = newTurnRegistry(runCtx, agentController, deps.Backend.Events())
 	if deps.ModelSelection.Valid {
@@ -137,6 +144,9 @@ func New(ctx context.Context, deps Dependencies) (Exports, ingotabi.Cleanup, err
 	instance.operationInvocations = newOperationRegistry(runCtx, operations, deps.Backend.Interactions(), deps.Backend.Events(), normalized.OperationRetention)
 	if deps.Assets.Valid {
 		instance.assets = deps.Assets.Value
+	}
+	if deps.PluginInputs.Valid {
+		instance.pluginInputs = deps.PluginInputs.Value
 	}
 	instance.server = &http.Server{
 		Handler:           instance.routes(),

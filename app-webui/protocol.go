@@ -7,12 +7,15 @@ import (
 	"github.com/ingot-agent/sdk/interaction"
 )
 
-// Attachment is the asset-first browser attachment DTO.
+// Attachment refers to a host-local file selected by the native picker.
+// Images can additionally carry an immutable asset for model input and preview.
 type Attachment struct {
 	Kind     string `json:"kind"`
 	MIMEType string `json:"mimeType,omitempty"`
 	Name     string `json:"name,omitempty"`
-	AssetID  string `json:"assetId"`
+	AssetID  string `json:"assetId,omitempty"`
+	Path     string `json:"path,omitempty"`
+	Size     uint64 `json:"size,omitempty"`
 }
 
 // ErrorResponse is the stable HTTP error envelope.
@@ -83,6 +86,7 @@ type StateSnapshot struct {
 	Cursor               uint64                `json:"cursor"`
 	Agent                AgentState            `json:"agent"`
 	Assets               AssetState            `json:"assets"`
+	Files                AssetState            `json:"files"`
 	Workspace            WorkspaceState        `json:"workspace"`
 	Sessions             []Session             `json:"sessions"`
 	Operations           []OperationDefinition `json:"operations"`

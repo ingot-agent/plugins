@@ -22,7 +22,7 @@ import JsonBlock from '../components/JsonBlock.vue'
 import WorkspaceHeader from '../components/WorkspaceHeader.vue'
 import FollowupNote from '../components/FollowupNote.vue'
 import { readPreference, savePreference } from '../theme'
-import { hasVisibleMessageContent, shouldShowHistoryMessage, shouldShowTurnByline } from './conversationDisplay'
+import { displayMessage, hasVisibleMessageContent, shouldShowHistoryMessage, shouldShowTurnByline } from './conversationDisplay'
 defineEmits<{ navigation: []; pending: []; operation: [operation: Operation, sessionId: string] }>()
 const runtime = useRuntime()
 const route = useRoute()
@@ -104,12 +104,16 @@ const transcript = computed(() => {
   }
   appendTurns(0)
   messages.value.forEach((message, index) => {
-    if (message.role !== 'tool' && shouldShowHistoryMessage(message, showToolCalls.value)) entries.push({ id: 'history-' + index, kind: 'message', message, index })
+    const displayed = displayMessage(message, messages.value[index - 1])
+    if (displayed.role !== 'tool' && shouldShowHistoryMessage(displayed, showToolCalls.value)) entries.push({ id: 'history-' + index, kind: 'message', message: displayed, index })
     appendTurns(index + 1)
   })
   for (const turn of liveTurns.value.filter(turn => !turn.reconciled)) {
     const local = runtime.optimistic[turn.id]
-    if (local) entries.push({ id: 'local-' + turn.id, kind: 'message', message: local.message, index: -1 })
+    if (local) {
+      const message = local.message
+      if (shouldShowHistoryMessage(message, showToolCalls.value)) entries.push({ id: 'local-' + turn.id, kind: 'message', message, index: -1 })
+    }
     entries.push({ id: turn.id, kind: 'turn', turn })
   }
   return entries
@@ -401,7 +405,7 @@ onBeforeUnmount(() => { media.removeEventListener('change', resize); window.remo
           <div v-if="runtime.historyErrors[sessionId]" class="error-banner"><p>{{ runtime.historyErrors[sessionId] }}</p><button class="text-button" @click="runtime.loadHistory(sessionId)">{{ t('retry') }}</button></div>
           <template v-for="entry in transcript" :key="entry.id">
             <article v-if="entry.kind === 'message'" class="message" :class="['message-' + entry.message.role, { 'message-with-tools': showToolCalls && entry.message.toolCalls?.length }]" :data-message-index="entry.message.role === 'assistant' ? entry.index : undefined">
-              <div v-if="hasVisibleMessageContent(entry.message)" class="message-content"><ContentParts :parts="entry.message.content" /></div>
+              <div v-if="entry.message.role === 'user' || hasVisibleMessageContent(entry.message)" class="message-content" :class="{ 'empty-input': entry.message.role === 'user' && !hasVisibleMessageContent(entry.message) }"><ContentParts :parts="entry.message.content" /></div>
               <template v-if="showToolCalls"><ToolCard v-for="call in entry.message.toolCalls" :key="call.id" :name="call.name" :arguments="call.arguments" :content="toolResults.get(call.id)?.content" /></template>
               <button v-if="entry.message.role === 'assistant' && turnCopies.has(entry.index)" class="icon-button message-copy" :aria-label="t('copy')" @click="copy(turnCopies.get(entry.index)!)"><Copy :size="14" /></button>
             </article>

@@ -13,6 +13,8 @@ let controller: AbortController | undefined
 const mediaType = computed(() => props.part.mimeType?.split(';')[0].toLowerCase() || '')
 const previewable = computed(() =>
   /^(image\/(png|jpeg|gif|webp|avif)|audio\/(mpeg|mp4|ogg|wav|webm|flac)|video\/(mp4|webm|ogg))$/.test(mediaType.value))
+const downloadable = computed(() => props.part.source?.kind === 'inline' ||
+  (props.part.source?.kind === 'asset' && Boolean(props.part.source.assetId)))
 const external = computed(() => {
   const uri = props.part.source?.uri
   return uri && /^https?:\/\//i.test(uri) ? uri : ''
@@ -64,11 +66,11 @@ onBeforeUnmount(clear)
 </script>
 <template>
   <div class="media-part">
-    <div class="file-row">
+    <div class="file-row" :title="part.source?.path">
       <Image v-if="part.kind === 'image'" :size="19" class="muted shrink-0" /><File v-else :size="19" class="muted shrink-0" />
       <div class="min-w-0 flex-1"><div class="truncate text-sm font-medium">{{ part.name || part.kind }}</div><div class="muted text-xs">{{ part.mimeType }}</div></div>
       <a v-if="external" class="icon-button" :href="external" target="_blank" rel="noopener noreferrer" :aria-label="t('openLink')"><ExternalLink :size="16" /></a>
-      <template v-else>
+      <template v-else-if="downloadable">
         <button v-if="previewable && !url" class="btn small" :disabled="loading" @click="load">{{ t('preview') }}</button>
         <button class="icon-button" :disabled="loading" :aria-label="t('download')" @click="download"><LoaderCircle v-if="loading" class="spin" :size="16" /><Download v-else :size="16" /></button>
       </template>

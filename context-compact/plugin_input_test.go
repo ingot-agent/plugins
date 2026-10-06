@@ -43,7 +43,7 @@ func TestPluginInputChangesInvalidateCheckpointPrefix(t *testing.T) {
 	if err != nil || chain.covered != 3 || chain.lastSequence != 1 {
 		t.Fatalf("original chain=%+v err=%v", chain, err)
 	}
-	plugin := model.Message{Role: model.RoleUser, Content: textContent("<system source=\"plugin\" plugin=\"example.index\">\nnew context\n</system>")}
+	plugin := model.Message{Role: model.RoleUser, Content: textContent("<system source=\"plugin\">\nnew context\n</system>")}
 	changed := cloneRequest(request)
 	changed.Messages = append(cloneMessages(request.Messages[:2]), append([]model.Message{plugin}, cloneMessages(request.Messages[2:])...)...)
 	changedLayout, err := inspectRequest(changed, 0)
@@ -68,7 +68,7 @@ func TestPluginInputChangesInvalidateCheckpointPrefix(t *testing.T) {
 
 func TestPluginInputIsIncludedInCompactionBudget(t *testing.T) {
 	request := firstToolRound()
-	plugin := model.Message{Role: model.RoleUser, Content: textContent("<system source=\"plugin\" plugin=\"example.index\">\ncontext\n</system>")}
+	plugin := model.Message{Role: model.RoleUser, Content: textContent("<system source=\"plugin\">\ncontext\n</system>")}
 	request.Messages = append(request.Messages, plugin)
 	store := &memoryStore{entries: map[session.ID][]session.Entry{"s": {}}}
 	called := false

@@ -24,7 +24,7 @@ export interface Part {
   text?: string
   mimeType?: string
   name?: string
-  source?: { kind: string; data?: string; uri?: string; assetId?: string }
+  source?: { kind: string; data?: string; uri?: string; assetId?: string; path?: string }
 }
 export interface ToolCall { id: string; name: string; arguments: unknown }
 export interface Message {
@@ -34,7 +34,7 @@ export interface Message {
   toolCallId?: string
   toolCalls?: ToolCall[]
 }
-export interface Attachment { kind: string; mimeType?: string; name?: string; assetId: string }
+export interface Attachment { kind: string; mimeType?: string; name?: string; assetId?: string; path?: string; size?: number }
 export interface FollowupAnchor { messageIndex: number; partIndex: number; start: number; end: number; quote: string }
 export interface Followup extends FollowupAnchor {
   id: string
@@ -137,6 +137,7 @@ export interface Snapshot {
   cursor: number
   agent: { capabilities: { run: boolean; stream: boolean } }
   assets?: { available: boolean; maxBytes: number }
+  files?: { available: boolean; maxBytes: number }
   workspace?: { defaultPath: string }
   sessions: Session[]
   turns: Turn[]

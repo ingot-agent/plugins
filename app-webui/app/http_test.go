@@ -48,7 +48,29 @@ type testStore struct {
 	mu         sync.Mutex
 	items      []session.Metadata
 	workspaces map[session.ID]string
+	entries    map[session.ID][]session.Entry
 	nextID     uint64
+}
+
+func (s *testStore) Append(_ context.Context, id session.ID, entry session.Entry) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.entries == nil {
+		s.entries = make(map[session.ID][]session.Entry)
+	}
+	entry.Payload = append([]byte(nil), entry.Payload...)
+	s.entries[id] = append(s.entries[id], entry)
+	return nil
+}
+
+func (s *testStore) Load(_ context.Context, id session.ID) ([]session.Entry, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	entries := append([]session.Entry(nil), s.entries[id]...)
+	for i := range entries {
+		entries[i].Payload = append([]byte(nil), entries[i].Payload...)
+	}
+	return entries, nil
 }
 
 func (s *testStore) findLocked(id session.ID) (session.Metadata, bool) {
@@ -258,6 +280,7 @@ func testApplication(t *testing.T) *application {
 	defaultWorkspace := t.TempDir()
 	a := &application{
 		backend: deps.Backend, agent: controller, sessions: sessions,
+		pluginInputs:     testPluginInputs{store: deps.Store},
 		defaultWorkspace: defaultWorkspace,
 		workspacePicker:  &stubWorkspacePicker{canceled: true},
 	}

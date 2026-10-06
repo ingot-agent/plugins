@@ -143,36 +143,52 @@ capability's configuration is frozen until restart.
 
 ## Appending Plugin Context (Unreleased)
 
-With an SDK revision containing `agent.PluginInput`, declare a `session.Store`
-dependency and pass the target Session ID explicitly from your invocation.
-Append a record without depending on the Agent implementation:
+With SDK v0.2.16 or later, declare an
+`agent.PluginInputWriter` dependency and pass the target Session ID explicitly
+from your invocation. Compose [context-input](../context-input/README.md) as the
+provider; consumers import SDK contracts only:
 
 ```go
-entry, err := agent.EncodePluginInput(agent.PluginInput{
+return deps.PluginInputs.Append(ctx, invocation.Scope.SessionID, agent.PluginInput{
     Plugin: "example.index",
     Text:   "context supplied by this plugin",
 })
-if err != nil {
-    return err
-}
-return deps.Store.Append(ctx, invocation.Scope.SessionID, entry)
 ```
 
-The supporting Agent projects this record to a user message with an escaped
-`<system source="plugin" plugin="...">...</system>` envelope. Inputs inside tool
+The provider validates and encodes the input, then calls `session.Store.Append`.
+The supporting Agent injects the provider's `agent.PluginInputProjector` to
+recognize records and obtain escaped user messages. Inputs inside tool
 rounds are deferred until the matching results are complete or recovered.
 Committed records survive restarts; the temporary projection buffer is rebuilt.
 
 Append success means storage only, with no guaranteed Turn/Round inclusion or
-automatic model invocation. A running Turn keeps its existing history snapshot.
+automatic model invocation. The official Agent reads plugin entries at Turn
+start and retains that context for subsequent rounds; later appends are read
+in a future Turn.
 Do not retry blindly after an error; the Store may have committed. There is no
 deduplication, per-plugin write isolation, or authenticated source identity.
-Text must be nonempty XML-compatible UTF-8 and at most 64 KiB. Content semantics
+The official provider requires nonempty XML-compatible UTF-8 text of at most
+64 KiB and contributes its source explanation through `prompt.Contributor`.
+Content semantics
 and instruction priority are defined by users and plugin authors.
 
-This feature is unreleased. Compose the local SDK and supporting Agent/Prompt
-for development; publish the SDK and select its verified version in consumers
-before release. An older Agent ignores the new Entry Kind.
+The SDK contracts are published in v0.2.16. Pin that release or later in consumers
+and validate each module with `GOWORK=off`. Compose `context.input` and supporting
+Agent/Prompt implementations to enable the feature; those plugin changes remain
+unreleased until their own module tags are published. An older Agent ignores the
+new Entry Kind.
+
+Ordering relative to a user input is implemented by the plugin. For example,
+WebUI calls the injected writer with the request's explicit Session ID before
+starting the Agent. The Agent then loads the notice as history and appends the
+user input, including an empty input for a file-only submission. A failed notice
+append prevents the Agent from starting and is not automatically retried.
+
+The user message and notice are independent Appends, with no atomic pairing or
+isolation from unrelated writers. Keep plugin-specific constraints inside the
+plugin rather than adding a Turn field or history format.
+Applications display pending input from their own data; persisted plugin messages
+are projected through the Agent's history capability.
 
 ## Local composition and verification
 

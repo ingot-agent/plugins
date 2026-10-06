@@ -67,6 +67,7 @@ dependencies, operations/tools, state, defaults and limitations.
 | [app-webui](app-webui/README.md) | `app.backend` | Browser workspace, HTTP/SSE, Interaction and Operation host |
 | [asset-local](asset-local/README.md) | `asset.local` | Immutable local binary assets |
 | [context-compact](context-compact/README.md) | `context.compact` | Context summaries and checkpoints |
+| [context-input](context-input/README.md) | `context.input` | Validation, storage and projection of plugin context inputs |
 | [http-default](http-default/README.md) | `http.default` | Shared HTTP transport |
 | [interceptor-approval](interceptor-approval/README.md) | `interceptor.approval` | Tool allow/ask/deny policy |
 | [interceptor-script](interceptor-script/README.md) | `interceptor.script` | External script hooks for typed interception chains |

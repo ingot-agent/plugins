@@ -6,6 +6,7 @@ package appcomponent
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -14,6 +15,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -38,13 +40,16 @@ import (
 )
 
 type browserAgent struct {
-	mu          sync.Mutex
-	history     map[session.ID][]model.Message
-	active      map[session.ID]chan struct{}
-	interaction interaction.ExecutionBinder
-	tokenUsage  session.TokenUsageStore
-	observer    observation.Observer
-	sequence    atomic.Uint64
+	mu            sync.Mutex
+	history       map[session.ID][]model.Message
+	active        map[session.ID]chan struct{}
+	interaction   interaction.ExecutionBinder
+	tokenUsage    session.TokenUsageStore
+	observer      observation.Observer
+	sequence      atomic.Uint64
+	store         session.Store
+	loadedEntries map[session.ID]int
+	inputs        agent.PluginInputProjector
 }
 
 type browserSessionController struct {
@@ -59,6 +64,7 @@ func (c browserSessionController) Fork(ctx context.Context, source session.ID, r
 	}
 	c.agent.mu.Lock()
 	c.agent.history[session.ID(target.ID)] = append([]model.Message(nil), c.agent.history[source]...)
+	c.agent.loadedEntries[session.ID(target.ID)] = c.agent.loadedEntries[source]
 	c.agent.mu.Unlock()
 	return target, nil
 }
@@ -94,10 +100,27 @@ func (b *browserAgent) Stream(ctx context.Context, turn agent.Turn, handler agen
 		seq++
 		b.observer.Observe(observation.Event{Sequence: seq, Time: time.Now(), Correlation: correlation, Detail: detail})
 	}
+	entries, err := b.store.Load(ctx, turn.SessionID)
+	if err != nil {
+		return result, err
+	}
+	var inputMessages []model.Message
 	b.mu.Lock()
+	for _, entry := range entries[b.loadedEntries[turn.SessionID]:] {
+		message, recognized, err := b.inputs.Project(entry)
+		if err != nil {
+			b.mu.Unlock()
+			return result, err
+		}
+		if recognized {
+			inputMessages = append(inputMessages, message)
+		}
+	}
+	b.loadedEntries[turn.SessionID] = len(entries)
+	inputMessages = append(inputMessages, model.Message{Role: model.RoleUser, Content: content.FromInput(turn.Input, turn.Attachments)})
 	done := make(chan struct{})
 	b.active[turn.SessionID] = done
-	b.history[turn.SessionID] = append(b.history[turn.SessionID], model.Message{Role: model.RoleUser, Content: content.FromInput(turn.Input, turn.Attachments)})
+	b.history[turn.SessionID] = append(b.history[turn.SessionID], inputMessages...)
 	b.mu.Unlock()
 	emit(observation.TurnStarted{Turn: turn})
 	emit(observation.RoundStarted{})
@@ -224,7 +247,7 @@ func (b *browserAgent) Stream(ctx context.Context, turn agent.Turn, handler agen
 		return result, ctx.Err()
 	}
 	output := "Your workspace is ready. We can take the next step together."
-	if len(turn.Attachments) > 0 {
+	if len(turn.Attachments) > 0 || len(inputMessages) > 1 {
 		output = "Attachment received."
 	}
 	correlation.ToolCallID = ""
@@ -335,12 +358,14 @@ func TestBrowserFixture(t *testing.T) {
 	a.config.MaxAssetBytes = 64 << 20
 	a.config.Heartbeat = time.Second
 	// Construct host once so request scope and observation share the same hub.
+	store := a.sessions.(*defaultSessionController).store.(*testStore)
+	inputs := testPluginInputs{store: store}
 	host, _, err := hostcomponent.New(ctx, hostcomponent.Dependencies{State: testStateScope{dir: t.TempDir()}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	a.backend = host.Runtime
-	b := &browserAgent{history: make(map[session.ID][]model.Message), active: make(map[session.ID]chan struct{}), interaction: host.ExecutionInteractions, tokenUsage: a.sessions.(*defaultSessionController).store.(*testStore), observer: host.Observer}
+	b := &browserAgent{history: make(map[session.ID][]model.Message), active: make(map[session.ID]chan struct{}), interaction: host.ExecutionInteractions, tokenUsage: store, observer: host.Observer, store: store, loadedEntries: make(map[session.ID]int), inputs: inputs}
 	streaming := ingotabi.Some[agent.StreamingRuntime](b)
 	if os.Getenv("INGOT_WEBUI_FIXTURE_RUN_ONLY") == "1" {
 		streaming = ingotabi.None[agent.StreamingRuntime]()
@@ -352,6 +377,19 @@ func TestBrowserFixture(t *testing.T) {
 	a.sessions = browserSessionController{sessionController: a.sessions, agent: b}
 	a.turns = newTurnRegistry(ctx, a.agent, host.Runtime.Events())
 	a.assets = &browserAssets{items: make(map[string][]byte)}
+	a.filePicker = browserFilePicker{}
+	pixel, err := base64.StdEncoding.DecodeString("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aO2sAAAAASUVORK5CYII=")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(a.defaultWorkspace, "pixel.png"), pixel, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	documents := filepath.Join(a.defaultWorkspace, "documents")
+	if err := os.MkdirAll(documents, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	localTestFile(t, documents, "report.pdf", "%PDF-1.4")
 	a.modelSelection = &testModelSelection{snapshot: modelselection.Snapshot{
 		Revision: "initial", Configured: true,
 		Current: modelselection.Selection{Provider: "primary", Model: "chat", ReasoningEffort: "low"},
@@ -454,4 +492,23 @@ func TestBrowserFixture(t *testing.T) {
 	go func() { _ = server.Serve(listener) }()
 	t.Logf("Browser fixture: http://%s", address)
 	<-ctx.Done()
+}
+
+type browserFilePicker struct{}
+
+func (browserFilePicker) Select(ctx context.Context, initial string) ([]string, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, false, err
+	}
+	entries, err := os.ReadDir(initial)
+	if err != nil {
+		return nil, false, err
+	}
+	paths := make([]string, 0)
+	for _, entry := range entries {
+		if entry.Type().IsRegular() {
+			paths = append(paths, filepath.Join(initial, entry.Name()))
+		}
+	}
+	return paths, len(paths) == 0, nil
 }

@@ -5,7 +5,7 @@ import { subscribe } from '../sse'
 import { bootstrapTurns, indexById, reduceOperation, reduceTurn } from '../state'
 import { equalInteractionValue } from '../forms'
 import { parseContextUsage } from '../usage'
-import type { Attachment, ContextUsage, Followup, FollowupAnchor, Interaction, InteractionState, LiveTurn, Message, ModelSelection, ModelSelectionSnapshot, Notice, Operation, OperationInvocation, Session, Snapshot, TraceEvent, WebEvent, WorkspaceSelection } from '../protocol'
+import type { Attachment, ContextUsage, Followup, FollowupAnchor, Interaction, InteractionState, LiveTurn, Message, ModelSelection, ModelSelectionSnapshot, Notice, Operation, OperationInvocation, Part, Session, Snapshot, TraceEvent, WebEvent, WorkspaceSelection } from '../protocol'
 
 export const useRuntime = defineStore('runtime', () => {
   const sessions = ref<Session[]>([])
@@ -14,6 +14,7 @@ export const useRuntime = defineStore('runtime', () => {
   const followups = ref<Record<string, Followup[]>>({})
   const capabilities = ref({ run: false, stream: false })
   const assets = ref({ available: false, maxBytes: 0 })
+  const files = ref({ available: false, maxBytes: 0 })
   const defaultWorkspace = ref('')
   const turns = ref<Record<string, LiveTurn>>({})
   const interactions = ref<Record<string, Interaction>>({})
@@ -154,6 +155,7 @@ export const useRuntime = defineStore('runtime', () => {
     sessions.value = (snapshot.sessions || []).filter(item => !deletedSessions.has(item.id)).map(mergeSession)
     capabilities.value = snapshot.agent.capabilities
     assets.value = snapshot.assets || { available: false, maxBytes: 0 }
+    files.value = snapshot.files || { available: false, maxBytes: 0 }
     defaultWorkspace.value = snapshot.workspace?.defaultPath || ''
     turns.value = bootstrapTurns(snapshot)
     const previousInteractions = interactions.value
@@ -362,16 +364,19 @@ export const useRuntime = defineStore('runtime', () => {
   }
   async function send(sessionId: string, input: string, attachments: Attachment[]) {
     const generation = epoch
+    const message: Message = { role: 'user', content: [
+      ...(input ? [{ kind: 'text', text: input }] : []),
+      ...attachments.map((attachment): Part => {
+        const image = attachment.kind === 'image' && Boolean(attachment.assetId)
+        return { kind: image ? 'image' : 'file', name: attachment.name, mimeType: attachment.mimeType,
+          source: image ? { kind: 'asset', assetId: attachment.assetId } : { kind: 'local', path: attachment.path } }
+      }),
+    ] }
     const result = await command<{ id: string }>('/turns', 'POST', { sessionId, input, attachments })
     if (generation !== epoch) return
     const turn = turns.value[result.id]
     if (!turn) turns.value[result.id] = { id: result.id, sessionId, revision: 0, output: '', reasoning: '', status: 'running' }
-    if (!turn?.reconciled) optimistic.value[result.id] = {
-      sessionId, message: { role: 'user', content: [
-        ...(input ? [{ kind: 'text', text: input }] : []),
-        ...attachments.map(attachment => ({ kind: attachment.kind, name: attachment.name, mimeType: attachment.mimeType, source: { kind: 'asset', assetId: attachment.assetId } })),
-      ] },
-    }
+    if (!turn?.reconciled) optimistic.value[result.id] = { sessionId, message }
   }
   async function stop(turn: LiveTurn) {
     turn.stopping = true
@@ -453,7 +458,7 @@ export const useRuntime = defineStore('runtime', () => {
   function suspendOperation(id: string) { suspendedOperations.value[id] = true }
   function resumeOperation(id: string) { delete suspendedOperations.value[id] }
   return {
-    sessions, totalTokenBySession, contextBySession, followups, orderedSessions, capabilities, assets, defaultWorkspace, turns, interactions, interactionDrafts, interactionStates,
+    sessions, totalTokenBySession, contextBySession, followups, orderedSessions, capabilities, assets, files, defaultWorkspace, turns, interactions, interactionDrafts, interactionStates,
     operations, modelSelection, operationInvocations, histories, historyLoading, historyErrors, optimistic,
     traces, notices, connection, connectionError, activeSession, cursor, pendingCount, pendingOperationRequests,
     notify, running, loadSession, loadHistory, refreshSessions, refreshModelSelection, updateModelSelection, refreshOperationState, bootstrap, receive, connect, disconnect,

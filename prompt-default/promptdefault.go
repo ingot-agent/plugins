@@ -22,10 +22,8 @@ import (
 )
 
 const (
-	defaultMaxBlockBytes    = 64 * 1024
-	defaultMaxSystemBytes   = 256 * 1024
-	pluginInputSystemPrompt = `User-role messages enclosed in <system source="plugin" plugin="...">...</system>
-are inputs inserted into the conversation by runtime plugins.`
+	defaultMaxBlockBytes  = 64 * 1024
+	defaultMaxSystemBytes = 256 * 1024
 )
 
 var (
@@ -192,17 +190,16 @@ func (r *renderer) Render(ctx context.Context, request prompt.Request) ([]model.
 
 func (r *renderer) formatSystem(blocks []prompt.Block, configuration normalizedConfig) (content.Content, error) {
 	result := make(content.Content, 0, len(blocks)*2+1)
-	value := pluginInputSystemPrompt
-	if configuration.systemPrompt != "" {
-		value = configuration.systemPrompt + "\n\n" + value
-	}
-	if len(blocks) != 0 {
+	value := configuration.systemPrompt
+	if value != "" && len(blocks) != 0 {
 		value += "\n\n"
 	}
 	if len(value) > configuration.maxSystem {
 		return nil, ErrSystemLimit
 	}
-	result = append(result, content.Text(value))
+	if value != "" {
+		result = append(result, content.Text(value))
+	}
 	total := len(value)
 	for i, block := range blocks {
 		title := "## " + block.Name + "\n"

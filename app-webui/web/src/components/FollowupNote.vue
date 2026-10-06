@@ -5,6 +5,7 @@ import { ArrowUp, LoaderCircle, MessageCircleQuestion, Square, Trash2, X } from 
 import { errorMessage } from '../api'
 import { useRuntime } from '../stores/runtime'
 import { readPreference, savePreference } from '../theme'
+import { displayMessage, isPluginContextMessage } from '../views/conversationDisplay'
 import type { Followup, FollowupAnchor, Message } from '../protocol'
 import ContentParts from './ContentParts.vue'
 import TurnContent from './TurnContent.vue'
@@ -20,7 +21,9 @@ const input = ref<HTMLTextAreaElement>()
 const sending = ref(false)
 const confirmingDelete = ref(false)
 const noteId = computed(() => props.note?.id || '')
-const history = computed(() => (runtime.histories[noteId.value] || []).slice(props.note?.baseMessageCount || 0).filter(item => item.role !== 'tool'))
+const history = computed(() => (runtime.histories[noteId.value] || []).slice(props.note?.baseMessageCount || 0)
+  .map((message, index, messages) => displayMessage(message, messages[index - 1]))
+  .filter(item => item.role !== 'tool' && !isPluginContextMessage(item)))
 const turns = computed(() => Object.values(runtime.turns).filter(turn => turn.sessionId === noteId.value && (!turn.reconciled || turn.status !== 'succeeded')))
 const running = computed(() => runtime.running(noteId.value))
 const requests = computed(() => Object.values(runtime.interactions).filter(item => item.scope?.agent?.sessionId === noteId.value))
@@ -100,7 +103,7 @@ function keydown(event: KeyboardEvent) {
       <div v-if="note && runtime.historyErrors[note.id]" class="error-text">{{ runtime.historyErrors[note.id] }} <button class="text-button" @click="runtime.loadHistory(note.id)">{{ t('retry') }}</button></div>
       <div v-for="(message, index) in history" :key="index" class="followup-message" :class="'followup-' + message.role"><div v-if="message.role === 'assistant'" class="followup-byline"><Brand /><span>Ingot</span></div><ContentParts :parts="visibleParts(message, index)" /></div>
       <template v-for="turn in turns" :key="turn.id">
-        <div v-if="runtime.optimistic[turn.id]" class="followup-message followup-user"><ContentParts :parts="visibleParts(runtime.optimistic[turn.id].message, history.length)" /></div>
+        <div v-if="runtime.optimistic[turn.id] && !isPluginContextMessage(runtime.optimistic[turn.id].message)" class="followup-message followup-user"><ContentParts :parts="visibleParts(runtime.optimistic[turn.id].message, history.length)" /></div>
         <div class="followup-message followup-assistant"><div class="followup-byline"><Brand /><span>Ingot</span></div><TurnContent :turn="turn" :interactions="runtime.interactions" :historical-tool-ids="new Set()" :show-tool-calls="true" /><p v-if="turn.error" class="error-text">{{ turn.error.message }}</p></div>
       </template>
       <InteractionCard v-for="request in requests" :key="request.id" :interaction="request" />

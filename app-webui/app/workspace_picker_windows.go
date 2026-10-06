@@ -63,6 +63,19 @@ type winShellItemVTable struct {
 	compare        uintptr
 }
 
+type winShellItemArray struct{ vtable *winShellItemArrayVTable }
+type winShellItemArrayVTable struct {
+	queryInterface             uintptr
+	addRef                     uintptr
+	release                    uintptr
+	bindToHandler              uintptr
+	getPropertyStore           uintptr
+	getPropertyDescriptionList uintptr
+	getAttributes              uintptr
+	getCount                   uintptr
+	getItemAt                  uintptr
+}
+
 var (
 	ole32                    = syscall.NewLazyDLL("ole32.dll")
 	shell32                  = syscall.NewLazyDLL("shell32.dll")
@@ -90,6 +103,8 @@ const (
 	fosPickFolders          = 0x20
 	fosForceFileSystem      = 0x40
 	fosNoChangeDir          = 0x8
+	fosAllowMultiSelect     = 0x200
+	fosFileMustExist        = 0x1000
 	sigdnFileSystemPath     = 0x80058000
 	hresultCanceled         = 0x800704c7
 	wmClose                 = 0x0010
@@ -97,8 +112,20 @@ const (
 )
 
 func selectNativeWorkspace(ctx context.Context, initialPath string) (string, bool, error) {
+	paths, canceled, err := selectWindowsPicker(ctx, initialPath, true)
+	if err != nil || canceled || len(paths) == 0 {
+		return "", canceled, err
+	}
+	return paths[0], false, nil
+}
+
+func selectNativeFiles(ctx context.Context, initialPath string) ([]string, bool, error) {
+	return selectWindowsPicker(ctx, initialPath, false)
+}
+
+func selectWindowsPicker(ctx context.Context, initialPath string, folders bool) ([]string, bool, error) {
 	type result struct {
-		path     string
+		paths    []string
 		canceled bool
 		err      error
 	}
@@ -106,12 +133,12 @@ func selectNativeWorkspace(ctx context.Context, initialPath string) (string, boo
 	go func() {
 		runtime.LockOSThread()
 		defer runtime.UnlockOSThread()
-		path, canceled, err := showWindowsWorkspacePicker(ctx, initialPath)
-		done <- result{path: path, canceled: canceled, err: err}
+		paths, canceled, err := showWindowsPicker(ctx, initialPath, folders)
+		done <- result{paths: paths, canceled: canceled, err: err}
 	}()
 	select {
 	case result := <-done:
-		return result.path, result.canceled, result.err
+		return result.paths, result.canceled, result.err
 	case <-ctx.Done():
 		timer := time.NewTimer(windowsPickerCancelWait)
 		defer timer.Stop()
@@ -119,14 +146,14 @@ func selectNativeWorkspace(ctx context.Context, initialPath string) (string, boo
 		case <-done:
 		case <-timer.C:
 		}
-		return "", false, ctx.Err()
+		return nil, false, ctx.Err()
 	}
 }
 
-func showWindowsWorkspacePicker(ctx context.Context, initialPath string) (string, bool, error) {
+func showWindowsPicker(ctx context.Context, initialPath string, folders bool) ([]string, bool, error) {
 	hResult, _, _ := procCoInitializeEx.Call(0, coinitApartmentThreaded)
 	if winHRESULTFailed(hResult) {
-		return "", false, winHRESULTError("initialize COM", hResult)
+		return nil, false, winHRESULTError("initialize COM", hResult)
 	}
 	defer procCoUninitialize.Call()
 
@@ -135,28 +162,36 @@ func showWindowsWorkspacePicker(ctx context.Context, initialPath string) (string
 		uintptr(unsafe.Pointer(&clsidFileOpenDialog)), 0, clsctxInprocServer,
 		uintptr(unsafe.Pointer(&iidFileOpenDialog)), uintptr(unsafe.Pointer(&dialog)))
 	if winHRESULTFailed(hResult) {
-		return "", false, winHRESULTError("create IFileOpenDialog", hResult)
+		return nil, false, winHRESULTError("create IFileOpenDialog", hResult)
 	}
 	defer dialog.release()
 
 	options, err := dialog.options()
 	if err != nil {
-		return "", false, err
+		return nil, false, err
 	}
-	if err := dialog.setOptions(options | fosPickFolders | fosForceFileSystem | fosNoChangeDir); err != nil {
-		return "", false, err
+	options |= fosForceFileSystem | fosNoChangeDir
+	title := "Select Files"
+	if folders {
+		options |= fosPickFolders
+		title = "Select Workspace Directory"
+	} else {
+		options |= fosAllowMultiSelect | fosFileMustExist
 	}
-	if err := dialog.setTitle("Select Workspace Directory"); err != nil {
-		return "", false, err
+	if err := dialog.setOptions(options); err != nil {
+		return nil, false, err
+	}
+	if err := dialog.setTitle(title); err != nil {
+		return nil, false, err
 	}
 	initialItem, err := winShellItemForPath(initialPath)
 	if err != nil {
-		return "", false, err
+		return nil, false, err
 	}
 	if initialItem != nil {
 		defer initialItem.release()
 		if err := dialog.setFolder(initialItem); err != nil {
-			return "", false, err
+			return nil, false, err
 		}
 	}
 
@@ -170,21 +205,55 @@ func showWindowsWorkspacePicker(ctx context.Context, initialPath string) (string
 	close(showDone)
 	<-cancelDone
 	if ctxErr := ctx.Err(); ctxErr != nil {
-		return "", false, ctxErr
+		return nil, false, ctxErr
 	}
 	if uint32(hResult) == hresultCanceled {
-		return "", true, nil
+		return nil, true, nil
 	}
 	if winHRESULTFailed(hResult) {
-		return "", false, winHRESULTError("show IFileOpenDialog", hResult)
+		return nil, false, winHRESULTError("show IFileOpenDialog", hResult)
+	}
+	if !folders {
+		paths, err := dialog.filePaths()
+		return paths, len(paths) == 0, err
 	}
 
 	item, err := dialog.result()
 	if err != nil {
-		return "", false, err
+		return nil, false, err
 	}
 	defer item.release()
-	return item.fileSystemPath()
+	path, canceled, err := item.fileSystemPath()
+	return []string{path}, canceled, err
+}
+
+func (dialog *winFileDialog) filePaths() ([]string, error) {
+	var items *winShellItemArray
+	hResult, _, _ := syscall.SyscallN(dialog.vtable.getResults, uintptr(unsafe.Pointer(dialog)), uintptr(unsafe.Pointer(&items)))
+	if winHRESULTFailed(hResult) {
+		return nil, winHRESULTError("get IFileOpenDialog results", hResult)
+	}
+	defer syscall.SyscallN(items.vtable.release, uintptr(unsafe.Pointer(items)))
+	var count uint32
+	hResult, _, _ = syscall.SyscallN(items.vtable.getCount, uintptr(unsafe.Pointer(items)), uintptr(unsafe.Pointer(&count)))
+	if winHRESULTFailed(hResult) {
+		return nil, winHRESULTError("count selected files", hResult)
+	}
+	paths := make([]string, 0, count)
+	for i := uint32(0); i < count; i++ {
+		var item *winShellItem
+		hResult, _, _ = syscall.SyscallN(items.vtable.getItemAt, uintptr(unsafe.Pointer(items)), uintptr(i), uintptr(unsafe.Pointer(&item)))
+		if winHRESULTFailed(hResult) {
+			return nil, winHRESULTError("read selected file", hResult)
+		}
+		path, _, err := item.fileSystemPath()
+		item.release()
+		if err != nil {
+			return nil, err
+		}
+		paths = append(paths, path)
+	}
+	return paths, nil
 }
 
 func cancelWindowsWorkspacePicker(ctx context.Context, threadID uint32, showDone <-chan struct{}, done chan<- struct{}) {

@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import { command, request } from '../api'
-import type { Interaction, InteractionState, Message, ModelSelectionSnapshot, OperationInvocation, Session, Snapshot } from '../protocol'
+import type { Attachment, Interaction, InteractionState, Message, ModelSelectionSnapshot, OperationInvocation, Session, Snapshot } from '../protocol'
 import { useRuntime } from './runtime'
 
 vi.mock('../api', async importOriginal => ({
@@ -213,6 +213,28 @@ describe('runtime request and event ordering', () => {
     await expect(runtime.send('s', 'hello', [])).rejects.toThrow('Connection lost')
     expect(command).toHaveBeenCalledTimes(1)
     expect(runtime.turns).toEqual({})
+  })
+
+  it.each(['', 'Read these files.'])('displays selected files in order before history arrives: %s', async input => {
+    const runtime = useRuntime()
+    const attachments: Attachment[] = [
+      { kind: 'file', name: 'report.pdf', mimeType: 'application/pdf', path: '/reports/report.pdf' },
+      { kind: 'image', name: 'pixel.png', mimeType: 'image/png', path: '/reports/pixel.png', assetId: 'pixel' },
+      { kind: 'image', name: 'local.png', mimeType: 'image/png', path: '/reports/local.png' },
+    ]
+    const pending = deferred<{ id: string }>()
+    vi.mocked(command).mockReturnValueOnce(pending.promise)
+    const sending = runtime.send('s', input, attachments)
+    attachments.reverse()
+    pending.resolve({ id: 'web' })
+    await sending
+    expect(runtime.histories).toEqual({})
+    expect(runtime.optimistic.web.message).toEqual({ role: 'user', content: [
+      ...(input ? [{ kind: 'text', text: input }] : []),
+      { kind: 'file', name: 'report.pdf', mimeType: 'application/pdf', source: { kind: 'local', path: '/reports/report.pdf' } },
+      { kind: 'image', name: 'pixel.png', mimeType: 'image/png', source: { kind: 'asset', assetId: 'pixel' } },
+      { kind: 'file', name: 'local.png', mimeType: 'image/png', source: { kind: 'local', path: '/reports/local.png' } },
+    ] })
   })
 
   it('assigns a workspace once and replaces the unbound session projection', async () => {

@@ -28,7 +28,7 @@ max_system_bytes = 262144
 | --- | --- | --- |
 | `system_prompt` | empty string | Static text preceding contributor blocks |
 | `max_block_bytes` | 64 KiB | Maximum content size of one contributed block |
-| `max_system_bytes` | 256 KiB | Maximum combined system content including the built-in plugin-input notice, headings and separators |
+| `max_system_bytes` | 256 KiB | Maximum combined system content including headings and separators |
 
 Zero numeric limits select defaults; negatives are invalid. The configured text
 must be UTF-8 and fit within `max_system_bytes`. Missing configuration is valid
@@ -47,13 +47,12 @@ return `ErrConfigConflict`. Direct edits to the file are read on construction.
 Each receives its own cloned request, so one contributor cannot alter another's
 input. The resulting message sequence is:
 
-1. One system message containing configured text, the built-in plugin-input
-   source notice, and contributor blocks, even when configuration is empty.
+1. One system message containing configured text and contributor blocks, if any.
 2. The supplied history, in its existing order.
 3. One user message containing the current input, including valid attachments.
 
 Each block is prefixed with `## <block name>\n`; adjacent blocks are separated by
-two newlines. Configured text, the built-in notice, and the first block are
+two newlines. Nonempty configured text and the first block are
 separated by two newlines. Block names must be nonempty UTF-8 and contain no CR/LF. Blocks
 remain in contributor order; names are not used to sort or deduplicate them.
 
@@ -70,12 +69,10 @@ template substitution, load workspace files itself, truncate history, count
 tokens, or enforce model-specific role ordering. Such behavior belongs to
 contributors, the agent, the compactor, or the provider.
 
-The built-in notice only identifies messages enclosed in
-`<system source="plugin" plugin="...">...</system>` as plugin-supplied inputs.
-It prescribes no business meaning, instruction priority, or model execution or
-acknowledgement behavior. Users and plugin authors define those rules. The
-notice is always included and charged to `max_system_bytes`; a smaller budget
-can therefore fail Render even with empty configured text.
+Plugin-input source explanations belong to a Contributor, such as the one
+exported by [context-input](../context-input/README.md). They receive the same
+ordering and byte limits as any other block. With empty configuration and no
+contributed blocks, no system message is emitted.
 
 ## Source and checks
 
