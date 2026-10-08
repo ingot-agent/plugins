@@ -119,6 +119,10 @@ func (p *provider) decodeStream(ctx context.Context, response *http.Response, ha
 			return nil
 		}
 		payload := strings.Join(dataLines, "\n")
+		// Compatible endpoints may send named heartbeats with empty data.
+		if eventName == "keepalive" && strings.TrimSpace(payload) == "" {
+			return nil
+		}
 		if strings.TrimSpace(payload) == "[DONE]" {
 			if len(dataLines) != 1 || accumulator.terminal == nil {
 				return protocolError("[DONE] is only valid after a terminal response event")
@@ -137,6 +141,11 @@ func (p *provider) decodeStream(ctx context.Context, response *http.Response, ha
 		}
 		if event.Type == "" || (eventName != "" && eventName != event.Type) {
 			return protocolError("SSE event name and payload type are missing or inconsistent")
+		}
+		// Heartbeats carry no model output and may also follow the terminal
+		// response while the transport is still open.
+		if event.Type == "keepalive" {
+			return nil
 		}
 		if accumulator.terminal != nil {
 			return protocolError("stream event %q arrived after terminal response", event.Type)

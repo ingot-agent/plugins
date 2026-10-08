@@ -102,8 +102,11 @@ publish a candidate. Direct file changes are loaded at reconstruction.
 
 Typed SSE streaming handles content, refusals, function-call argument fragments,
 and reasoning text/summary deltas, then checks them against the terminal response.
-A terminal event is required; unsupported event/output item types return protocol
-errors. Reasoning events are transient and do not become canonical message content.
+SSE comments and `keepalive` heartbeats are ignored, including after the terminal
+response. Heartbeats may use an SSE event name with empty or JSON data, or a JSON
+`type` field. A terminal event is required; unsupported event/output item types
+and conflicting event names/payload types return protocol errors. Reasoning events
+are transient and do not become canonical message content.
 
 ## Explicit limitations
 
