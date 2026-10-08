@@ -39,11 +39,31 @@ func selectNativeWorkspace(ctx context.Context, initialPath string) (string, boo
 	return "", false, err
 }
 
+func selectNativeFiles(ctx context.Context, initialPath string) ([]string, bool, error) {
+	if os.Getenv("DISPLAY") == "" && os.Getenv("WAYLAND_DISPLAY") == "" {
+		return nil, false, fmt.Errorf("%w: DISPLAY or WAYLAND_DISPLAY is required", errFilePickerUnavailable)
+	}
+	output, canceled, err := runLinuxWorkspacePicker(ctx, "zenity", "--file-selection", "--multiple",
+		"--separator=\x1f", "--title=Select Files", "--filename="+filepath.Clean(initialPath)+string(filepath.Separator))
+	separator := "\x1f"
+	if errors.Is(err, exec.ErrNotFound) {
+		output, canceled, err = runLinuxWorkspacePicker(ctx, "kdialog", "--getopenfilename", initialPath, "--multiple", "--separate-output", "--title", "Select Files")
+		separator = "\n"
+	}
+	if errors.Is(err, exec.ErrNotFound) {
+		return nil, false, fmt.Errorf("%w: install zenity or kdialog", errFilePickerUnavailable)
+	}
+	if err != nil || canceled {
+		return nil, canceled, err
+	}
+	return strings.Split(output, separator), false, nil
+}
+
 func runLinuxWorkspacePicker(ctx context.Context, command string, arguments ...string) (string, bool, error) {
 	cmd := exec.CommandContext(ctx, command, arguments...)
 	output, err := cmd.Output()
 	if err == nil {
-		path := strings.TrimSpace(string(output))
+		path := strings.TrimSuffix(string(output), "\n")
 		return path, path == "", nil
 	}
 	if ctxErr := ctx.Err(); ctxErr != nil {

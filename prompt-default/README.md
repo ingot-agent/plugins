@@ -32,7 +32,7 @@ max_system_bytes = 262144
 
 Zero numeric limits select defaults; negatives are invalid. The configured text
 must be UTF-8 and fit within `max_system_bytes`. Missing configuration is valid
-and starts with empty system text. Malformed TOML and unknown fields fail startup.
+and starts with empty configured system text. Malformed TOML and unknown fields fail startup.
 
 The `config` operation in group `prompt-default` (`/prompt-default config`) accepts
 `{}` with no extra input fields and collects these three settings interactively.
@@ -47,13 +47,13 @@ return `ErrConfigConflict`. Direct edits to the file are read on construction.
 Each receives its own cloned request, so one contributor cannot alter another's
 input. The resulting message sequence is:
 
-1. One system message when configured text or contributed blocks exist.
+1. One system message containing configured text and contributor blocks, if any.
 2. The supplied history, in its existing order.
 3. One user message containing the current input, including valid attachments.
 
 Each block is prefixed with `## <block name>\n`; adjacent blocks are separated by
-two newlines. Configured system text is also separated from the first block by
-two newlines. Block names must be nonempty UTF-8 and contain no CR/LF. Blocks
+two newlines. Nonempty configured text and the first block are
+separated by two newlines. Block names must be nonempty UTF-8 and contain no CR/LF. Blocks
 remain in contributor order; names are not used to sort or deduplicate them.
 
 Byte limits count UTF-8 text bytes and inline media bytes. URI/asset references do
@@ -68,6 +68,11 @@ This renderer validates content and composes messages; it does not implement
 template substitution, load workspace files itself, truncate history, count
 tokens, or enforce model-specific role ordering. Such behavior belongs to
 contributors, the agent, the compactor, or the provider.
+
+Plugin-input source explanations belong to a Contributor, such as the one
+exported by [context-input](../context-input/README.md). They receive the same
+ordering and byte limits as any other block. With empty configuration and no
+contributed blocks, no system message is emitted.
 
 ## Source and checks
 

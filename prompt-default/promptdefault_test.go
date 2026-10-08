@@ -101,3 +101,29 @@ func TestRendererPreservesMultimodalBlockAndInputOrder(t *testing.T) {
 		t.Fatal("renderer returned aliased inline data")
 	}
 }
+
+func TestRendererOmitsEmptySystem(t *testing.T) {
+	for _, system := range []string{"", "configured"} {
+		exports, _, err := promptdefault.New(context.Background(), withState(t, promptdefault.Config{SystemPrompt: system, MaxSystemBytes: 10}, promptdefault.Dependencies{}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		messages, err := exports.Renderer.Render(context.Background(), prompt.Request{Input: content.FromText("hello")})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if system == "" {
+			if len(messages) != 1 || messages[0].Role != model.RoleUser {
+				t.Fatalf("empty system=%#v", messages)
+			}
+		} else {
+			if len(messages) != 2 || messages[0].Role != model.RoleSystem {
+				t.Fatalf("configured system=%#v", messages)
+			}
+			text, ok := content.TextOnly(messages[0].Content)
+			if !ok || text != system {
+				t.Fatalf("system=%q", text)
+			}
+		}
+	}
+}

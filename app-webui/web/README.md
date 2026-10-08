@@ -41,11 +41,11 @@ npm run test:e2e
 
 Playwright 启动两个真实 Go HTTP/SSE 服务（`17316` 流式、`17317` Run-only），使用仅存在于 Go 测试代码中的确定性 SDK adapters，不访问模型、不需要凭据。覆盖会话生命周期、审批与自由文本、跨标签页同步、运行中历史阻塞、取消后的部分输出、附件历史、Operation、过期 cursor 和中英文/深色/移动布局。失败时保留 trace、截图及 HTML 报告。
 
-默认 fixture 使用 `GOWORK=off` 验证插件声明的已发布依赖；当前 Session 用量
-合同已包含在 SDK v0.2.15 中，常规回归无需设置本地 workspace。开发尚未发布的
-跨仓库新合同时，可临时指定本地 workspace，例如
-`INGOT_WEBUI_FIXTURE_GOWORK=/absolute/path/to/go.work npm run test:e2e`；该选项只影响
-测试子进程，不改变插件的发布依赖。
+默认 fixture 使用 `GOWORK=off` 验证插件声明的已发布依赖；SDK v0.2.16
+已包含本地文件输入所用的通用 `agent.PluginInput` 能力接口，WebUI 在启动
+Agent 前调用注入的 writer 写入通知。浏览器回归无需本地 SDK workspace。
+开发时可用 `INGOT_WEBUI_FIXTURE_GOWORK=/absolute/path/to/go.work npm run test:e2e`
+指定 workspace；该选项只影响测试子进程，不改变插件的发布依赖。
 
 PowerShell 对应设置为 `$env:INGOT_WEBUI_FIXTURE_GOWORK = 'D:\absolute\path\go.work'`；测试结束后可用 `Remove-Item Env:INGOT_WEBUI_FIXTURE_GOWORK` 恢复默认。不要将本机路径提交进模块或 package.json。
 
@@ -58,6 +58,14 @@ INGOT_WEBUI_FIXTURE_ADDR=127.0.0.1:7316 node scripts/fixture.mjs
 打开 `http://127.0.0.1:7316/`；输入含 `approve`、`ask`、`hold`、`fail` 分别触发审批、自由输入、等待取消和失败。其他输入返回固定文本。这不是生产 Agent，数据只存在于进程内；重新构建嵌入文件后需要重启测试服务。
 
 fixture 通过 `go test -run '^TestBrowserFixture$' -count=1 -timeout 0 -v ./app` 启动；Playwright 自己负责启动两个 fixture，不会复用端口上已有的服务。若端口被占用、Go 依赖不可获得或 Chromium 未安装，先解决对应环境问题；修改 Web 界面后必须先执行 `npm run build`，浏览器测试读取的是 Go 嵌入产物而不是 Vite 开发服务器。
+
+## 文件选择
+
+Composer 的附件按钮调用 `POST /api/files/select` 打开 Runtime 主机的系统文件选择器，返回本地绝对路径。文件草稿按会话保存，选择期间切换会话不会把结果放进新会话；未发送的草稿只保留在内存中。当前不处理文件粘贴或拖放，也不通过浏览器文件输入读取正文。
+
+PNG、JPEG、GIF、WebP 可使用返回的 Asset 预览；非图片仅发送原路径，不保存副本。发送被接受后，前端直接用本次输入和选择器返回的文件列表显示临时附件；执行结束后替换为权威历史，再从用户消息前面的持久文件通知恢复附件。文件通知在上下文中位于用户消息之前，但主对话和追问窗口均不渲染带插件标记的上下文消息。附件按选择顺序显示；纯文件发送显示附件，非图片暂仅显示图标、文件名和类型。该投影不修改原始历史或改变消息索引，刷新后文件附件仍可见，插件消息仍然隐藏。
+
+浏览器回归包含图片选择/预览及文档选择/空输入/刷新顺序，并验证非图片未成为模型媒体。fixture 的文件选择器自动选择起始目录中的测试文件，以便自动化测试；实际 Runtime 使用宿主原生选择器。远程浏览器的文件路径不能通过该宿主接口获取。
 
 ## 状态边界
 

@@ -190,15 +190,17 @@ func (r *renderer) Render(ctx context.Context, request prompt.Request) ([]model.
 
 func (r *renderer) formatSystem(blocks []prompt.Block, configuration normalizedConfig) (content.Content, error) {
 	result := make(content.Content, 0, len(blocks)*2+1)
-	total := 0
-	if configuration.systemPrompt != "" {
-		value := configuration.systemPrompt
-		if len(blocks) != 0 {
-			value += "\n\n"
-		}
-		result = append(result, content.Text(value))
-		total += len(value)
+	value := configuration.systemPrompt
+	if value != "" && len(blocks) != 0 {
+		value += "\n\n"
 	}
+	if len(value) > configuration.maxSystem {
+		return nil, ErrSystemLimit
+	}
+	if value != "" {
+		result = append(result, content.Text(value))
+	}
+	total := len(value)
 	for i, block := range blocks {
 		title := "## " + block.Name + "\n"
 		if i > 0 {

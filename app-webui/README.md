@@ -3,9 +3,9 @@
 `app.backend` 是 Ingot 的浏览器应用，包含 Vue 3 + Tailwind CSS 前端及 HTTP/SSE 应用边界。插件目录名为 `app-webui`，Go 模块为 `github.com/ingot-agent/plugins/app-webui`，manifest ID 为 `app.backend`，配置命令 Group 为 `app-webui`；这些标识各有用途，不能互换。[manifest](ingot.plugin.toml) 声明兼容 Ingot `>=0.3.0 <0.4.0`。它是一个包含两个组件的复合插件：
 
 - `host`（包 `./host`）依赖 ABI `state.Scope`，持有进程内的 `EventHub`，导出 `appbackend.Runtime`、全局 `interaction.Channel`、显式作用域的 `interaction.ExecutionBinder` 和 `observation.Observer`。该组件不依赖 Agent，因此 Agent 可以使用这些能力而不会在组件图中形成环。
-- `app`（包 `./app`）是没有能力导出的图叶节点，持有 HTTP 服务器、Controller、运行中的 Turn，以及保留的 Operation 结果。它依赖 host 的 `appbackend.Runtime`、`agent.History`、`session.Store`、`session.Manager`、`session.Query`、`workspace.Manager`、`workspace.Resolver`，以及 ABI `invocation.Invocation`、`lifecycle.Controller` 和 `state.Scope`。相互独立且可选的 `agent.Runtime` 与 `agent.StreamingRuntime` 至少需要提供一个。`asset.Store` 和 `modelselection.Controller` 是可选依赖，Operation 通过 `[]operation.Operation` 收集；应用自身另外注册 `/app-webui config`。
+- `app`（包 `./app`）是没有能力导出的图叶节点，持有 HTTP 服务器、Controller、运行中的 Turn，以及保留的 Operation 结果。它依赖 host 的 `appbackend.Runtime`、`agent.History`、`session.Store`、`session.Manager`、`session.Query`、`workspace.Manager`、`workspace.Resolver`，以及 ABI `invocation.Invocation`、`lifecycle.Controller` 和 `state.Scope`。相互独立且可选的 `agent.Runtime` 与 `agent.StreamingRuntime` 至少需要提供一个。`asset.Store`、`modelselection.Controller` 和 `agent.PluginInputWriter` 是可选依赖；writer 用于在启动 Agent 前写入文件通知。Operation 通过 `[]operation.Operation` 收集；应用自身另外注册 `/app-webui config`。
 
-模块要求 Go 1.24.2，直接 SDK/ABI 版本由 [go.mod](go.mod) 固定，当前分别为 SDK `v0.2.10`、ABI `v0.1.0`。插件没有主程序，应由 Ingot Builder 组合成 Runtime Image。
+模块要求 Go 1.24.2，已发布的直接 SDK/ABI 版本由 [go.mod](go.mod) 固定，当前分别为 SDK `v0.2.16`、ABI `v0.1.0`。本分支的本地文件输入通过 SDK 已发布的通用 writer 接口调用 [context-input](../context-input/README.md)，由它统一校验并使用 `session.Store.Append` 写入，读取时统一格式化；Runtime 需组合该新插件、支持插件输入投影的 Agent 和收集 Contributor 的 Prompt。独立模块验证使用 `GOWORK=off`，不需要本地 SDK 替换。插件没有主程序，应由 Ingot Builder 组合成 Runtime Image。
 
 ## 启动 Web UI
 
@@ -48,7 +48,7 @@ ingot start web
 - 对话消息不显示 Ingot 图标/名称；实时执行仍展示状态徽标。工具调用显示开关保存在浏览器本地偏好中，刷新后也会应用到历史消息；隐藏纯工具消息时不影响最终回答。
 - Markdown、代码高亮/复制、折叠推理、工具调用卡片和独立执行详情；Turn、Round、Model、Tool 与 Session 累计用量来自公开 SDK 能力。
 - 流式输出及 Run-only 降级、停止执行、内联审批/自由输入、跨会话待处理请求抽屉。
-- 拖放、选择及粘贴图片上传；历史附件按需预览或下载。Asset 能力缺失时禁用上传。
+- 通过宿主的系统文件选择器多选本地文件。图片按 Asset 能力预览并作为模型图片输入；其他文件以原路径通知模型，不复制文件。文件选择不依赖 Asset 能力。
 - Operation 简单表单与复杂 JSON 输入、服务端 Schema 校验、结果恢复和取消；JSON 模式保留提交的原始文本，不经数值转换。
 - 浅色/深色/跟随系统、中英文、桌面侧栏及移动端抽屉；最小适配宽度 360px。
 
@@ -73,7 +73,7 @@ max_asset_bytes = 67108864
 | `subscriber_buffer` | 64 | 每个 SSE subscriber 的事件缓冲 |
 | `heartbeat_interval_seconds` | 15 | SSE 心跳秒数 |
 | `operation_retention` | 128 | 保留的终态 Operation invocation 数量，运行中调用另行保留 |
-| `max_asset_bytes` | 67,108,864（64 MiB） | 单次 Asset 上传上限 |
+| `max_asset_bytes` | 67,108,864（64 MiB） | 单个所选文件及单次 Asset 上传上限 |
 
 数值字段 `0` 选择默认值；负数无效，heartbeat 还检查 duration 溢出。`address` 空字符串选择默认值。`max_asset_bytes` 不是 JSON 请求上限，普通 JSON 请求另有固定的 1 MiB 上限。
 
@@ -92,6 +92,7 @@ Web 命令 `/app-webui config`（Group `app-webui`、Name `config`、输入 `{}`
 | Session 生命周期 | `POST /api/sessions/{id}/archive`、`/restore`、`/fork` |
 | 原文追问 | `GET/POST /api/sessions/{id}/followups`、`DELETE /api/followups/{id}` |
 | Workspace 目录选择 | `POST /api/workspace/select` |
+| 本地文件选择 | `POST /api/files/select` |
 | 历史消息 | `GET /api/sessions/{id}/history` |
 | Asset | `POST /api/assets`、`GET /api/assets/{id}` |
 | Operation | `GET /api/operations`、`POST /api/operations/{internal-id}`、`DELETE /api/operation-invocations/{id}` |
@@ -115,10 +116,10 @@ Agent 不再保存独立的模型覆盖配置。契约保留在 WebUI 的公开�
 上述请求用于 `POST /api/sessions`，返回 `201` 和会话投影（含 `id`）；省略/清空 workspace 使用默认工作区。`PATCH /api/sessions/{id}` 使用 `{"title":"新标题"}`；一次性绑定工作区使用 `{"workspace":"/absolute/path"}`。新建 Turn 使用：
 
 ```json
-{"sessionId":"session-id","input":"检查工作区","attachments":[{"kind":"image","mimeType":"image/png","name":"example.png","assetId":"asset-id"}]}
+{"sessionId":"session-id","input":"检查报告","attachments":[{"kind":"file","path":"/absolute/path/to/report.pdf"}]}
 ```
 
-附件可省略；Asset 必须先上传。Turn 被接受时返回 `202` 与 `{"id":"invocation-id"}`，取消使用该 invocation ID 而非 Session ID。响应 Interaction 使用 `{"values":{"answer":"回答文本"}}`，审批则使用 `{"values":{"decision":"allow"}}`；字段名以 pending request 声明为准，成功响应为 `204`。错误包装统一为 `{"error":{"code":"...","message":"..."}}`。
+附件可省略；前端提交选择接口返回的 Attachment DTO，后端在发送时重新校验原路径并生成文件元数据。Turn 被接受时返回 `202` 与 `{"id":"invocation-id"}`；前端直接使用本次输入与所选文件列表显示临时消息，持久历史仍以 `agent.History` 为准。插件上下文消息保留在历史数据中，但不渲染为聊天气泡。外壳统一为 `<system source="plugin">...</system>`，不包含插件名；历史文件展示通过有序 JSON 文件列表和固定通知正文识别。取消使用该 invocation ID 而非 Session ID。响应 Interaction 使用 `{"values":{"answer":"回答文本"}}`，审批则使用 `{"values":{"decision":"allow"}}`；字段名以 pending request 声明为准，成功响应为 `204`。错误包装统一为 `{"error":{"code":"...","message":"..."}}`。
 
 原文追问在点击追问时 fork 当前 Session 并保存便签，即使尚未发送问题也可收起后重开；后续 Turn 使用返回的便签 Session ID。创建请求包含 `messageIndex`、`partIndex`、`start`、`end` 和 `quote`；返回值还包含 `baseMessageCount`，供界面隐藏 fork 时复制的主对话历史。已保存的选区以橙色标注，直接点击原文即可重开便签；多个便签可同时作为可移动、可缩放的小窗显示，点击窗口会将它置顶。WebUI 将锚点、主会话 ID 和历史边界写入追问 Session 的 `Meta["app-webui"]`，不写入模型上下文，也不使用单独的 `inline-followups.json`；普通 Session 列表不会显示便签。删除主 Session 时会先删除其便签。旧 JSON 不迁移，旧追问 Session 可能作为普通会话显示。
 
@@ -132,7 +133,7 @@ Turn 完成后会从运行中注册表移除，完整历史仍以 `agent.History
 
 十种 `agent.turn/round/model/tool.*` 事件仅来自 Observation，并保留 SDK correlation、sequence 和物化时间。需要将 `host` 导出的 Observer 接入 Observation Consumer 才会收到这些事件；后端本身不会创建 Consumer，也不会合成执行事实。Web invocation ID 与 SDK turn ID 始终是两个独立标识。
 
-历史消息和规范结果使用有序内容数组、字符串形式的 `kind`，以及显式的媒体来源。内联输出字节在 JSON 中编码为 base64；URI 和 Asset 输出来源会原样保留，不会被后端读取。Turn 输入仅接受基于 Asset 的附件。空文本和仅含附件的 Turn 会交由 Agent 的领域校验处理。未绑定 Workspace 的历史 Session 会在创建 Turn 前自动绑定默认工作区。
+历史消息和规范结果使用有序内容数组、字符串形式的 `kind`，以及显式的媒体来源。内联输出字节在 JSON 中编码为 base64；URI 和 Asset 输出来源会原样保留，不会被后端读取。Turn 输入接受选择器返回的本地路径；旧式仅含 Asset 的输入只接受 PNG、JPEG、GIF、WebP 图片，其他格式返回 `invalid_local_file`。仅选择文件而不输入文字时，先写入文件通知，再保留一个空用户消息。未绑定 Workspace 的历史 Session 会在创建 Turn 前自动绑定默认工作区。
 
 ## Session Token 用量
 
@@ -149,7 +150,39 @@ Token 卡片同时显示 `context-compact.session-context/<sessionId>` 的 `inpu
 
 普通会话与普通 Fork 的 root/current 均为自身，Fork 初值为 0。追问的 root 由服务端读取其 `Meta["app-webui"].sourceSessionId` 并校验，current 为便签自身；浏览器只提交 current。根会话累计包含所属子任务、压缩和追问，不能把全部 Session 的累计值相加作为全局消耗。删除成功后 Clear 对应状态，前端忽略已删除 Session 的晚到快照。
 
-此合同使用 SDK v0.2.15 发布的 Runtime 双 Session 参数及 `session.Metadata.TotalToken`，应组合相容版本的 Agent、ModelRuntime、Compactor 和 Session 插件。独立模块与浏览器回归使用 `go.mod` 中的已发布依赖（`GOWORK=off`），无需本地 SDK 源码替换。
+此合同使用 SDK v0.2.15 发布的 Runtime 双 Session 参数及 `session.Metadata.TotalToken`，应组合相容版本的 Agent、ModelRuntime、Compactor 和 Session 插件。本分支新增的文件输入使用 SDK v0.2.16 已发布的通用接口；使用 `go.mod` 固定的依赖进行 `GOWORK=off` 独立验证，无需本地 SDK workspace。
+
+## 本地文件输入（未发布）
+
+`POST /api/files/select` 接受 `{"initialPath":"/absolute/path/to/directory"}`，省略或留空时使用默认工作区。前端默认传当前会话的工作区。目录必须存在；文件与目录选择器共用一个占用锁，同时选择返回 `workspace_picker_busy`。取消返回 `{"files":[]}`。成功返回：
+
+```json
+{
+  "files": [
+    {
+      "kind": "file",
+      "mimeType": "application/pdf",
+      "name": "report.pdf",
+      "path": "/absolute/path/to/report.pdf",
+      "size": 123
+    }
+  ]
+}
+```
+
+路径由后端解析符号链接并规范为绝对路径，必须是现存的普通文件，大小不超过 `max_asset_bytes`。文件名、MIME 和大小由后端读取，不信任浏览器提交的同名字段。PNG、JPEG、GIF、WebP 在配置 Asset Store 时导入现有 Asset 机制并返回 `assetId`，用于图片预览及模型图片输入；没有 Asset Store 时只提供路径。其他格式（包括文档、音视频、SVG、AVIF）不读取正文或复制到插件目录，也不发送为供应商媒体输入。
+
+发送时，WebUI 为本次选择的所有文件生成一条 `app.backend` 插件输入，正文包含 JSON 文件列表及“以上是紧随其后的用户输入所上传的文件。”。完成文件、会话和工作目录校验后，HTTP app 调用 `agent.PluginInputWriter.Append`，由 `context.input` 校验、编码并通过普通 `session.Store.Append` 写入。通知写入成功后才启动 Agent，由 Agent 正常读取历史、保存用户输入并生成首次模型请求；后续轮次沿用这个上下文。通知写入失败时直接返回错误，不启动 Turn，也不自动重试。
+
+校验、Entry 格式、XML 外壳及来源系统说明均由 `context.input` 提供。WebUI 仅负责文件正文与追加时机，不依赖该插件的实现包。没有 writer 时不向界面声明文件选择可用，提交本地文件返回 `501`，不启动 Turn。通知文本校验在 `Append` 时进行；被拒绝时不启动 Agent，本次用户消息尚未保存。
+
+WebUI 正常流程中文件通知位于对应用户消息之前，两者是独立的 Append，不提供成对原子提交、失败后的自动重试或其他写入者之间的隔离。通知成功后、用户消息保存前中断，可能只留下通知记录；已提交的通知保留在历史中。这个顺序由 WebUI 的调用约束实现，SDK 没有额外的文件关联接口或历史分组格式。
+
+发送后的临时消息直接使用文件选择器返回的文件列表；读取历史后，界面从持久通知中提取文件信息。两者均按选择顺序显示在所属用户消息中；纯文件发送显示附件，非图片暂仅显示图标、文件名和类型。上下文保留空用户消息，插件通知在主对话和追问窗口中均不渲染，发送中和刷新后遵循同一显示规则。原始历史和消息索引保持完整，重启及 Fork 保留上下文顺序。
+
+选择器打开在 Runtime 所在主机：Windows 使用 COM `IFileOpenDialog`，macOS 使用 `NSOpenPanel`，Linux 使用 Zenity 或 KDialog，Linux 仍需要桌面会话。不可用时返回 `file_picker_unavailable`。浏览器原生文件输入不暴露真实绝对路径，因此这里调用宿主选择器；远程浏览器不能用此接口选择远程设备上的文件。当前只支持文件选择，不处理粘贴或拖放文件；原文件后续被移动、删除或修改时，路径通知不会保存一份副本。
+
+此前已经写入历史的非图片媒体附件不会自动改写为路径通知，继续使用这些旧记录仍可能被供应商拒绝；可在新会话重新选择原文件。此实现不迁移旧历史。
 
 ## Asset 上传与读取
 
@@ -166,7 +199,7 @@ Asset 上传直接使用请求体原始字节，并要求提供已知的 `Conten
 
 未提供长度时返回 `411`，超过大小限制时返回 `413`，未配置可选的 Asset Store 时返回 `501`。文件名和 MIME 元数据由后续创建 Turn 时的 Attachment DTO 提供。
 
-`GET /api/state` 的 `assets` 字段返回 `available` 和 `maxBytes`。读取接口通过 `Store.Stat/Open` 流式传输已有 Asset；不存在时返回 `404`，未配置 Store 时返回 `501`。响应使用 `application/octet-stream`、`Content-Disposition: attachment`、`nosniff` 和 `no-store`，不会信任历史消息中的 MIME 类型来执行内容。
+`GET /api/state` 的 `assets` 字段返回 `available` 和 `maxBytes`；`files` 字段独立返回本地文件选择能力和同一文件大小上限。读取接口通过 `Store.Stat/Open` 流式传输已有 Asset；不存在时返回 `404`，未配置 Store 时返回 `501`。响应使用 `application/octet-stream`、`Content-Disposition: attachment`、`nosniff` 和 `no-store`，不会信任历史消息中的 MIME 类型来执行内容。
 
 前端仅对允许的图片、音频和视频格式创建 Blob 预览；HTML、SVG 等文件保留为下载。Markdown 原始 HTML 被禁用，远程图片转换为显式链接，避免后台请求第三方资源。
 
@@ -228,9 +261,11 @@ State ID 仍然等于 `State.Name`；scope 不会生成新的全局 State identi
 在本模块目录中运行测试；以下环境变量写法适用于 POSIX Shell：
 
 ```sh
+GOWORK=off go mod tidy -diff
+GOWORK=off go vet ./...
 GOWORK=off go test -race ./...
 ```
 
-PowerShell 使用 `$env:GOWORK = 'off'` 后执行 `go test ./...`；`-race` 需要当前平台具备相应 Go race/C 工具链。前端 lint、类型检查、单元测试与浏览器回归命令见 [前端开发说明](web/README.md)。现有后端测试覆盖真实 HTTP/SSE、工作区选择器、Asset、配置重启标记、Operation Schema、Interaction 作用域及进程关闭；浏览器 fixture 只在测试中提供。
+PowerShell 使用 `$env:GOWORK = 'off'` 后执行上述 Go 命令；`-race` 需要当前平台具备相应 Go race/C 工具链。前端 lint、类型检查、单元测试与浏览器回归命令见 [前端开发说明](web/README.md)。后端单元测试使用 SDK 接口替身，跨插件集成可通过 workspace 组合 Agent、Prompt、context.input 和本模块进行验证；浏览器 fixture 只在测试中提供。
 
 返回 [插件文档索引](../docs/README.md)。

@@ -20,7 +20,8 @@ The default component consumes `state.Scope`, `model.Runtime`, `tool.Runtime`,
 `session.Store`, `asset.Store`, `prompt.Renderer`, `observation.Consumer`, and
 `sessioncontrol.Control`. It also consumes ordered `[]agent.Interceptor` and
 `[]agent.RoundInterceptor`, plus explicit ABI optional
-`model.StreamingRuntime`, `model.RequestResolver`, and `contextwindow.Compactor` capabilities. The composite
+`model.StreamingRuntime`, `model.RequestResolver`, `contextwindow.Compactor`, and
+`agent.PluginInputProjector` capabilities. The composite
 plugin supplies its own observation/control components. Direct Go construction
 can omit observation (discarding events) and control (disabling dispatch), but
 the required model/tool/store/asset/prompt/state dependencies cannot be nil.
@@ -109,12 +110,53 @@ It does not retry after partial output or a consumer error. Streaming reasoning
 is transient; it is not persisted as canonical assistant content. The deprecated
 `streaming` TOML field is ignored; the caller selects the API.
 
-History uses version-1 `agent.message` session entries. Unknown versions, malformed
+History uses version-1 `agent.message` entries for individual messages. Unknown versions, malformed
 payloads, duplicate call identities, and invalid tool-result ordering fail rather
 than being silently repaired. `History.Load` is read-only. At the next execution,
 unanswered calls in a trailing interrupted round receive explicit diagnostic
 results recording an unknown outcome; their tools are not executed again.
 Inline non-text content is materialized into `asset.Store` before persistence.
+
+## Plugin Context Inputs (Unreleased)
+
+Plugins inject `agent.PluginInputWriter` and append `agent.PluginInput` to an
+explicitly selected Session. [context-input](../context-input/README.md) owns
+validation, versioned records, escaped user-message formatting and Store writes.
+The Agent optionally injects `agent.PluginInputProjector`, delegating recognition
+and projection of non-agent records to it. Recognized invalid records fail with
+their Entry position; without a projector, non-agent entries remain opaque and
+are skipped. Neither wire formats nor envelopes are built into the Agent.
+
+This module requires the plugin-input interfaces published in SDK v0.2.16 and
+a provider such as `context.input`. The exact SDK version is pinned in `go.mod`;
+isolated module checks use `GOWORK=off` without a local SDK replacement.
+No database migration or rewrite of existing entries is needed. Plugin input
+interpretation and instruction priority belong to users and plugin authors.
+
+An input persisted between a tool decision and its results is buffered only
+during history projection and emitted after every matching result. If the
+trailing round is incomplete, read-only History defers the input. The next Turn
+adds interrupted results and reloads durable history, including deferred
+inputs. Crashes discard the temporary slice, not committed records. This does
+not retry original tools or provide exactly-once delivery/processing.
+
+The Agent loads and recovers history at Turn start, then persists the user
+message and renders the prompt using the existing input/history request.
+Plugin inputs committed before that history load are included in the first
+model request. The Agent keeps the resulting context for subsequent rounds;
+later appends, including those made by tools, are read in a future Turn.
+
+Append success confirms persistence only. It does not start a Turn, refresh
+per-Round history, or guarantee processing. Store ordering/error semantics apply;
+this protocol adds no deduplication, expiry, overwrites, or write isolation.
+The WebUI history API retains the projected text and source label; its chat UI
+hides plugin context messages without removing them from stored/model history.
+
+Input association belongs to the plugin. WebUI calls the injected writer before
+starting the Agent, so its file notice precedes the corresponding user message,
+including when user content is empty. These are independent Store Appends: an
+interruption can leave only the notice, and unrelated writers can insert entries
+between them. No grouped history format or additional Turn field is required.
 
 ## Child-agent configuration
 
