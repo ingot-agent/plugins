@@ -39,6 +39,9 @@
 
 ### Fixed
 
+- Keep the selected slash-command group or operation visible when navigating
+  with the arrow keys, including wrapping between the first and last options.
+  Scroll only the option list and preserve focus in the composer.
 - Display locally selected files as attachment rows on their user message,
   including file-only sends, pending input and refreshed history. Preserve mixed
   image/file order and existing image preview; local file rows show metadata only.

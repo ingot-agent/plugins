@@ -220,6 +220,8 @@ Operation Definition 按组件图提供的顺序生成快照，并在服务器�
 
 对话 Composer 输入 `/` 时先展示 Group，选中后再展示该 Group 的 Operation。完整命令会立即打开 Operation 弹窗，Interaction 表单、运行状态、结果和显式取消均在弹窗内完成；`//` 用于发送以 `/` 开头的普通消息。主导航不再暴露调试页，原 `/operations` 路由保留在“设置 → 开发者”中。
 
+命令面板支持上下方向键循环切换选项；选中项超出列表可视范围时，列表会自动滚动以显示该项，输入焦点仍保留在 Composer。
+
 Operation 不存在时返回 `404`；输入无效时会在调度前返回 `400`。调用被接受后返回 `202` 和 invocation ID。`operation.started`、`operation.completed`、`operation.failed` 与 `operation.canceled` 事件均携带 invocation 快照，该快照也会出现在 `/api/state` 中。
 
 Operation 状态包括 `running`、`succeeded`、`failed` 和 `canceled`。除全部运行中调用外，后端还会保留最近 `operation_retention` 个终态结果。输出未通过 Schema 校验时，invocation 会以 `operation_invalid_output` 错误结束，并且不会重试 Operation。
