@@ -151,6 +151,7 @@ func TestAppConfigOperationUsesInteractionAndPersists(t *testing.T) {
 	channel := &testInteractionChannel{response: interaction.Response{Values: []interaction.Answer{
 		{Name: "address", Value: interaction.StringValue("127.0.0.1:7001")},
 		{Name: "operation_retention", Value: interaction.IntegerValue(12)},
+		{Name: "text_editor_command", Value: interaction.StringValue(`code --reuse-window "${file_path}"`)},
 	}}}
 	configOp := &configOperation{scope: testStateScope{dir: dir}}
 	definition := configOp.Definition()
@@ -161,18 +162,61 @@ func TestAppConfigOperationUsesInteractionAndPersists(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if channel.request.Name != "config" || len(channel.request.Fields) != 6 || channel.request.Fields[0].Default.String != "127.0.0.1:7000" {
+	if channel.request.Name != "config" || len(channel.request.Fields) != 7 || channel.request.Fields[0].Default.String != "127.0.0.1:7000" {
 		t.Fatalf("interaction request = %#v", channel.request)
 	}
 	stored, err := appbackend.LoadConfig(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stored.Backend.Address != "127.0.0.1:7001" || stored.Backend.OperationRetention != 12 || stored.Backend.ReplayCapacity != 32 {
+	if stored.Backend.Address != "127.0.0.1:7001" || stored.Backend.OperationRetention != 12 || stored.Backend.ReplayCapacity != 32 || stored.Backend.TextEditorCommand != `code --reuse-window "${file_path}"` {
 		t.Fatalf("stored config = %#v", stored)
 	}
 	if !strings.Contains(string(result.Output), `"restart_required":true`) {
 		t.Fatalf("output = %s", result.Output)
+	}
+}
+
+func TestTextEditorConfigDoesNotRequireRestart(t *testing.T) {
+	initial := appbackend.Config{}
+	dir := writeTestConfig(t, initial)
+	active, err := initial.Normalize()
+	if err != nil {
+		t.Fatal(err)
+	}
+	op := &configOperation{scope: testStateScope{dir: dir}, active: active}
+	for _, template := range []string{`editor --before ${file_path} --after`, ""} {
+		channel := &testInteractionChannel{response: interaction.Response{Values: []interaction.Answer{
+			{Name: "text_editor_command", Value: interaction.StringValue(template)},
+		}}}
+		result, err := op.Invoke(context.Background(), operation.Request{Input: json.RawMessage(`{}`), Interaction: channel})
+		if err != nil {
+			t.Fatal(err)
+		}
+		stored, err := appbackend.LoadConfig(dir)
+		if err != nil || stored.Backend.TextEditorCommand != template {
+			t.Fatalf("stored = %#v, error = %v", stored, err)
+		}
+		if !strings.Contains(string(result.Output), `"restart_required":false`) {
+			t.Fatalf("editor-only change requires restart: %s", result.Output)
+		}
+	}
+}
+
+func TestInvalidTextEditorConfigDoesNotOverwriteSavedConfig(t *testing.T) {
+	initial := appbackend.Config{Backend: appbackend.BackendConfig{TextEditorCommand: `code "${file_path}"`}}
+	dir := writeTestConfig(t, initial)
+	op := &configOperation{scope: testStateScope{dir: dir}}
+	channel := &testInteractionChannel{response: interaction.Response{Values: []interaction.Answer{
+		{Name: "text_editor_command", Value: interaction.StringValue(`editor --missing-file-placeholder`)},
+	}}}
+	_, err := op.Invoke(context.Background(), operation.Request{Input: json.RawMessage(`{}`), Interaction: channel})
+	if !errors.Is(err, appbackend.ErrInvalidConfig) {
+		t.Fatalf("invalid command error = %v", err)
+	}
+	stored, err := appbackend.LoadConfig(dir)
+	if err != nil || stored != initial {
+		t.Fatalf("invalid editor configuration replaced saved config: %#v, %v", stored, err)
 	}
 }
 

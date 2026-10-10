@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, provide, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { Inbox, X, ArrowUpRight, Sun, Moon, Monitor } from 'lucide-vue-next'
@@ -10,8 +10,14 @@ import Navigation from './components/Navigation.vue'
 import Overlay from './components/Overlay.vue'
 import InteractionCard from './components/InteractionCard.vue'
 import CommandDialog from './components/CommandDialog.vue'
+import FilePreviewPanel from './components/FilePreviewPanel.vue'
+import { createFilePreview, filePreviewKey } from './filePreview'
 const runtime = useRuntime()
 const router = useRouter()
+const filePreview = createFilePreview()
+provide(filePreviewKey, filePreview)
+const preview = filePreview.current
+watch(() => router.currentRoute.value.fullPath, () => filePreview.close())
 const { t, locale } = useI18n()
 const collapsed = ref(readPreference('sidebar', 'open') === 'closed')
 const mobileNavigation = ref(false)
@@ -80,7 +86,10 @@ onBeforeUnmount(() => { runtime.disconnect(); window.removeEventListener('keydow
     <aside class="desktop-navigation"><Navigation @navigate="mobileNavigation = false" @settings="settings = true" @collapse="collapsed = true" /></aside>
     <main class="workspace">
       <div v-if="runtime.connection === 'reconnecting'" class="connection-banner" role="status" :title="runtime.connectionError">{{ t('disconnected') }}</div>
-      <RouterView v-slot="{ Component }"><component :is="Component" @navigation="showNavigation" @pending="pending = true" @operation="openOperation" /></RouterView>
+      <div class="workspace-body">
+        <RouterView v-slot="{ Component }"><component :is="Component" @navigation="showNavigation" @pending="pending = true" @operation="openOperation" /></RouterView>
+        <FilePreviewPanel v-if="preview" :request="preview" :overlay="commandDialog.open || pending" @close="filePreview.close" />
+      </div>
     </main>
     <Overlay :open="mobileNavigation" :title="t('conversations')" drawer @update:open="mobileNavigation = $event">
       <Navigation @navigate="mobileNavigation = false" @settings="mobileNavigation = false; settings = true" @collapse="mobileNavigation = false" />

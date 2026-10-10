@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/ingot-agent/plugins/app-webui/internal/editorcmd"
 	"github.com/pelletier/go-toml/v2"
 )
 
@@ -94,7 +95,7 @@ type Config struct {
 	Backend BackendConfig `toml:"backend"`
 }
 
-// BackendConfig controls the HTTP server and transient event delivery.
+// BackendConfig controls the HTTP server, event delivery and host text editor.
 type BackendConfig struct {
 	Address                  string `toml:"address"`
 	ReplayCapacity           int    `toml:"replay_capacity"`
@@ -102,6 +103,7 @@ type BackendConfig struct {
 	HeartbeatIntervalSeconds int    `toml:"heartbeat_interval_seconds"`
 	OperationRetention       int    `toml:"operation_retention"`
 	MaxAssetBytes            int64  `toml:"max_asset_bytes"`
+	TextEditorCommand        string `toml:"text_editor_command,omitempty"`
 }
 
 // NormalizedBackendConfig contains validated configuration with defaults.
@@ -112,6 +114,7 @@ type NormalizedBackendConfig struct {
 	Heartbeat          time.Duration
 	OperationRetention int
 	MaxAssetBytes      int64
+	TextEditorCommand  string
 }
 
 // Normalize validates the backend configuration and materializes defaults.
@@ -122,6 +125,10 @@ func (c Config) Normalize() (NormalizedBackendConfig, error) {
 		SubscriberBuffer:   c.Backend.SubscriberBuffer,
 		OperationRetention: c.Backend.OperationRetention,
 		MaxAssetBytes:      c.Backend.MaxAssetBytes,
+		TextEditorCommand:  c.Backend.TextEditorCommand,
+	}
+	if _, err := editorcmd.Parse(cfg.TextEditorCommand); err != nil {
+		return NormalizedBackendConfig{}, fmt.Errorf("%w: %w", err, ErrInvalidConfig)
 	}
 	if cfg.Address == "" {
 		cfg.Address = defaultAddress

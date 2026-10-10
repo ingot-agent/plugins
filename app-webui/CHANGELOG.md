@@ -4,6 +4,18 @@
 
 ### Added
 
+- Preview local file links and file attachments in a resizable, read-only pane,
+  with syntax highlighting, line references, Markdown/source modes and a mobile
+  full-screen view. Resolve relative paths against the originating Session or
+  previewed document. Add host text-application opening and path copying.
+- Add `POST /api/files/preview` and `POST /api/files/open` independently of Asset
+  Store and file-input capabilities. Preview UTF-8 and BOM-marked UTF-16 text up
+  to 1 MiB and 20,000 lines; read the current file on demand.
+- Configure the host text editor through `backend.text_editor_command` and
+  `/app-webui config`, with editor suggestions and a `${file_path}` command
+  template. Preserve quoted executable paths and file argument boundaries;
+  reject malformed templates before saving. Changes apply on the next open
+  without restarting the server; an empty template uses the system text app.
 - Select host-local files through `POST /api/files/select` using the native
   multi-file picker on Windows, macOS and Linux. Return original absolute paths
   and server-derived metadata; keep non-image files in place without copying.

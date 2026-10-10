@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, provide, ref, watch } from 'vue'
+import { fileContextKey } from '../filePreview'
 import { useI18n } from 'vue-i18n'
 import { ArrowUp, LoaderCircle, MessageCircleQuestion, Square, Trash2, X } from 'lucide-vue-next'
 import { errorMessage } from '../api'
@@ -21,6 +22,7 @@ const input = ref<HTMLTextAreaElement>()
 const sending = ref(false)
 const confirmingDelete = ref(false)
 const noteId = computed(() => props.note?.id || '')
+provide(fileContextKey, computed(() => ({ sessionId: noteId.value || props.sourceSessionId })))
 const history = computed(() => (runtime.histories[noteId.value] || []).slice(props.note?.baseMessageCount || 0)
   .map((message, index, messages) => displayMessage(message, messages[index - 1]))
   .filter(item => item.role !== 'tool' && !isPluginContextMessage(item)))
