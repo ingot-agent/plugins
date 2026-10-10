@@ -47,6 +47,10 @@ Use the composer's slash-command menu:
 These Operations have local name `config` and a Group matching the hyphenated
 module directory. `app.backend` is a manifest name; its displayed command is
 `/app-webui config`. That command configures the HTTP host, not model providers.
+Use the separate `/agent-default subagents` Operation to choose built-in,
+custom, or disabled child agents. Custom configuration covers type definitions,
+tool allowlists, and dispatch permissions. Saved changes apply immediately to
+subsequent child creation; existing children retain their frozen definitions.
 
 Each configuration Operation starts with `{}` and requests values through its
 call-scoped `interaction.Channel`. Do not send TOML settings as initial input.
@@ -69,7 +73,7 @@ Additional or distinct state includes:
 
 | Module | State / configuration |
 |---|---|
-| [agent-default](../agent-default/README.md) | `subagents.toml` overrides the built-in `coder`/`explorer`/`reviewer` child types available when `tool-subagent` and child storage/workspace capabilities are installed; scheduler limits are implementation constants |
+| [agent-default](../agent-default/README.md) | `/agent-default subagents` manages `subagents.toml`, overriding the built-in `coder`/`explorer`/`reviewer` child types available when `tool-subagent` and child storage/workspace capabilities are installed; scheduler limits are implementation constants |
 | [session-sqlite](../session-sqlite/README.md) | SQLite sessions/workspaces/metadata; no `config` Operation |
 | [skill-runtime](../skill-runtime/README.md) | Skills in the plugin scope, plus the embedded built-in skill; no `config` Operation |
 | [tool-subagent](../tool-subagent/README.md) | Injected child-management capability; no private configuration Operation |
@@ -90,13 +94,16 @@ The current catalog has **19 modules, 16 with configuration Operations**:
 |---|---|
 | Saved changes apply to later calls without restart | `agent-default`, `asset-local`, `context-compact`, `http-default`, `interceptor-approval`, `interceptor-script`, `model-openai-compatible`, `model-openai-responses`, `model-runtime`, `prompt-default`, `tool-ask`, `tool-edit`, `tool-runtime`, `tool-shell` |
 | Changed settings require restart | `app-webui`: listener, replay/subscriber buffers, heartbeat, Operation retention and asset-upload limit |
-| Loaded separately at construction | `agent-default` child definitions in `subagents.toml`; not covered by `/agent-default config` |
+| Saved changes apply to later calls without restart | `agent-default` child definitions in `subagents.toml`, managed by `/agent-default subagents` independently of `/agent-default config` |
 
-The 15 live Operations return `restart_required:false` after persistence and
+The 16 live Operations return `restart_required:false` after persistence and
 publication. Existing calls keep captured settings; later calls use the update.
-WebUI compares saved values with startup values and reports the actual
-`restart_required`. After changing the host, run `ingot restart` and open the
-new address if it changed.
+Subagent configuration updates preserve accepted child tasks, including their
+prompts, tools, and lifecycle support when new child creation is disabled.
+WebUI compares saved values with active startup values and reports the actual
+`restart_required`, including changes still pending from an earlier invocation.
+Run `ingot restart` when required; after changing the host, open the new address
+if it changed.
 
 See [live configuration](live-plugin-configuration.md) for transactions and
 [live model providers](live-model-provider-configuration.md) for provider

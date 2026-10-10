@@ -2,6 +2,7 @@ package sessiontree
 
 import (
 	"context"
+	"maps"
 	"testing"
 
 	"github.com/ingot-agent/sdk/agent"
@@ -23,9 +24,12 @@ func TestNestedTasksKeepOutermostTokenRootSeparateFromLifecycleRoot(t *testing.T
 				t.Fatal(err)
 			}
 			defer tree.EndRoot(ctx, root, true)
-			definition := tree.config.definitions["coder"]
+			config := *tree.config.Load()
+			config.definitions = maps.Clone(config.definitions)
+			definition := config.definitions["coder"]
 			definition.definition.AllowedChildTypes = []string{"coder"}
-			tree.config.definitions["coder"] = definition
+			config.definitions["coder"] = definition
+			tree.config.Store(&config)
 			parent := session.ID("c0_root")
 			for depth := 1; depth <= 2; depth++ {
 				child, err := tree.CreateChild(ctx, execution.Scope{SessionID: parent}, agent.ChildRequest{AgentType: "coder", Task: "task", Workspace: &workspace.Binding{Root: t.TempDir()}})
