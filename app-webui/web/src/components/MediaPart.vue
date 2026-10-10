@@ -1,11 +1,23 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, inject, onBeforeUnmount, ref, watch } from 'vue'
 import { File, Download, ExternalLink, Image, LoaderCircle } from 'lucide-vue-next'
 import { useI18n } from 'vue-i18n'
 import type { Part } from '../protocol'
 import { errorMessage, segment } from '../api'
+import { fileContextKey, filePreviewKey, type FileContext } from '../filePreview'
+import { parseFileLink } from '../fileLinks'
 const props = defineProps<{ part: Part }>()
 const { t } = useI18n()
+const filePreview = inject(filePreviewKey, undefined)
+const fileContext = inject(fileContextKey, ref<FileContext>({}))
+const localFile = computed(() => {
+  if (props.part.kind !== 'file') return
+  const source = props.part.source
+  return source?.path ? { path: source.path } : source?.uri ? parseFileLink(source.uri) : undefined
+})
+function previewLocal(event: MouseEvent) {
+  if (localFile.value) filePreview?.open({ ...fileContext.value, ...localFile.value }, event.currentTarget as HTMLElement)
+}
 const url = ref('')
 const loading = ref(false)
 const error = ref('')
@@ -68,7 +80,7 @@ onBeforeUnmount(clear)
   <div class="media-part">
     <div class="file-row" :title="part.source?.path">
       <Image v-if="part.kind === 'image'" :size="19" class="muted shrink-0" /><File v-else :size="19" class="muted shrink-0" />
-      <div class="min-w-0 flex-1"><div class="truncate text-sm font-medium">{{ part.name || part.kind }}</div><div class="muted text-xs">{{ part.mimeType }}</div></div>
+      <div class="min-w-0 flex-1"><button v-if="localFile && filePreview" type="button" class="local-file-name truncate text-sm font-medium" :title="t('preview') + ': ' + localFile.path" @click="previewLocal">{{ part.name || part.kind }}</button><div v-else class="truncate text-sm font-medium">{{ part.name || part.kind }}</div><div class="muted text-xs">{{ part.mimeType }}</div></div>
       <a v-if="external" class="icon-button" :href="external" target="_blank" rel="noopener noreferrer" :aria-label="t('openLink')"><ExternalLink :size="16" /></a>
       <template v-else-if="downloadable">
         <button v-if="previewable && !url" class="btn small" :disabled="loading" @click="load">{{ t('preview') }}</button>

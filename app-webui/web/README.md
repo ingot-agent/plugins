@@ -69,6 +69,15 @@ PNG、JPEG、GIF、WebP 可使用返回的 Asset 预览；非图片仅发送原�
 
 ## 状态边界
 
+回答中的本地文件链接由 `fileLinks.ts` 解析，`filePreview.ts` 在应用内分发预览请求。
+`FilePreviewPanel.vue` 通过 `/api/files/preview` 读取当前文本，提供独立滚动、行号定位、
+Markdown/源码切换和 `/api/files/open` 本机编辑器入口。编辑器在 `/app-webui config`
+的 Text editor command 字段配置，支持 `${file_path}` 模板，保存后下次打开即生效。
+Session 上下文沿主对话、
+流式输出和追问组件传递；文档内链接改用当前文件作为相对路径基准。文件内容不写入
+消息历史或浏览器持久存储，切换文件会取消旧请求。协议、编码和文件大小限制见
+[本地文件预览](../README.md#本地文件预览未发布)。
+
 Operation 的 Interaction 表单按层级编辑 Object/List：先显示字段或列表摘要，点击后在同宽区域进入下一层，使用返回按钮或面包屑返回。未提交的值在层级切换时保留，校验失败会定位到对应字段。Operation 弹窗和调试页使用单行输入；普通对话中的自由文本回复仍支持多行。弹窗的提交按钮固定在底部。
 
 - `api.ts` / `sse.ts`：JSON 命令与 fetch SSE，错误不会触发自动重试执行。
