@@ -19,7 +19,7 @@ func (t *tree) BeginRoot(ctx context.Context, rootSessionID, sessionID session.I
 	if err := ctx.Err(); err != nil {
 		return sessioncontrol.Handle{}, err
 	}
-	if t.config.enabled {
+	if t.repository != nil {
 		record, err := t.repository.GetChildSession(ctx, sessionID)
 		if err != nil {
 			return sessioncontrol.Handle{}, err
@@ -70,7 +70,7 @@ func (t *tree) EndRoot(ctx context.Context, handle sessioncontrol.Handle, interr
 	t.mu.Unlock()
 
 	var resultErr error
-	if interrupted && t.config.enabled {
+	if interrupted && t.repository != nil {
 		settleCtx, cancel := independentContext(ctx)
 		changed, err := t.repository.UpdateChildBranch(settleCtx, handle.SessionID, agent.ChildBranchRequest{
 			Mode:            agent.BranchInterrupt,
@@ -257,27 +257,42 @@ func (t *tree) ValidateTools(definitions []tool.Definition) error {
 	for _, definition := range definitions {
 		available[definition.Name] = struct{}{}
 	}
-	if t.config.builtin {
+	current := t.config.Load()
+	config := current
+	if config.builtin {
 		if _, ok := available[submitToolName]; !ok {
 			// The tool plugin is not installed: preserve the base Agent composition.
+			t.publishSetupTools(available)
 			return nil
 		}
 		if t.repository == nil || t.workspace == nil {
 			return fmt.Errorf("built-in child agents require child Session storage and workspace management: %w", agent.ErrChildUnsupported)
 		}
-		config, err := builtinConfiguration(available)
+		builtin, err := builtinConfiguration(available)
 		if err != nil {
 			return err
 		}
-		if err := t.repository.RecoverChildSessions(t.startupCtx, agent.ChildRecoveryRequest{Reason: "runtime_restart"}); err != nil {
-			return fmt.Errorf("recover child sessions: %w", err)
-		}
-		t.config = config
+		config = &builtin
 	}
-	if !t.config.enabled {
-		return nil
+	if err := validateConfigurationTools(*config, available); err != nil {
+		return err
 	}
-	for name, entry := range t.config.definitions {
+	if config != current {
+		// Startup resolves built-ins once without replacing a later live update.
+		t.config.CompareAndSwap(current, config)
+	}
+	t.publishSetupTools(available)
+	return nil
+}
+
+func (t *tree) publishSetupTools(available map[string]struct{}) {
+	if t.setup != nil {
+		t.setup.tools.Store(&available)
+	}
+}
+
+func validateConfigurationTools(config configuration, available map[string]struct{}) error {
+	for name, entry := range config.definitions {
 		for _, toolName := range entry.definition.Tools {
 			if _, exists := available[toolName]; !exists {
 				return fmt.Errorf("child agent type %q references unavailable tool %q: %w", name, toolName, ErrInvalidConfig)
@@ -305,7 +320,7 @@ func (t *tree) Shutdown(ctx context.Context) error {
 	t.signal()
 
 	var resultErr error
-	if t.config.enabled {
+	if t.repository != nil {
 		for rootID := range roots {
 			gate := t.gate(rootID)
 			gate.Lock()

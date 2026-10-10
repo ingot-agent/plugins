@@ -625,8 +625,8 @@ func TestBuiltinChildTypesUseInstalledTools(t *testing.T) {
 		t.Fatalf("recovery called %d times, want 1", repository.recoveries)
 	}
 	tree := exports.Control.(*tree)
-	if !tree.config.enabled || tree.config.builtin {
-		t.Fatalf("built-in config not activated: %#v", tree.config)
+	if !tree.config.Load().enabled || tree.config.Load().builtin {
+		t.Fatalf("built-in config not activated: %#v", tree.config.Load())
 	}
 	for _, tc := range []struct {
 		name  string
@@ -636,10 +636,10 @@ func TestBuiltinChildTypesUseInstalledTools(t *testing.T) {
 		{"explorer", []string{"read_file", "search", submitToolName}},
 		{"reviewer", []string{"read_file", "search", submitToolName}},
 	} {
-		if got := tree.config.definitions[tc.name].definition.Tools; !slices.Equal(got, tc.tools) {
+		if got := tree.config.Load().definitions[tc.name].definition.Tools; !slices.Equal(got, tc.tools) {
 			t.Errorf("%s tools = %v; want %v", tc.name, got, tc.tools)
 		}
-		if tree.config.definitions[tc.name].definition.SystemPrompt == "" {
+		if tree.config.Load().definitions[tc.name].definition.SystemPrompt == "" {
 			t.Errorf("%s has no system prompt", tc.name)
 		}
 	}

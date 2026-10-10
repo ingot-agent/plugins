@@ -148,9 +148,10 @@ contract for official plugins.
   active state unchanged. Successful live model configuration returns
   `restart_required:false`; see
   [live model provider configuration](live-model-provider-configuration.md).
-- All current configurable official plugins apply successful Operation changes
-  immediately and return `restart_required:false`; see
-  [live official plugin configuration](live-plugin-configuration.md).
+- Live configuration Operations apply successful changes immediately and return
+  `restart_required:false`, including `/agent-default subagents`. WebUI server
+  settings report whether saved settings differ from the active startup settings;
+  see [live official plugin configuration](live-plugin-configuration.md).
 - Plugins that can start usefully while unconfigured SHOULD remain constructible
   and expose the capability needed to complete initial configuration. This is
   not a requirement for plugins with no configuration or no meaningful
