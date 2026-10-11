@@ -69,6 +69,7 @@ type application struct {
 	defaultWorkspace     string
 	workspacePicker      workspacePicker
 	filePicker           filePicker
+	fileOpener           fileOpener
 }
 
 // New loads this Plugin's own configuration from its state scope, validates
@@ -136,6 +137,7 @@ func New(ctx context.Context, deps Dependencies) (Exports, ingotabi.Cleanup, err
 		defaultWorkspace: defaultWorkspace,
 		workspacePicker:  nativeWorkspacePicker{},
 		filePicker:       nativeFilePicker{},
+		fileOpener:       configuredFileOpener{scopeDir: deps.State.Dir()},
 	}
 	instance.turns = newTurnRegistry(runCtx, agentController, deps.Backend.Events())
 	if deps.ModelSelection.Valid {

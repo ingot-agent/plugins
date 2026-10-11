@@ -398,23 +398,30 @@ func ownedHeader(lower string) bool {
 	}
 }
 
-func (p *provider) Complete(ctx context.Context, request model.Request) (model.Response, error) {
+func (p *provider) Complete(ctx context.Context, request model.Request) (result model.Response, resultErr error) {
 	if err := p.validateRequest(ctx, request); err != nil {
 		return model.Response{}, err
 	}
+	diagnostic, ctx := p.startDiagnostic(ctx, request, false)
+	defer func() { diagnostic.finish(ctx, resultErr) }()
 	body, err := p.encodeResponseRequest(ctx, request, false)
 	if err != nil {
 		return model.Response{}, err
 	}
+	diagnostic.stage = "dispatch"
+	diagnostic.requestBytes = len(body)
 	response, err := p.do(ctx, body, "application/json")
 	if err != nil {
 		return model.Response{}, err
 	}
 	stopBodyWatch := closeBodyOnCancel(ctx, response.Body)
 	defer stopBodyWatch()
+	diagnostic.receivedHeaders(ctx, response)
+	diagnostic.stage = "http_status"
 	if err := p.checkStatus(ctx, response); err != nil {
 		return model.Response{}, err
 	}
+	diagnostic.stage = "read"
 	raw, err := readBounded(response.Body, p.maxResponseBytes, "response")
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
@@ -422,6 +429,7 @@ func (p *provider) Complete(ctx context.Context, request model.Request) (model.R
 		}
 		return model.Response{}, wrapReadError(err)
 	}
+	diagnostic.stage = "decode"
 	return decodeResponse(raw, p.name, p.apiKey)
 }
 

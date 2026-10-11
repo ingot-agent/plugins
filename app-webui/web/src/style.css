@@ -121,6 +121,37 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
 .activity-dot { background: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); animation: pulse 1.5s infinite; margin: 0 4px; }
 .pending-dot { background: var(--accent); margin: 0 4px; }
 .workspace { display: flex; flex-direction: column; min-width: 0; min-height: 0; position: relative; }
+.workspace-body { display: flex; flex: 1; min-width: 0; min-height: 0; }
+.workspace-body > .chat-layout, .workspace-body > .operations-view { flex: 1; min-width: 0; }
+.local-file-name { display: block; max-width: 100%; padding: 0; border: 0; background: none; color: var(--accent); text-align: left; text-decoration: underline; text-underline-offset: 3px; }
+.file-preview { position: relative; display: flex; flex-direction: column; flex: 0 0 auto; width: var(--preview-width); max-width: calc(100% - 360px); min-width: 320px; min-height: 0; border-left: 1px solid var(--line); background: var(--surface); }
+.file-preview.expanded, .file-preview.mobile { position: fixed; inset: 0; z-index: 65; width: 100%; max-width: none; height: 100dvh; min-width: 0; border: 0; }
+.file-preview-resize { position: absolute; top: 0; bottom: 0; left: -4px; z-index: 3; width: 8px; cursor: col-resize; touch-action: none; }
+.file-preview-resize:hover, .file-preview-resize:focus-visible { background: color-mix(in srgb, var(--accent) 25%, transparent); outline: none; }
+.file-preview-header { flex-shrink: 0; padding: 16px 18px 12px; border-bottom: 1px solid var(--line); }
+.file-preview-title { display: flex; align-items: center; gap: 10px; }
+.file-preview-title h2 { overflow: hidden; margin: 0; font-size: 14px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.file-preview-title h2:focus { outline: none; }
+.file-preview-title span { color: var(--muted); font-size: 11px; }
+.file-preview-path { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+.file-preview-path > span { flex: 1; overflow: hidden; color: var(--muted); font: 11px var(--font-mono); text-overflow: ellipsis; white-space: nowrap; }
+.file-preview-toolbar { display: flex; align-items: center; gap: 8px; margin-top: 9px; }
+.file-preview-modes { display: inline-flex; padding: 3px; border-radius: 7px; background: var(--subtle); }
+.file-preview-modes button { border: 0; border-radius: 5px; padding: 4px 9px; background: transparent; color: var(--muted); font-size: 12px; }
+.file-preview-modes .selected { background: var(--surface); color: var(--ink); box-shadow: var(--shadow); }
+.file-preview-scroll { position: relative; flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; }
+.file-preview-empty { display: flex; flex: 1; flex-direction: column; align-items: center; justify-content: center; gap: 16px; padding: 32px; text-align: center; font-size: 13px; line-height: 1.8; }
+.file-preview-error { margin: 0; padding: 12px 18px; font-size: 12px; }
+.file-document { max-width: 920px; margin: 0 auto; padding: 24px; }
+.file-source { display: flex; position: relative; width: max-content; min-width: 100%; min-height: 100%; }
+.file-source pre { margin: 0; padding: 16px; border: 0; border-radius: 0; background: transparent; font: 13px/22px var(--font-mono); white-space: pre; tab-size: 4; }
+.file-source pre code { font: inherit; }
+.file-source .file-line-numbers { position: sticky; left: 0; z-index: 2; min-width: 52px; padding-right: 12px; color: var(--muted); background: var(--surface); border-right: 1px solid var(--line); text-align: right; user-select: none; }
+.file-source-code { position: relative; z-index: 1; }
+.file-line-highlight { position: absolute; left: 0; right: 0; background: var(--accent-soft); border-left: 3px solid var(--accent); pointer-events: none; }
+.file-preview-footer { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; padding: 10px 18px; border-top: 1px solid var(--line); color: var(--muted); font-size: 11px; }
+.file-preview-footer p { flex-basis: 100%; margin: 0; }
+.file-preview-back { display: flex; align-items: center; justify-content: center; gap: 8px; padding: 12px 16px calc(12px + env(safe-area-inset-bottom)); border-top: 1px solid var(--line); }
 .workspace-header { display: flex; align-items: center; gap: 12px; min-height: 56px; padding: 10px 22px; flex-shrink: 0; }
 .workspace-header-title { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; }
 .workspace-header-title h1 { font-size: 13px; font-weight: 500; color: var(--muted); margin: 0; }

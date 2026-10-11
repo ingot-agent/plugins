@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"runtime"
 	"sync"
 
 	"github.com/ingot-agent/ingot-abi/state"
@@ -37,13 +38,13 @@ type configOperation struct {
 func (*configOperation) Definition() operation.Definition {
 	return operation.Definition{
 		Name:        setupOperationName,
-		Description: "Review and update the app.backend HTTP server configuration.",
+		Description: "Review and update the app.backend HTTP server and text editor configuration.",
 		Group:       setupOperationGroup,
 		InputSchema: json.RawMessage(`{"type":"object","additionalProperties":false,"properties":{}}`),
 		OutputSchema: json.RawMessage(`{
   "type": "object",
   "additionalProperties": false,
-  "required": ["address", "replay_capacity", "subscriber_buffer", "heartbeat_interval_seconds", "operation_retention", "max_asset_bytes", "restart_required"],
+  "required": ["address", "replay_capacity", "subscriber_buffer", "heartbeat_interval_seconds", "operation_retention", "max_asset_bytes", "text_editor_command", "restart_required"],
   "properties": {
     "address": {"type": "string"},
     "replay_capacity": {"type": "integer"},
@@ -51,6 +52,7 @@ func (*configOperation) Definition() operation.Definition {
     "heartbeat_interval_seconds": {"type": "integer"},
     "operation_retention": {"type": "integer"},
     "max_asset_bytes": {"type": "integer"},
+    "text_editor_command": {"type": "string"},
     "restart_required": {"type": "boolean"}
   }
 }`),
@@ -79,9 +81,10 @@ func (o *configOperation) Invoke(ctx context.Context, request operation.Request)
 	heartbeatSeconds := interaction.IntegerValue(int64(normalized.Heartbeat / 1e9))
 	operationRetention := interaction.IntegerValue(int64(normalized.OperationRetention))
 	maxAssetBytes := interaction.IntegerValue(normalized.MaxAssetBytes)
+	textEditorCommand := interaction.StringValue(normalized.TextEditorCommand)
 	response, err := request.Interaction.Request(ctx, interaction.Request{
 		Name:        setupOperationName,
-		Description: "HTTP listener, event replay, operation retention and browser asset limits.",
+		Description: "HTTP listener, event replay, operation retention, browser asset limits and text editor.",
 		Fields: []interaction.Field{
 			{Name: "address", Label: "Address", Description: "HTTP bind address, for example 127.0.0.1:7316.", Kind: interaction.FieldString, Required: true, Default: &address},
 			{Name: "replay_capacity", Label: "Replay capacity", Kind: interaction.FieldInteger, Required: true, Default: &replayCapacity},
@@ -89,6 +92,7 @@ func (o *configOperation) Invoke(ctx context.Context, request operation.Request)
 			{Name: "heartbeat_interval_seconds", Label: "Heartbeat interval", Description: "Seconds; zero selects the built-in default.", Kind: interaction.FieldInteger, Required: true, Default: &heartbeatSeconds},
 			{Name: "operation_retention", Label: "Operation retention", Kind: interaction.FieldInteger, Required: true, Default: &operationRetention},
 			{Name: "max_asset_bytes", Label: "Maximum asset bytes", Kind: interaction.FieldInteger, Required: true, Default: &maxAssetBytes},
+			{Name: "text_editor_command", Label: "Text editor command", Description: `Command used to open files, for example code --reuse-window "${file_path}". Include ${file_path} in an argument; quote executable paths containing spaces. Empty uses the system text application. Saved changes apply on the next open.`, Kind: interaction.FieldString, Default: &textEditorCommand, Options: textEditorSuggestions()},
 		},
 	})
 	if err != nil {
@@ -112,6 +116,9 @@ func (o *configOperation) Invoke(ctx context.Context, request operation.Request)
 	if value, ok := configInteger(response, "max_asset_bytes"); ok {
 		current.Backend.MaxAssetBytes = value
 	}
+	if value, ok := configString(response, "text_editor_command"); ok {
+		current.Backend.TextEditorCommand = value
+	}
 	updated, err := current.Normalize()
 	if err != nil {
 		return operation.Result{}, err
@@ -134,10 +141,11 @@ func (o *configOperation) Invoke(ctx context.Context, request operation.Request)
 	if err := appbackend.SaveConfig(o.scope.Dir(), current); err != nil {
 		return operation.Result{}, err
 	}
-	// Binding a socket or resizing buffers cannot change in place, so the
-	// Plugin reports that a restart is required instead of pretending the
-	// running process adopted the new values.
-	restartRequired := updated != o.active
+	// The editor command is loaded for each open action. Server settings still
+	// require a restart, including any changes saved in a previous invocation.
+	serverSettings := updated
+	serverSettings.TextEditorCommand = o.active.TextEditorCommand
+	restartRequired := serverSettings != o.active
 	output, err := json.Marshal(map[string]any{
 		"address":                    updated.Address,
 		"replay_capacity":            updated.ReplayCapacity,
@@ -145,12 +153,25 @@ func (o *configOperation) Invoke(ctx context.Context, request operation.Request)
 		"heartbeat_interval_seconds": int(updated.Heartbeat / 1e9),
 		"operation_retention":        updated.OperationRetention,
 		"max_asset_bytes":            updated.MaxAssetBytes,
+		"text_editor_command":        updated.TextEditorCommand,
 		"restart_required":           restartRequired,
 	})
 	if err != nil {
 		return operation.Result{}, err
 	}
 	return operation.Result{Output: output}, nil
+}
+
+func textEditorSuggestions() []interaction.Option {
+	options := []interaction.Option{{Value: "", Label: "System text application"}}
+	if runtime.GOOS == "windows" {
+		return append(options, interaction.Option{Value: `notepad.exe "${file_path}"`, Label: "Notepad"})
+	}
+	return append(options,
+		interaction.Option{Value: `code --reuse-window "${file_path}"`, Label: "VS Code"},
+		interaction.Option{Value: `cursor --reuse-window "${file_path}"`, Label: "Cursor"},
+		interaction.Option{Value: `subl "${file_path}"`, Label: "Sublime Text"},
+	)
 }
 
 func configString(response interaction.Response, name string) (string, bool) {

@@ -73,36 +73,48 @@ type streamAccumulator struct {
 	terminal *model.Response
 }
 
-func (p *provider) Stream(ctx context.Context, request model.Request, handler model.StreamHandler) (model.Response, error) {
+func (p *provider) Stream(ctx context.Context, request model.Request, handler model.StreamHandler) (result model.Response, resultErr error) {
 	if err := p.validateRequest(ctx, request); err != nil {
 		return model.Response{}, err
 	}
 	if handler == nil {
 		return model.Response{}, fmt.Errorf("nil stream handler: %w", ErrInvalidRequest)
 	}
+	diagnostic, ctx := p.startDiagnostic(ctx, request, true)
+	defer func() { diagnostic.finish(ctx, resultErr) }()
 	body, err := p.encodeResponseRequest(ctx, request, true)
 	if err != nil {
 		return model.Response{}, err
 	}
+	diagnostic.stage = "dispatch"
+	diagnostic.requestBytes = len(body)
 	response, err := p.do(ctx, body, "text/event-stream")
 	if err != nil {
 		return model.Response{}, err
 	}
 	stopBodyWatch := closeBodyOnCancel(ctx, response.Body)
 	defer stopBodyWatch()
+	diagnostic.receivedHeaders(ctx, response)
+	diagnostic.stage = "http_status"
 	if err := p.checkStatus(ctx, response); err != nil {
 		return model.Response{}, err
 	}
-	return p.decodeStream(ctx, response, handler)
+	diagnostic.stage = "stream"
+	return p.decodeStream(ctx, response, handler, diagnostic)
 }
 
-func (p *provider) decodeStream(ctx context.Context, response *http.Response, handler model.StreamHandler) (model.Response, error) {
+func (p *provider) decodeStream(ctx context.Context, response *http.Response, handler model.StreamHandler, diagnostic *requestDiagnostic) (model.Response, error) {
 	consumer := handler
 	handler = func(event model.StreamEvent) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		return consumer(event)
+		diagnostic.delivered++
+		err := consumer(event)
+		if err != nil {
+			diagnostic.consumerFailed = true
+		}
+		return err
 	}
 	limited := &io.LimitedReader{R: response.Body, N: int64(p.maxResponseBytes) + 1}
 	reader := bufio.NewReader(limited)
@@ -116,11 +128,15 @@ func (p *provider) decodeStream(ctx context.Context, response *http.Response, ha
 			eventName = ""
 		}()
 		if len(dataLines) == 0 {
+			if eventName == "keepalive" {
+				diagnostic.event("keepalive", nil)
+			}
 			return nil
 		}
 		payload := strings.Join(dataLines, "\n")
 		// Compatible endpoints may send named heartbeats with empty data.
 		if eventName == "keepalive" && strings.TrimSpace(payload) == "" {
+			diagnostic.event("keepalive", nil)
 			return nil
 		}
 		if strings.TrimSpace(payload) == "[DONE]" {
@@ -139,6 +155,7 @@ func (p *provider) decodeStream(ctx context.Context, response *http.Response, ha
 		if event.Type == "" {
 			event.Type = eventName
 		}
+		diagnostic.event(event.Type, event.Response)
 		if event.Type == "" || (eventName != "" && eventName != event.Type) {
 			return protocolError("SSE event name and payload type are missing or inconsistent")
 		}
@@ -176,7 +193,9 @@ func (p *provider) decodeStream(ctx context.Context, response *http.Response, ha
 			if dispatchErr := dispatch(); dispatchErr != nil {
 				return model.Response{}, dispatchErr
 			}
-		} else if !strings.HasPrefix(line, ":") {
+		} else if strings.HasPrefix(line, ":") {
+			diagnostic.comments++
+		} else {
 			field, value, found := strings.Cut(line, ":")
 			if !found {
 				field, value = line, ""
