@@ -22,21 +22,23 @@ func (t *tree) Types(ctx context.Context, scope execution.Scope) ([]agent.AgentT
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if !t.config.enabled {
+	config := t.config.Load()
+	if !config.enabled {
 		return nil, agent.ErrChildUnsupported
 	}
 	exec, err := t.callerExecution(scope)
 	if err != nil {
 		return nil, err
 	}
-	names := t.config.rootAllowed
+	names := config.rootAllowed
 	if exec.handle.Child {
 		names = exec.definition.AllowedChildTypes
 	}
 	result := make([]agent.AgentTypeInfo, 0, len(names))
 	for _, name := range names {
-		entry := t.config.definitions[name]
-		result = append(result, entry.info)
+		if entry, exists := config.definitions[name]; exists {
+			result = append(result, entry.info)
+		}
 	}
 	return result, nil
 }
@@ -48,7 +50,10 @@ func (t *tree) CreateChild(ctx context.Context, scope execution.Scope, request a
 	if err := ctx.Err(); err != nil {
 		return agent.ChildSnapshot{}, err
 	}
-	if !t.config.enabled {
+	// One immutable snapshot covers both authorization and the definition
+	// frozen into the child, even if configuration changes during creation.
+	config := t.config.Load()
+	if !config.enabled {
 		return agent.ChildSnapshot{}, agent.ErrChildUnsupported
 	}
 	if request.Workspace == nil || request.AgentType == "" || request.Task == "" || !utf8.ValidString(request.Task) || !utf8.ValidString(request.Context) {
@@ -61,14 +66,17 @@ func (t *tree) CreateChild(ctx context.Context, scope execution.Scope, request a
 	if err != nil {
 		return agent.ChildSnapshot{}, err
 	}
-	allowed := t.config.rootAllowed
+	allowed := config.rootAllowed
 	if parent.handle.Child {
 		allowed = parent.definition.AllowedChildTypes
 	}
 	if !slices.Contains(allowed, request.AgentType) {
 		return agent.ChildSnapshot{}, fmt.Errorf("agent type %q is not allowed for Session %q: %w", request.AgentType, scope.SessionID, agent.ErrChildUnauthorized)
 	}
-	definition := t.config.definitions[request.AgentType]
+	definition, exists := config.definitions[request.AgentType]
+	if !exists {
+		return agent.ChildSnapshot{}, fmt.Errorf("agent type %q is no longer available: %w", request.AgentType, agent.ErrChildUnauthorized)
+	}
 	if parent.depth == ^uint32(0) || parent.depth+1 > defaultMaxDepth {
 		return agent.ChildSnapshot{}, fmt.Errorf("child depth limit %d exceeded: %w", defaultMaxDepth, agent.ErrChildCapacity)
 	}
@@ -363,7 +371,7 @@ func (t *tree) callerExecution(scope execution.Scope) (*executionState, error) {
 }
 
 func (t *tree) authorize(ctx context.Context, scope execution.Scope, targetID session.ID) (agent.ChildSessionRecord, error) {
-	if !t.config.enabled || t.repository == nil {
+	if t.repository == nil {
 		return agent.ChildSessionRecord{}, agent.ErrChildUnsupported
 	}
 	if targetID == "" {

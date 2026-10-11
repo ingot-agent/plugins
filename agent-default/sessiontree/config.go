@@ -58,25 +58,44 @@ type configuration struct {
 }
 
 func loadConfiguration(root string) (configuration, error) {
-	if root == "" {
-		return configuration{}, errors.New("agent.default state scope is empty")
+	raw, err := readConfiguration(root)
+	if err != nil {
+		return configuration{}, err
 	}
-	raw, err := os.ReadFile(filepath.Join(root, configFileName))
-	if errors.Is(err, os.ErrNotExist) {
+	if raw == nil {
 		// Tool availability is only known when the Agent Runtime is constructed.
 		// Defer selecting built-ins until ValidateTools sees the composed graph.
 		return configuration{builtin: true, definitions: map[string]definitionEntry{}}, nil
 	}
+	document, err := decodeConfiguration(raw)
 	if err != nil {
-		return configuration{}, fmt.Errorf("read %s: %w", configFileName, err)
+		return configuration{}, err
 	}
+	return configurationFromDocument(document)
+}
+
+func readConfiguration(root string) ([]byte, error) {
+	if root == "" {
+		return nil, errors.New("agent.default state scope is empty")
+	}
+	raw, err := os.ReadFile(filepath.Join(root, configFileName))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", configFileName, err)
+	}
+	return raw, nil
+}
+
+func decodeConfiguration(raw []byte) (fileConfig, error) {
 	decoder := toml.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
 	var document fileConfig
 	if err := decoder.Decode(&document); err != nil {
-		return configuration{}, fmt.Errorf("decode %s: %w", configFileName, err)
+		return fileConfig{}, fmt.Errorf("decode %s: %w", configFileName, err)
 	}
-	return configurationFromDocument(document)
+	return document, nil
 }
 
 func configurationFromDocument(document fileConfig) (configuration, error) {

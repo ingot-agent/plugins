@@ -13,7 +13,7 @@ components, each constructed with `New(ctx, deps)`:
 | Component / package | Dependencies | Exports |
 | --- | --- | --- |
 | `observation` / `./observation` | `[]observation.Observer` | `observation.Consumer` |
-| `session-tree` / `./sessiontree` | `state.Scope`; optional `agent.ChildSessionRepository` and `workspace.Manager` | `agent.Children`, `prompt.Contributor`, internal `sessioncontrol.Control` |
+| `session-tree` / `./sessiontree` | `state.Scope`; optional `agent.ChildSessionRepository` and `workspace.Manager` | `agent.Children`, `prompt.Contributor`, internal `sessioncontrol.Control`, `[]operation.Operation` |
 | `default` / `.` | See below | `agent.Runtime`, `agent.StreamingRuntime`, `agent.History`, `[]operation.Operation` |
 
 The default component consumes `state.Scope`, `model.Runtime`, `tool.Runtime`,
@@ -160,9 +160,51 @@ between them. No grouped history format or additional Turn field is required.
 
 ## Child-agent configuration
 
-The separate `subagents.toml` in the same plugin state scope is read once by the
-session-tree component. It is not edited by `/agent-default config`, and changing
-it requires restarting/reconstructing the runtime. **When the file is absent**
+The separate `subagents.toml` in the same plugin state scope is loaded at startup
+by the session-tree component. Its independent Operation is `/agent-default subagents`
+(name `subagents`, group `agent-default`), accepting `{}` with no extra input
+properties. `/agent-default config` continues to edit only the main loop settings.
+Changes saved through this Operation take effect immediately. Direct file edits
+are loaded only when the runtime is reconstructed.
+
+The Operation first asks for an explicit mode:
+
+- **Built-in types** removes the override file and restores automatic defaults.
+- **Custom types** opens a structured replacement list covering names,
+  descriptions, system prompts, tool allowlists, allowed child types, and root
+  allowed types. A missing file seeds the form with the installed built-ins.
+  Removing an entry deletes that type; update references when renaming or
+  removing types. An empty list of definitions disables child types.
+- **Disabled** writes an explicit empty configuration, suppressing built-ins.
+
+Tool choices come from the composed runtime's validated tool definitions. Type
+references accept names declared in the same form, including newly added types;
+existing names are suggestions. Saving applies startup validation, including
+tool availability and required child-storage/workspace capabilities, rejects
+concurrent persisted edits, and atomically replaces the file (or removes it for
+built-in mode). Cancellation or unavailable interaction leaves state unchanged.
+The configuration version is managed by the Operation.
+
+After persistence succeeds, the Operation atomically publishes an immutable
+configuration snapshot and returns `{"restart_required":false}`. Type discovery
+and subsequent child creations use the new snapshot, including updated root
+permissions. A creation already in progress retains its captured snapshot.
+Existing queued/running children keep their frozen prompts, tools, and child
+permissions. A removed type is no longer discoverable or available for new
+dispatch, including from an existing child's frozen permission list.
+
+Disabling child types prevents new creations while accepted tasks continue.
+Existing children retain prompt contribution, query, wait, cancellation, result
+submission, and interruption on parent cancellation or runtime shutdown.
+Re-enabling types takes effect immediately. Startup recovery runs once whenever
+child storage is available, even if child creation is disabled; live configuration
+updates never run recovery or interrupt accepted tasks. Validation, cancellation,
+conflict, or persistence failures leave the active snapshot unchanged.
+
+Tool discovery must finish before the Operation can run; it does not add a
+`tool.Runtime` dependency to the session-tree component.
+
+**When the file is absent**
 and the composed tool runtime provides `submit_agent_result` (from `tool-subagent`),
 three built-in root types are enabled if the composition also provides child
 Session storage and a workspace manager (for example `session-sqlite`):
@@ -247,6 +289,7 @@ See [runtime.go](runtime.go), [execute.go](execute.go), [round.go](round.go),
 [observation/hub.go](observation/hub.go). Run `go test ./...` in this module.
 Existing round, execution outcome, stream, recovery, setup, and child-tree
 tests cover these contracts, including [round_contract_test.go](round_contract_test.go),
-[subagent_runtime_test.go](subagent_runtime_test.go), and
+[subagent_runtime_test.go](subagent_runtime_test.go),
+[sessiontree/setup_test.go](sessiontree/setup_test.go), and
 [sessiontree/tree_test.go](sessiontree/tree_test.go).
 See [CONTRIBUTING](../CONTRIBUTING.md) for workspace setup.

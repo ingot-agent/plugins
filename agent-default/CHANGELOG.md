@@ -6,6 +6,14 @@ All notable changes to this plugin are documented in this file.
 
 ### Added
 
+- Export `/agent-default subagents` from the session-tree component to configure
+  child types, prompts, tool allowlists, and dispatch permissions independently
+  of the main loop. Support built-in, custom, and disabled modes with startup
+  validation, atomic persistence, stale-write detection, and live publication
+  for subsequent child creation (`restart_required:false`). Existing children
+  retain their frozen definitions and lifecycle support when types are disabled
+  or removed. Recover stale child sessions only at startup, including when
+  child creation is initially disabled.
 - Inject the optional SDK `agent.PluginInputProjector` capability and delegate
   record recognition/projection to its provider. Defer inputs inside tool rounds until
   their results are complete, and rebuild history after interrupted recovery.
