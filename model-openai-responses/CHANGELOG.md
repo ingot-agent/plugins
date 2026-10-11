@@ -6,6 +6,10 @@ All notable changes to this plugin are documented in this file.
 
 ### Added
 
+- Add per-attempt structured diagnostics for Responses requests: correlation,
+  HTTP/TLS negotiation and connection reuse, request IDs, stream progress/timing,
+  and failure origin with typed HTTP/2/network details. Omit content and arbitrary
+  error strings, and redact configured secrets from bounded metadata.
 - Publish configured models and their supported reasoning-effort values through
   `model.ProviderEntry`, and map the request-selected value to
   `reasoning.effort` on Responses API requests.

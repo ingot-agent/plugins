@@ -132,6 +132,59 @@ of custom-header secrets or provider content. There are no automatic retries or
 plugin-specific overall request deadlines. Cancellation follows the caller
 context and closes open response/asset bodies.
 
+## Request diagnostics
+
+Each validated complete or streaming attempt writes structured `log/slog`
+records at request start, receipt of HTTP response headers, and completion.
+Start/headers/success use INFO; failures use WARN. The default logger writes to
+stderr. A fresh local `call_id` groups the records; available observation
+`session_id`, `turn_id`, and `round` link attempts to the Agent execution.
+
+Diagnostics include provider/model/effort, endpoint **host only**, Go version,
+message/tool counts, encoded request and response byte counts, caller deadline,
+HTTP status/protocol, `X-Request-Id` (falling back to `Request-Id`), `Cf-Ray`,
+and the response ID learned from SSE events. Standard Go transports additionally
+report DNS/connect/TLS/write/first-byte timing, negotiated TLS ALPN, connection
+reuse and its idle age. Custom `httpx.Client` implementations may omit tracing.
+Phase timings are milliseconds since attempt start. Trace callbacks can occur
+more than once during dialing or transport retries; the latest value is retained.
+
+Stream summaries include parsed event/comment/keepalive counts, delivered SDK
+event count, the last SSE event type, first-event timing, last-event gap, and
+time since the last parsed event/body read. These are local observations: body
+buffering and consumer callbacks can affect timing. No per-delta log is emitted.
+
+Failure `failure_origin` distinguishes `provider_response` (a failed response
+object or SSE error), `local_transport_request`, `local_transport_read`,
+`http_status`, `adapter_protocol`, `response_limit`, `consumer`, and `context`.
+Preparation failures after validation are labeled `request_preparation`.
+Typed provider status/code, error-chain types, network errno/timeout, and known
+Go HTTP/2 stream/GOAWAY IDs and protocol codes are recorded when available.
+`adapter_retryable` is only the existing adapter hint, not evidence of an actual
+retry; `stream_replay_blocked` reports whether any SDK event was delivered.
+Neither HTTP negotiation nor retry behavior is changed by diagnostics.
+
+Request/response bodies, prompts, output/tool arguments, arbitrary error messages,
+HTTP headers other than the listed IDs, and GOAWAY debug data are omitted.
+Logged metadata is bounded and has control characters removed; configured API
+keys, organization/project values, and custom-header values are redacted there.
+Metadata still contains operational identifiers, not an anonymized trace.
+
+To retain logs while reproducing a problem in a managed Runtime, rebuild with
+this checkout and start detached (replace `default` with your Runtime name):
+
+```sh
+ingot build default
+ingot start default -d
+ingot logs default -f
+```
+
+Run the build from the project whose recipe references this local plugin.
+If that Runtime is already running, restart it with `ingot restart default`
+after the build instead. Detached logs live under
+`<INGOT_HOME>/runtimes/<runtime>/logs/<process-id>.log`. Keep the records sharing
+the failed `call_id`, along with successful calls from the same reproduction.
+
 ## Source and checks
 
 See [responses.go](responses.go), [protocol.go](protocol.go), [stream.go](stream.go),
