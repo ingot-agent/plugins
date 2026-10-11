@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, inject, nextTick, onBeforeUnmount, onMounted, provide, ref, watch } from 'vue'
+import { fileContextKey, filePreviewKey } from '../filePreview'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { Activity, ArrowDown, ChevronRight, Copy, FolderOpen, Grip, LoaderCircle, MessageCircleQuestion, Terminal, X } from 'lucide-vue-next'
@@ -29,6 +30,9 @@ const route = useRoute()
 const router = useRouter()
 const { t } = useI18n()
 const sessionId = computed(() => typeof route.params.id === 'string' ? route.params.id : '')
+provide(fileContextKey, computed(() => ({ sessionId: sessionId.value })))
+const filePreview = inject(filePreviewKey, undefined)
+const previewOpen = computed(() => Boolean(filePreview?.current.value))
 const session = computed(() => runtime.sessions.find(item => item.id === sessionId.value))
 const running = computed(() => runtime.running(sessionId.value))
 const messages = computed(() => runtime.histories[sessionId.value] || [])
@@ -386,7 +390,7 @@ async function restore() {
 onBeforeUnmount(() => { media.removeEventListener('change', resize); window.removeEventListener('resize', clampWindows); endWindowGesture(); composerObserver?.disconnect(); if ('highlights' in CSS) CSS.highlights.delete('inline-followups'); runtime.activeSession = '' })
 </script>
 <template>
-  <div class="chat-layout" :class="{ 'with-details': details && !narrow }">
+  <div class="chat-layout" :class="{ 'with-details': details && !narrow && !previewOpen }">
     <section ref="chatMain" class="chat-main">
       <WorkspaceHeader class="conversation-header" @navigation="$emit('navigation')" @pending="$emit('pending')">
         <div class="conversation-heading"><div class="flex items-center gap-2"><h1 class="truncate" :title="session?.title || t('newChat')">{{ session?.title || t('newChat') }}</h1><span v-if="session?.archivedAt" class="muted text-xs shrink-0">{{ t('archived') }}</span></div><div v-if="session?.workspace" class="conversation-meta"><span class="truncate" :title="session.workspace">{{ t('workspace') }}: {{ session.workspace }}</span></div></div>
@@ -448,7 +452,7 @@ onBeforeUnmount(() => { media.removeEventListener('change', resize); window.remo
         <button type="button" class="followup-resize" :aria-label="t('resizeFollowupWindow')" :title="t('resizeFollowupWindow')" @pointerdown.stop="startWindowGesture($event, item.note.id, 'resize')" @keydown="resizeWindowWithKeyboard($event, item.note.id)"><Grip :size="13" /></button>
       </div>
     </div>
-    <aside v-if="details && !narrow" class="details-sidebar"><header><h2>{{ t('execution') }}</h2><button class="icon-button" :aria-label="t('close')" @click="details = false"><X :size="17" /></button></header><ExecutionPanel :session-id="sessionId" /></aside>
-    <Overlay :open="details && narrow" :title="t('execution')" drawer @update:open="details = $event"><ExecutionPanel :session-id="sessionId" /></Overlay>
+    <aside v-if="details && !narrow && !previewOpen" class="details-sidebar"><header><h2>{{ t('execution') }}</h2><button class="icon-button" :aria-label="t('close')" @click="details = false"><X :size="17" /></button></header><ExecutionPanel :session-id="sessionId" /></aside>
+    <Overlay :open="details && narrow && !previewOpen" :title="t('execution')" drawer @update:open="details = $event"><ExecutionPanel :session-id="sessionId" /></Overlay>
   </div>
 </template>

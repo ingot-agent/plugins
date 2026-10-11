@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, provide } from 'vue'
+import { fileContextKey } from '../filePreview'
 import { ChevronRight } from 'lucide-vue-next'
 import { useI18n } from 'vue-i18n'
 import type { Interaction, LiveTurn, Part, TurnBlock } from '../protocol'
@@ -9,6 +10,7 @@ import ToolCard from './ToolCard.vue'
 import InteractionCard from './InteractionCard.vue'
 
 const props = defineProps<{ turn: LiveTurn; interactions: Record<string, Interaction>; historicalToolIds: Set<string>; showToolCalls: boolean }>()
+provide(fileContextKey, computed(() => ({ sessionId: props.turn.sessionId })))
 const { t } = useI18n()
 type DisplayBlock = TurnBlock | { id: string; kind: 'content'; parts: Part[] }
 const blocks = computed<DisplayBlock[]>(() => {

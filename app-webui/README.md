@@ -64,6 +64,7 @@ subscriber_buffer = 64
 heartbeat_interval_seconds = 15
 operation_retention = 128
 max_asset_bytes = 67108864
+text_editor_command = ""
 ```
 
 | 字段 | 默认值 | 作用 |
@@ -74,10 +75,11 @@ max_asset_bytes = 67108864
 | `heartbeat_interval_seconds` | 15 | SSE 心跳秒数 |
 | `operation_retention` | 128 | 保留的终态 Operation invocation 数量，运行中调用另行保留 |
 | `max_asset_bytes` | 67,108,864（64 MiB） | 单个所选文件及单次 Asset 上传上限 |
+| `text_editor_command` | 空字符串 | 外部文本编辑器命令模板；留空使用系统文本应用，保存后下次打开即生效 |
 
 数值字段 `0` 选择默认值；负数无效，heartbeat 还检查 duration 溢出。`address` 空字符串选择默认值。`max_asset_bytes` 不是 JSON 请求上限，普通 JSON 请求另有固定的 1 MiB 上限。
 
-Web 命令 `/app-webui config`（Group `app-webui`、Name `config`、输入 `{}`）通过结构化交互修改上述六项，并原子写入插件配置。配置交互期间文件发生变化时拒绝覆盖。返回六个规范化字段和 `restart_required`：保存后的有效配置与当前启动配置不同时为 `true`。**本插件不热更新监听地址、缓冲或其他服务器设置**；执行 `ingot restart web` 后才使用新配置。仅保存与当前有效值相同的配置时返回 `false`。结果反映已保存的目标配置，重启前 `/api/state` 仍反映当前实例的有效状态。
+Web 命令 `/app-webui config`（Group `app-webui`、Name `config`、输入 `{}`）通过结构化交互修改上述七项，并原子写入插件配置。配置交互期间文件发生变化时拒绝覆盖。返回七个规范化字段和 `restart_required`：保存后的服务器设置与当前启动配置不同时为 `true`。**监听地址、缓冲及其他服务器设置需要执行 `ingot restart web` 后生效**；文本编辑器命令在每次打开文件时读取最新保存值，单独修改该项不要求重启。结果反映已保存的目标配置，重启前 `/api/state` 仍反映当前实例的有效状态。
 
 ## HTTP 接口
 
@@ -93,6 +95,7 @@ Web 命令 `/app-webui config`（Group `app-webui`、Name `config`、输入 `{}`
 | 原文追问 | `GET/POST /api/sessions/{id}/followups`、`DELETE /api/followups/{id}` |
 | Workspace 目录选择 | `POST /api/workspace/select` |
 | 本地文件选择 | `POST /api/files/select` |
+| 本地文本预览与打开 | `POST /api/files/preview`、`POST /api/files/open` |
 | 历史消息 | `GET /api/sessions/{id}/history` |
 | Asset | `POST /api/assets`、`GET /api/assets/{id}` |
 | Operation | `GET /api/operations`、`POST /api/operations/{internal-id}`、`DELETE /api/operation-invocations/{id}` |
@@ -202,6 +205,67 @@ Asset 上传直接使用请求体原始字节，并要求提供已知的 `Conten
 `GET /api/state` 的 `assets` 字段返回 `available` 和 `maxBytes`；`files` 字段独立返回本地文件选择能力和同一文件大小上限。读取接口通过 `Store.Stat/Open` 流式传输已有 Asset；不存在时返回 `404`，未配置 Store 时返回 `501`。响应使用 `application/octet-stream`、`Content-Disposition: attachment`、`nosniff` 和 `no-store`，不会信任历史消息中的 MIME 类型来执行内容。
 
 前端仅对允许的图片、音频和视频格式创建 Blob 预览；HTML、SVG 等文件保留为下载。Markdown 原始 HTML 被禁用，远程图片转换为显式链接，避免后台请求第三方资源。
+
+## 本地文件预览（未发布）
+
+点击回答中的本地文件 Markdown 链接或本地文件附件的文件名，会打开只读预览。
+桌面端在聊天右侧显示，可拖动边界调整宽度或展开；窄屏使用全屏预览，关闭后返回
+原对话。代码显示行号和语法高亮，Markdown 默认展示排版，可切换源码。预览读取
+点击时的当前文件；“重新读取文件”更新内容，历史消息不会保存文件快照。
+
+链接支持工作区相对路径、Runtime 主机的绝对路径和本机 `file:///` URI，例如
+`[说明](./README.md)`、`[源码](/project/main.go#L42)`、`[范围](src/main.go#L10-L20)`
+和 `[位置](src/main.go:42:5)`。空格、中文及 URI 转义会保留；正文与代码块中的普通
+路径文字不自动转换。网页链接仍在新标签打开。相对路径使用链接所属 Session 的
+Workspace（包括追问 Session）；预览中 Markdown 文档的相对链接使用该文档所在
+目录，并支持标题锚点。没有 Session 的全局内容使用默认 Workspace；已存在但没有
+绑定 Workspace 的 Session 不会被悄悄改用默认工作区。
+
+两个接口都接收 `Content-Type: application/json`，请求体为：
+
+```json
+{"path":"src/main.go","sessionId":"session-id","basePath":"/project/README.md"}
+```
+
+`sessionId`、`basePath` 可省略；`basePath` 仅用于文档内部相对链接，必须为绝对
+文件路径。行号和标题锚点由前端解析，不随请求发送。预览返回
+`{path, name, text, size}`，其中 `path` 是解析符号链接后的真实路径，`size` 为原文件
+字节数。只读取普通文件，支持 UTF-8（含 BOM）与带 BOM 的 UTF-16，最多 1 MiB、
+20,000 行；二进制、不可读、不存在和超限情况显示明确提示。此能力不依赖 Asset
+Store 或 `agent.PluginInputWriter`，沿用可信本机单用户环境的文件访问边界，可打开
+工作区外的绝对路径，Workspace 不是文件访问沙箱。
+
+“用编辑器打开”使用 `/app-webui config` 中的 **Text editor command**。该字段提供
+常用编辑器建议，也可直接输入 `command --before ${file_path} --after`。模板必须在
+参数中包含 `${file_path}`，支持单引号、双引号和包含空格的可执行文件路径，例如：
+
+```toml
+[backend]
+text_editor_command = 'code --reuse-window "${file_path}"'
+```
+
+可替换为 `cursor --reuse-window ${file_path}`、`subl ${file_path}` 或
+`editor --file=${file_path} --new-window`。Windows 使用实际安装的 `.exe` 路径，
+例如下面的 TOML 字面量字符串会原样保留反斜杠：
+
+```toml
+[backend]
+text_editor_command = '"C:\Program Files\Microsoft VS Code\Code.exe" --reuse-window "${file_path}"'
+```
+
+程序从 Runtime 的 `PATH` 查找，或使用配置的完整路径。模板先分解为程序与参数，
+再替换文件路径；`${file_path}` 即使未加引号，包含空格、引号或特殊字符的文件名
+仍保留在原参数中，也可嵌入 `--file=${file_path}`。反斜杠保留为路径字符，但可转义
+引号及引号外的空白。这里只解析一个程序调用，不自动展开环境变量、`~`、管道、
+重定向或命令串联。不闭合的引号、未知占位符和缺失 `${file_path}` 会在保存时被拒绝。
+编辑器进程独立于 HTTP 请求，接口成功表示启动请求已提交，不等待编辑器退出。
+
+模板留空或全为空白时使用系统文本应用：macOS 使用默认文本编辑器，Linux 使用
+`text/plain` 的默认桌面应用（需要 `xdg-mime`、`gio` 及桌面会话），Windows 使用
+记事本。默认方式按文本打开文件；自定义模板按用户选择的程序执行。本入口不承诺
+外部应用的行号定位。所有编辑器均在 Runtime 所在机器启动；远程连接不会启动
+浏览器所在机器的应用。启动失败会显示具体原因及配置入口，也可复制路径。
+打开文件接口仅接收文件信息，使用已保存的命令配置；跨站及非 JSON 请求会被拒绝。
 
 ## Operation
 

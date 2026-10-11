@@ -47,6 +47,8 @@ func (a *application) routes() http.Handler {
 
 	mux.HandleFunc("POST /api/assets", a.handleUploadAsset)
 	mux.HandleFunc("POST /api/files/select", a.handleSelectFiles)
+	mux.HandleFunc("POST /api/files/preview", a.handlePreviewFile)
+	mux.HandleFunc("POST /api/files/open", a.handleOpenFile)
 	mux.HandleFunc("GET /api/assets/{id}", a.handleReadAsset)
 	mux.HandleFunc("POST /api/workspace/select", a.handleSelectWorkspace)
 	mux.HandleFunc("GET /api/operations", func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, http.StatusOK, a.operations.List()) })
