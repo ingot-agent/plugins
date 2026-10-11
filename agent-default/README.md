@@ -14,10 +14,10 @@ components, each constructed with `New(ctx, deps)`:
 | --- | --- | --- |
 | `observation` / `./observation` | `[]observation.Observer` | `observation.Consumer` |
 | `session-tree` / `./sessiontree` | `state.Scope`; optional `agent.ChildSessionRepository` and `workspace.Manager` | `agent.Children`, `prompt.Contributor`, internal `sessioncontrol.Control` |
-| `default` / `.` | See below | `agent.Runtime`, `agent.StreamingRuntime`, `agent.History`, `[]operation.Operation` |
+| `default` / `.` | See below | `agent.Runtime`, `agent.Control`, `agent.History`, `[]operation.Operation` |
 
 The default component consumes `state.Scope`, `model.Runtime`, `tool.Runtime`,
-`session.Store`, `asset.Store`, `prompt.Renderer`, `observation.Consumer`, and
+`session.Store`, `session.Manager`, `asset.Store`, `prompt.Renderer`, `observation.Consumer`, and
 `sessioncontrol.Control`. It also consumes ordered `[]agent.Interceptor` and
 `[]agent.RoundInterceptor`, plus explicit ABI optional
 `model.StreamingRuntime`, `model.RequestResolver`, `contextwindow.Compactor`, and
@@ -72,12 +72,26 @@ Without a resolver, model selection is left to the model runtime on each call.
 
 ## Turn, history, and streaming behavior
 
-The session must already exist. `Run` and `Stream` serialize work per session,
-load and validate history, recover any trailing incomplete tool round, persist
-the current user message, render the prompt, and run model/tool rounds. Calls in
-one model decision execute sequentially through `tool.Runtime`, carrying the
-turn's session ID as their explicit execution scope. Different sessions can run
-concurrently.
+The session must already exist and be active. SendMessage accepts one Input and
+returns after admission. The Agent owns the per-session FIFO, pause state and one
+active executor. Session Manager checks happen before admission without taking
+the Turn gate; public submission to a child is rejected. Different sessions can
+run concurrently. Browser/request cancellation does not cancel accepted work.
+
+The executor loads and recovers history, prepares and atomically appends the
+input's optional file notice plus actual user message, and renders the prompt.
+After each complete Round, it freezes the pending snapshot and prepares every
+input in order. The successful prefix is appended to Turn.Inputs and rendered
+once for the next model call. The final actual user message is Prompt.Input;
+all preceding messages are Prompt.History. Later arrivals wait until the next
+boundary. A file preparation failure fails that input, pauses the suffix and
+lets the current Turn continue. Storage, prompt or model failures terminate the
+Turn. Pause survives completion and an empty queue until explicit resume.
+
+Tool calls in a decision still execute sequentially. Approval, ask and subagent
+waits must finish before ordinary input can enter. MaxRounds, configuration,
+hooks, accounting root and cancellation are shared by the whole lifecycle.
+
 
 The assistant decision is persisted before its tools execute; each tool result is
 persisted after execution. Unknown tools and invalid arguments become diagnostic
@@ -88,7 +102,8 @@ back and must not be blindly retried.
 The final allowed root round still advertises ordinary tools, but a returned tool
 call fails with `ErrMaxRounds` before that decision is committed. Child sessions retain their
 result-submission boundary as described below. A normal assistant decision with
-no tool calls ends the turn.
+no tool calls ends the turn only after checking the boundary queue. Pending input
+without remaining budget is left for the next lifecycle.
 
 Turn interceptors wrap the turn; round interceptors see immutable invocation and
 response facts plus a policy-editable decision. The implementation validates
@@ -96,19 +111,31 @@ decision mutations, permits only a valid text/content-only short-circuit result,
 and rejects repeated terminal execution or rewriting a result after it has been
 committed. See [round.go](round.go) for the precise extension contract.
 
-`Run` and `Stream` return `agent.Execution`, including termination status, duration,
-failure details, and a canonical result on success. Provider tokens are settled at Session
-level by ModelRuntime. `Turn.RootSessionID` defaults to current for ordinary
-entry points and is inherited unchanged by nested children and compaction.
-Followup entry points must pass the actual main Session; ordinary forks use
-their own new identity for both root and current.
+Control.State returns the full ordered input/round state and final Execution,
+including status, duration, failures and canonical Result on success. Watch
+returns revision-ordered RuntimeUpdates: affected lifecycle/receipt/queue state
+at structural boundaries, or coalesced text/tool increments. Progress flushes
+every 50 ms or 4 KiB and before structural changes; it does not clone retained
+turns. A bounded 128-update window lets independent watchers catch up; a watcher
+outside that window receives a full Reset snapshot. State includes pending
+progress in its revision, so delayed increments cannot duplicate recovered text.
+Snapshot capture copies mutable slice elements under the queue mutex, then
+deep-copies immutable payloads and sorts outside the mutex.
+The last 128 completed lifecycles and their input receipts are retained together;
+unattached failed/canceled receipts are also bounded. Pending and active items
+are never evicted. RequestID deduplication lasts for retained records. Queue and
+result state do not survive restart. Stop cancels the full Turn and pauses the
+pending suffix; cleanup cancels and joins both root workers and child dispatch.
 
-`Stream` requires a handler. With no model streaming capability it uses complete
-invocation. It also falls back to complete when streaming returns
-`model.ErrStreamingUnsupported` before any mapped stream event has been delivered.
-It does not retry after partial output or a consumer error. Streaming reasoning
-is transient; it is not persisted as canonical assistant content. The deprecated
-`streaming` TOML field is ignored; the caller selects the API.
+Provider token settlement remains at Session level. RootSessionID defaults to
+SessionID for ordinary submissions; followups inherit their source accounting
+root. An active lifecycle cannot change accounting owner.
+
+Model streaming is used when injected, otherwise Complete is used. Pre-output
+model.ErrStreamingUnsupported may fall back to Complete; partial output is never
+retried. Reasoning is transient. Watch/observation delivery failures do not cancel
+execution. The deprecated streaming configuration field remains ignored.
+
 
 History uses version-1 `agent.message` entries for individual messages. Unknown versions, malformed
 payloads, duplicate call identities, and invalid tool-result ordering fail rather
@@ -127,11 +154,11 @@ and projection of non-agent records to it. Recognized invalid records fail with
 their Entry position; without a projector, non-agent entries remain opaque and
 are skipped. Neither wire formats nor envelopes are built into the Agent.
 
-This module requires the plugin-input interfaces published in SDK v0.2.16 and
-a provider such as `context.input`. The exact SDK version is pinned in `go.mod`;
-isolated module checks use `GOWORK=off` without a local SDK replacement.
-No database migration or rewrite of existing entries is needed. Plugin input
-interpretation and instruction priority belong to users and plugin authors.
+This branch requires the matching local SDK and atomic batch Store. Use a
+separate workspace containing SDK and the plugins for development; published
+module pins must be updated together before release. Existing databases and
+agent.message version 1 need no migration.
+
 
 An input persisted between a tool decision and its results is buffered only
 during history projection and emitted after every matching result. If the
@@ -140,23 +167,17 @@ adds interrupted results and reloads durable history, including deferred
 inputs. Crashes discard the temporary slice, not committed records. This does
 not retry original tools or provide exactly-once delivery/processing.
 
-The Agent loads and recovers history at Turn start, then persists the user
-message and renders the prompt using the existing input/history request.
-Plugin inputs committed before that history load are included in the first
-model request. The Agent keeps the resulting context for subsequent rounds;
-later appends, including those made by tools, are read in a future Turn.
+Plugin inputs committed before a history load are included at Turn start or
+when admitting a new batch of user inputs. A plugin append alone does not trigger
+a per-Round history reload or start execution. Inputs written after the snapshot
+may wait for a later load, preserving the existing visibility contract.
 
-Append success confirms persistence only. It does not start a Turn, refresh
-per-Round history, or guarantee processing. Store ordering/error semantics apply;
-this protocol adds no deduplication, expiry, overwrites, or write isolation.
-The WebUI history API retains the projected text and source label; its chat UI
-hides plugin context messages without removing them from stored/model history.
+Web file uploads now travel with their actual user Input. Agent-generated file
+notices and actual user messages are standard agent.message records committed in
+one Store.Append transaction. Independent PluginInputWriter calls continue to
+write their own records, before or after that atomic pair. Old plugin-input file
+notices remain readable, without rewriting old history.
 
-Input association belongs to the plugin. WebUI calls the injected writer before
-starting the Agent, so its file notice precedes the corresponding user message,
-including when user content is empty. These are independent Store Appends: an
-interruption can leave only the notice, and unrelated writers can insert entries
-between them. No grouped history format or additional Turn field is required.
 
 ## Child-agent configuration
 

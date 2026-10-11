@@ -4,6 +4,11 @@ All notable changes to this plugin are documented in this file.
 
 ## Unreleased
 
+- Agent now owns SendMessage admission, Round-boundary input batches and lifecycle control; per-input file notices and media share atomic persistence.
+- Coalesce streaming progress into revision-ordered increments (50 ms/4 KiB),
+  publish only affected lifecycle state at structural boundaries, and deep-clone
+  snapshots outside the queue lock. Lagging watchers recover from full snapshots.
+
 ### Added
 
 - Inject the optional SDK `agent.PluginInputProjector` capability and delegate

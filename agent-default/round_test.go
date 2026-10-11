@@ -65,7 +65,7 @@ func TestRoundInterceptorOrderIncludesToolAndFinalRounds(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := exports.Runtime.Run(context.Background(), agent.Turn{SessionID: "s", Input: "hello"}); err != nil {
+	if _, err := exports.Runtime.(*runtime).execute(context.Background(), agent.Turn{SessionID: "s", Inputs: []agent.Input{{Text: "hello"}}}, nil); err != nil {
 		t.Fatal(err)
 	}
 	want := []string{"model", "round-before", "tool", "round-after", "model", "round-before", "round-after"}
@@ -110,7 +110,7 @@ func TestRoundInterceptorInspectsActualInvocationAndModifiesCanonicalDecision(t 
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := exports.Runtime.Run(context.Background(), agent.Turn{SessionID: "s", Input: "hello"})
+	result, err := exports.Runtime.(*runtime).execute(context.Background(), agent.Turn{SessionID: "s", Inputs: []agent.Input{{Text: "hello"}}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -160,7 +160,7 @@ func TestRoundInterceptorRejectsIllegalIdentityMutation(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			_, err = exports.Runtime.Run(context.Background(), agent.Turn{SessionID: "s", Input: "hello"})
+			_, err = exports.Runtime.(*runtime).execute(context.Background(), agent.Turn{SessionID: "s", Inputs: []agent.Input{{Text: "hello"}}}, nil)
 			if !errors.Is(err, ErrInvalidRound) || len(store.entries["s"]) != 1 {
 				t.Fatalf("error=%v entries=%d", err, len(store.entries["s"]))
 			}
@@ -208,7 +208,7 @@ func TestRoundInterceptorRejectsIllegalDecisionMutation(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			_, err = exports.Runtime.Run(context.Background(), agent.Turn{SessionID: "s", Input: "hello"})
+			_, err = exports.Runtime.(*runtime).execute(context.Background(), agent.Turn{SessionID: "s", Inputs: []agent.Input{{Text: "hello"}}}, nil)
 			if !errors.Is(err, ErrInvalidRoundDecision) || len(store.entries["s"]) != 1 || len(tools.calls) != 0 {
 				t.Fatalf("error=%v entries=%d tools=%#v", err, len(store.entries["s"]), tools.calls)
 			}
@@ -231,7 +231,7 @@ func TestRoundRejectAndShortCircuitHaveDistinctPersistence(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		_, err = exports.Runtime.Run(context.Background(), agent.Turn{SessionID: "s", Input: "hello"})
+		_, err = exports.Runtime.(*runtime).execute(context.Background(), agent.Turn{SessionID: "s", Inputs: []agent.Input{{Text: "hello"}}}, nil)
 		if err != policyErr || len(store.entries["s"]) != 1 || len(tools.calls) != 0 {
 			t.Fatalf("error=%v entries=%d tools=%#v", err, len(store.entries["s"]), tools.calls)
 		}
@@ -250,7 +250,7 @@ func TestRoundRejectAndShortCircuitHaveDistinctPersistence(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		result, err := exports.Runtime.Run(context.Background(), agent.Turn{SessionID: "s", Input: "hello"})
+		result, err := exports.Runtime.(*runtime).execute(context.Background(), agent.Turn{SessionID: "s", Inputs: []agent.Input{{Text: "hello"}}}, nil)
 		if err != nil || textValue(executionOutput(result)) != "blocked" || len(store.entries["s"]) != 2 || len(tools.calls) != 0 {
 			t.Fatalf("result=%#v error=%v entries=%d tools=%#v", result, err, len(store.entries["s"]), tools.calls)
 		}
@@ -278,7 +278,7 @@ func TestRoundRejectsInvalidShortCircuitResults(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			_, err = exports.Runtime.Run(context.Background(), agent.Turn{SessionID: "s", Input: "hello"})
+			_, err = exports.Runtime.(*runtime).execute(context.Background(), agent.Turn{SessionID: "s", Inputs: []agent.Input{{Text: "hello"}}}, nil)
 			if !errors.Is(err, ErrInvalidRoundResult) || len(store.entries["s"]) != 1 {
 				t.Fatalf("error=%v entries=%d", err, len(store.entries["s"]))
 			}
@@ -301,7 +301,7 @@ func TestRoundRejectsPostCommitResultMutation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = exports.Runtime.Run(context.Background(), agent.Turn{SessionID: "s", Input: "hello"})
+	_, err = exports.Runtime.(*runtime).execute(context.Background(), agent.Turn{SessionID: "s", Inputs: []agent.Input{{Text: "hello"}}}, nil)
 	if !errors.Is(err, ErrInvalidRoundResult) || len(store.entries["s"]) != 3 || len(tools.calls) != 1 {
 		t.Fatalf("error=%v entries=%d tools=%#v", err, len(store.entries["s"]), tools.calls)
 	}
@@ -322,7 +322,7 @@ func TestRoundTerminalCannotExecuteTwice(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = exports.Runtime.Run(context.Background(), agent.Turn{SessionID: "s", Input: "hello"})
+	_, err = exports.Runtime.(*runtime).execute(context.Background(), agent.Turn{SessionID: "s", Inputs: []agent.Input{{Text: "hello"}}}, nil)
 	if !errors.Is(err, ErrInvalidRoundResult) || len(store.entries["s"]) != 3 || len(tools.calls) != 1 {
 		t.Fatalf("error=%v entries=%d tools=%d", err, len(store.entries["s"]), len(tools.calls))
 	}
@@ -357,7 +357,7 @@ func TestMaxRoundsCountsEveryModelInvocationAndChecksBeforeTools(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			_, err = exports.Runtime.Run(context.Background(), agent.Turn{SessionID: "s", Input: "hello"})
+			_, err = exports.Runtime.(*runtime).execute(context.Background(), agent.Turn{SessionID: "s", Inputs: []agent.Input{{Text: "hello"}}}, nil)
 			if !errors.Is(err, tc.wantErr) || len(store.entries["s"]) != tc.wantEntries || len(tools.calls) != tc.wantTools {
 				t.Fatalf("error=%v entries=%d tools=%d", err, len(store.entries["s"]), len(tools.calls))
 			}
@@ -379,7 +379,7 @@ func TestMaxRoundsCountsEveryModelInvocationAndChecksBeforeTools(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		result, err := exports.Runtime.Run(context.Background(), agent.Turn{SessionID: "s", Input: "hello"})
+		result, err := exports.Runtime.(*runtime).execute(context.Background(), agent.Turn{SessionID: "s", Inputs: []agent.Input{{Text: "hello"}}}, nil)
 		if err != nil || textValue(executionOutput(result)) != "stopped before tool" || len(store.entries["s"]) != 2 || len(tools.calls) != 0 {
 			t.Fatalf("result=%#v error=%v entries=%d tools=%d", result, err, len(store.entries["s"]), len(tools.calls))
 		}
@@ -407,7 +407,7 @@ func TestRoundInterceptorStreamingRunsAfterProvisionalDeltas(t *testing.T) {
 		t.Fatal(err)
 	}
 	var events []agent.StreamEvent
-	_, err = exports.Streaming.Stream(context.Background(), agent.Turn{SessionID: "s", Input: "hello"}, func(event agent.StreamEvent) error {
+	_, err = exports.Runtime.(*runtime).stream(context.Background(), agent.Turn{SessionID: "s", Inputs: []agent.Input{{Text: "hello"}}}, func(event agent.StreamEvent) error {
 		events = append(events, event)
 		return nil
 	})
@@ -446,7 +446,7 @@ func TestRoundInterceptorDependenciesAreValidatedAndSnapshotted(t *testing.T) {
 		t.Fatal(err)
 	}
 	interceptors[0] = replacement
-	if _, err := exports.Runtime.Run(context.Background(), agent.Turn{SessionID: "s", Input: "hello"}); err != nil {
+	if _, err := exports.Runtime.(*runtime).execute(context.Background(), agent.Turn{SessionID: "s", Inputs: []agent.Input{{Text: "hello"}}}, nil); err != nil {
 		t.Fatal(err)
 	}
 	if firstCalls != 1 || replacementCalls != 0 {

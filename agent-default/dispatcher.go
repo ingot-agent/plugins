@@ -88,10 +88,25 @@ func (r *runtime) runChild(task sessioncontrol.Task) {
 		}
 		_ = r.control.Settle(task.Context, task.Handle, frame.confirmed, execution, runErr)
 	}()
-	execution, runErr = r.executeFrame(task.Context, agent.Turn{RootSessionID: task.RootSessionID, SessionID: task.Handle.SessionID, Input: task.Input}, nil, frame)
+	execution, runErr = r.executeFrame(task.Context, agent.Turn{RootSessionID: task.RootSessionID, SessionID: task.Handle.SessionID, Inputs: []agent.Input{{Text: task.Input}}}, nil, frame, nil)
 }
 
 func (r *runtime) cleanup(ctx context.Context) error {
+	r.queueMu.Lock()
+	if !r.closed {
+		r.closed = true
+		r.runCancel()
+		for _, queue := range r.queues {
+			queue.paused, queue.pauseReason = true, "closed"
+			for _, item := range queue.pending {
+				item.state.Status = "canceled"
+				item.state.Revision++
+			}
+			queue.pending = nil
+		}
+		r.changedLocked(nil)
+	}
+	r.queueMu.Unlock()
 	var resultErr error
 	if r.control != nil {
 		resultErr = r.control.Shutdown(ctx)
@@ -109,6 +124,7 @@ func (r *runtime) cleanup(ctx context.Context) error {
 	done := make(chan struct{})
 	go func() {
 		r.dispatchWG.Wait()
+		r.workers.Wait()
 		close(done)
 	}()
 	select {

@@ -83,7 +83,7 @@ func TestM4SuccessfulTurnOutcome(t *testing.T) {
 	consumer := &recordingConsumer{}
 	exports := newOutcomeRuntime(t, models, tools, func(deps *Dependencies) { deps.Observation = consumer })
 
-	execution, err := exports.Runtime.Run(context.Background(), agent.Turn{SessionID: "s", Input: "hello"})
+	execution, err := exports.Runtime.(*runtime).execute(context.Background(), agent.Turn{SessionID: "s", Inputs: []agent.Input{{Text: "hello"}}}, nil)
 	if err != nil || execution.Result == nil || textValue(execution.Result.Output) != "done" {
 		t.Fatalf("execution=%#v err=%v", execution, err)
 	}
@@ -110,7 +110,7 @@ func TestM4StreamingFallbackReturnsCanonicalOutcome(t *testing.T) {
 	exports := newOutcomeRuntime(t, models, &outcomeTools{}, func(deps *Dependencies) {
 		deps.Streaming = ingotabi.Some[model.StreamingRuntime](streaming)
 	})
-	execution, err := exports.Streaming.Stream(context.Background(), agent.Turn{SessionID: "s", Input: "hello"}, func(agent.StreamEvent) error { return nil })
+	execution, err := exports.Runtime.(*runtime).stream(context.Background(), agent.Turn{SessionID: "s", Inputs: []agent.Input{{Text: "hello"}}}, func(agent.StreamEvent) error { return nil })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -128,8 +128,8 @@ func TestM4ModelFailurePreservesFailureDetails(t *testing.T) {
 		},
 		errors: []error{nil, modelErr},
 	}
-	execution, err := newOutcomeRuntime(t, models, &outcomeTools{}).Runtime.Run(
-		context.Background(), agent.Turn{SessionID: "s", Input: "hello"},
+	execution, err := newOutcomeRuntime(t, models, &outcomeTools{}).Runtime.(*runtime).execute(
+		context.Background(), agent.Turn{SessionID: "s", Inputs: []agent.Input{{Text: "hello"}}}, nil,
 	)
 	if !errors.Is(err, modelErr) || execution.Result != nil || execution.Outcome.Status != agent.OutcomeFailed {
 		t.Fatalf("execution=%#v err=%v", execution, err)
@@ -147,8 +147,8 @@ func TestM4RecoveredToolRejectionReturnsSuccessfulOutcome(t *testing.T) {
 		outcomeResponse("provider", "model", 2, 1, tool.Call{ID: "c1", Name: "echo", Arguments: json.RawMessage(`{}`)}),
 		outcomeResponse("provider", "model", 3, 1),
 	}}
-	execution, err := newOutcomeRuntime(t, models, &outcomeTools{err: tool.ErrInvalidArguments}).Runtime.Run(
-		context.Background(), agent.Turn{SessionID: "s", Input: "hello"},
+	execution, err := newOutcomeRuntime(t, models, &outcomeTools{err: tool.ErrInvalidArguments}).Runtime.(*runtime).execute(
+		context.Background(), agent.Turn{SessionID: "s", Inputs: []agent.Input{{Text: "hello"}}}, nil,
 	)
 	if err != nil || execution.Outcome.Status != agent.OutcomeSucceeded || execution.Outcome.Failure != nil ||
 		models.calls != 2 {
@@ -160,8 +160,8 @@ func TestM4ModelSelectionRejectionReturnsFailedOutcome(t *testing.T) {
 	for _, rejection := range []error{model.ErrProviderNotFound, model.ErrModelNotFound} {
 		t.Run(rejection.Error(), func(t *testing.T) {
 			models := &outcomeModel{responses: []model.Response{{}}, errors: []error{rejection}}
-			execution, err := newOutcomeRuntime(t, models, &outcomeTools{}).Runtime.Run(
-				context.Background(), agent.Turn{SessionID: "s", Input: "hello"},
+			execution, err := newOutcomeRuntime(t, models, &outcomeTools{}).Runtime.(*runtime).execute(
+				context.Background(), agent.Turn{SessionID: "s", Inputs: []agent.Input{{Text: "hello"}}}, nil,
 			)
 			if !errors.Is(err, rejection) || execution.Result != nil || execution.Outcome.Status != agent.OutcomeFailed || models.calls != 1 {
 				t.Fatalf("execution=%#v err=%v", execution, err)
@@ -182,7 +182,7 @@ func TestM4InterceptorsMayReplaceContextWithoutLosingExecutionState(t *testing.T
 				deps.Interceptors = []agent.Interceptor{interceptor}
 				deps.Observation = consumer
 			},
-		).Runtime.Run(context.Background(), agent.Turn{SessionID: "s", Input: "hello"})
+		).Runtime.(*runtime).execute(context.Background(), agent.Turn{SessionID: "s", Inputs: []agent.Input{{Text: "hello"}}}, nil)
 		if err != nil || execution.Result == nil || execution.Outcome.Status != agent.OutcomeSucceeded {
 			t.Fatalf("execution=%#v err=%v", execution, err)
 		}
@@ -202,7 +202,7 @@ func TestM4InterceptorsMayReplaceContextWithoutLosingExecutionState(t *testing.T
 			&outcomeTools{}, func(deps *Dependencies) {
 				deps.RoundInterceptors = []agent.RoundInterceptor{interceptor}
 			},
-		).Runtime.Run(context.Background(), agent.Turn{SessionID: "s", Input: "hello"})
+		).Runtime.(*runtime).execute(context.Background(), agent.Turn{SessionID: "s", Inputs: []agent.Input{{Text: "hello"}}}, nil)
 		if err != nil || execution.Result == nil || execution.Outcome.Status != agent.OutcomeSucceeded {
 			t.Fatalf("execution=%#v err=%v", execution, err)
 		}
@@ -222,7 +222,7 @@ func TestM4FinalFailureStageIgnoresSwallowedInnerFailure(t *testing.T) {
 	models := &outcomeModel{responses: []model.Response{{}}, errors: []error{errors.New("model failed")}}
 	execution, err := newOutcomeRuntime(t, models, &outcomeTools{}, func(deps *Dependencies) {
 		deps.Interceptors = []agent.Interceptor{outer, inner}
-	}).Runtime.Run(context.Background(), agent.Turn{SessionID: "s", Input: "hello"})
+	}).Runtime.(*runtime).execute(context.Background(), agent.Turn{SessionID: "s", Inputs: []agent.Input{{Text: "hello"}}}, nil)
 	if !errors.Is(err, outerErr) || execution.Outcome.Failure == nil ||
 		execution.Outcome.Failure.Stage != agent.FailureTurnControl {
 		t.Fatalf("execution=%#v err=%v", execution, err)
@@ -243,7 +243,7 @@ func TestM4CancellationReturnsSettledOutcome(t *testing.T) {
 		err       error
 	}, 1)
 	go func() {
-		execution, err := exports.Runtime.Run(ctx, agent.Turn{SessionID: "s", Input: "hello"})
+		execution, err := exports.Runtime.(*runtime).execute(ctx, agent.Turn{SessionID: "s", Inputs: []agent.Input{{Text: "hello"}}}, nil)
 		done <- struct {
 			execution agent.Execution
 			err       error
@@ -269,7 +269,7 @@ func TestM4InterceptorShortCircuitsRespectExecutionBoundaries(t *testing.T) {
 		tools := &outcomeTools{}
 		execution, err := newOutcomeRuntime(t, models, tools, func(deps *Dependencies) {
 			deps.Interceptors = []agent.Interceptor{interceptor}
-		}).Runtime.Run(context.Background(), agent.Turn{SessionID: "s", Input: "hello"})
+		}).Runtime.(*runtime).execute(context.Background(), agent.Turn{SessionID: "s", Inputs: []agent.Input{{Text: "hello"}}}, nil)
 		if err != nil || textValue(executionOutput(execution)) != "cached" ||
 			execution.Outcome.Status != agent.OutcomeSucceeded || models.calls != 0 || len(tools.calls) != 0 {
 			t.Fatalf("execution=%#v err=%v", execution, err)
@@ -285,7 +285,7 @@ func TestM4InterceptorShortCircuitsRespectExecutionBoundaries(t *testing.T) {
 		tools := &outcomeTools{}
 		execution, err := newOutcomeRuntime(t, models, tools, func(deps *Dependencies) {
 			deps.RoundInterceptors = []agent.RoundInterceptor{interceptor}
-		}).Runtime.Run(context.Background(), agent.Turn{SessionID: "s", Input: "hello"})
+		}).Runtime.(*runtime).execute(context.Background(), agent.Turn{SessionID: "s", Inputs: []agent.Input{{Text: "hello"}}}, nil)
 		if err != nil || textValue(executionOutput(execution)) != "blocked" || execution.Outcome.Status != agent.OutcomeSucceeded ||
 			models.calls != 1 || len(tools.calls) != 0 {
 			t.Fatalf("execution=%#v err=%v", execution, err)
@@ -300,8 +300,8 @@ func TestM4FailureStagesAndCanonicalResultBoundary(t *testing.T) {
 			memoryStore: &memoryStore{entries: map[session.ID][]session.Entry{"s": {}}}, failAt: 2, err: persistErr,
 		}
 		models := &outcomeModel{responses: []model.Response{outcomeResponse("provider", "model", 1, 1)}}
-		execution, err := newOutcomeRuntime(t, models, &outcomeTools{}, func(deps *Dependencies) { deps.Store = store }).Runtime.Run(
-			context.Background(), agent.Turn{SessionID: "s", Input: "hello"},
+		execution, err := newOutcomeRuntime(t, models, &outcomeTools{}, func(deps *Dependencies) { deps.Store = store }).Runtime.(*runtime).execute(
+			context.Background(), agent.Turn{SessionID: "s", Inputs: []agent.Input{{Text: "hello"}}}, nil,
 		)
 		failure := execution.Outcome.Failure
 		if !errors.Is(err, persistErr) || execution.Result != nil || failure == nil || failure.Stage != agent.FailureAssistantPersistence ||
@@ -314,8 +314,8 @@ func TestM4FailureStagesAndCanonicalResultBoundary(t *testing.T) {
 		toolErr := errors.New("unknown tool outcome")
 		models := &outcomeModel{responses: []model.Response{outcomeResponse("provider", "model", 1, 1,
 			tool.Call{ID: "c1", Name: "echo", Arguments: json.RawMessage(`{}`)})}}
-		execution, err := newOutcomeRuntime(t, models, &outcomeTools{err: toolErr}).Runtime.Run(
-			context.Background(), agent.Turn{SessionID: "s", Input: "hello"},
+		execution, err := newOutcomeRuntime(t, models, &outcomeTools{err: toolErr}).Runtime.(*runtime).execute(
+			context.Background(), agent.Turn{SessionID: "s", Inputs: []agent.Input{{Text: "hello"}}}, nil,
 		)
 		failure := execution.Outcome.Failure
 		if !errors.Is(err, toolErr) || failure == nil || failure.Stage != agent.FailureTool || failure.ToolCallID != "c1" ||
@@ -335,7 +335,7 @@ func TestM4FailureStagesAndCanonicalResultBoundary(t *testing.T) {
 		})
 		execution, err := newOutcomeRuntime(t, &outcomeModel{}, &outcomeTools{}, func(deps *Dependencies) {
 			deps.Streaming = ingotabi.Some[model.StreamingRuntime](streaming)
-		}).Streaming.Stream(context.Background(), agent.Turn{SessionID: "s", Input: "hello"}, func(agent.StreamEvent) error { return consumerErr })
+		}).Runtime.(*runtime).stream(context.Background(), agent.Turn{SessionID: "s", Inputs: []agent.Input{{Text: "hello"}}}, func(agent.StreamEvent) error { return consumerErr })
 		failure := execution.Outcome.Failure
 		if !errors.Is(err, consumerErr) || failure == nil || failure.Stage != agent.FailureStreamConsumer ||
 			execution.Result != nil || execution.Outcome.Status != agent.OutcomeFailed {
@@ -344,8 +344,8 @@ func TestM4FailureStagesAndCanonicalResultBoundary(t *testing.T) {
 	})
 
 	t.Run("pre turn validation has no outcome", func(t *testing.T) {
-		execution, err := newOutcomeRuntime(t, &outcomeModel{}, &outcomeTools{}).Runtime.Run(
-			context.Background(), agent.Turn{Input: "hello"},
+		execution, err := newOutcomeRuntime(t, &outcomeModel{}, &outcomeTools{}).Runtime.(*runtime).execute(
+			context.Background(), agent.Turn{Inputs: []agent.Input{{Text: "hello"}}}, nil,
 		)
 		if !errors.Is(err, ErrInvalidTurn) || !reflect.DeepEqual(execution, agent.Execution{}) {
 			t.Fatalf("execution=%#v err=%v", execution, err)

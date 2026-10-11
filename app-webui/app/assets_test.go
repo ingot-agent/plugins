@@ -3,19 +3,17 @@ package appcomponent
 import (
 	"context"
 	"encoding/json"
+	appbackend "github.com/ingot-agent/plugins/app-webui"
+	"github.com/ingot-agent/sdk/agent"
+	"github.com/ingot-agent/sdk/asset"
+	"github.com/ingot-agent/sdk/content"
+	"github.com/ingot-agent/sdk/workspace"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
-
-	ingotabi "github.com/ingot-agent/ingot-abi"
-	appbackend "github.com/ingot-agent/plugins/app-webui"
-	"github.com/ingot-agent/sdk/agent"
-	"github.com/ingot-agent/sdk/asset"
-	"github.com/ingot-agent/sdk/content"
-	"github.com/ingot-agent/sdk/workspace"
 )
 
 type uploadStore struct {
@@ -97,11 +95,11 @@ func TestAttachmentOnlyTurnUsesAssetReferences(t *testing.T) {
 		received <- turn
 		return agent.Execution{}, nil
 	}}
-	controller, err := newAgentController(ingotabi.Some[agent.Runtime](runtime), ingotabi.None[agent.StreamingRuntime](), runtime)
+	controller := testController(t, runtime)
 	if err != nil {
 		t.Fatal(err)
 	}
-	a.turns.agent = controller
+	replaceTestController(a, controller)
 	w := httptest.NewRecorder()
 	a.routes().ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/turns", strings.NewReader(`{"sessionId":"`+created.ID+`","attachments":[{"kind":"image","assetId":"asset-one","mimeType":"image/png","name":"photo.png"}]}`)))
 	if w.Code != http.StatusAccepted {
@@ -109,7 +107,7 @@ func TestAttachmentOnlyTurnUsesAssetReferences(t *testing.T) {
 	}
 	select {
 	case turn := <-received:
-		if turn.Input != "" || len(turn.Attachments) != 1 || turn.Attachments[0].Kind != content.KindImage || turn.Attachments[0].Media.Source.Kind != content.SourceAsset || turn.Attachments[0].Media.Source.Asset.ID != "asset-one" || turn.Attachments[0].Media.Name != "photo.png" {
+		if turn.Inputs[0].Text != "" || len(turnMedia(turn)) != 1 || turnMedia(turn)[0].Kind != content.KindImage || turnMedia(turn)[0].Media.Source.Kind != content.SourceAsset || turnMedia(turn)[0].Media.Source.Asset.ID != "asset-one" || turnMedia(turn)[0].Media.Name != "photo.png" {
 			t.Fatalf("SDK turn = %#v", turn)
 		}
 	case <-time.After(time.Second):

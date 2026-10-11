@@ -12,21 +12,31 @@ import (
 	"github.com/ingot-agent/sdk/tool"
 )
 
-func (t *tree) BeginRoot(ctx context.Context, rootSessionID, sessionID session.ID) (sessioncontrol.Handle, error) {
-	if ctx == nil || sessionID == "" || rootSessionID == "" {
-		return sessioncontrol.Handle{}, agent.ErrChildUnauthorized
+func (t *tree) ValidateRoot(ctx context.Context, sessionID session.ID) error {
+	if ctx == nil || sessionID == "" {
+		return agent.ErrChildUnauthorized
 	}
 	if err := ctx.Err(); err != nil {
-		return sessioncontrol.Handle{}, err
+		return err
 	}
 	if t.config.enabled {
 		record, err := t.repository.GetChildSession(ctx, sessionID)
 		if err != nil {
-			return sessioncontrol.Handle{}, err
+			return err
 		}
 		if record.Agent.Kind == agent.ChildSessionKind {
-			return sessioncontrol.Handle{}, fmt.Errorf("child Session %q can only run through its accepted task: %w", sessionID, agent.ErrChildInvalidState)
+			return fmt.Errorf("child Session %q can only run through its accepted task: %w", sessionID, agent.ErrChildInvalidState)
 		}
+	}
+	return nil
+}
+
+func (t *tree) BeginRoot(ctx context.Context, rootSessionID, sessionID session.ID) (sessioncontrol.Handle, error) {
+	if rootSessionID == "" {
+		return sessioncontrol.Handle{}, agent.ErrChildUnauthorized
+	}
+	if err := t.ValidateRoot(ctx, sessionID); err != nil {
+		return sessioncontrol.Handle{}, err
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()

@@ -1,12 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import { displayMessage, shouldShowHistoryMessage, shouldShowTurnByline } from './conversationDisplay'
+import { displayMessage, lifecycleStatusInputs, shouldShowHistoryMessage, shouldShowTurnByline } from './conversationDisplay'
 import type { Interaction, LiveTurn, Message } from '../protocol'
+import { turnSnapshot } from '../test/turn'
 
 const toolMessage: Message = { role: 'assistant', content: [], toolCalls: [{ id: 'call', name: 'inspect', arguments: {} }] }
 const answerWithTool: Message = { role: 'assistant', content: [{ kind: 'text', text: 'I will inspect this.' }], toolCalls: toolMessage.toolCalls }
 const pluginMessage: Message = { role: 'user', content: [{ kind: 'text', text: '<system source="plugin">\nlocal files &amp; context\n</system>' }] }
 const interaction: Interaction = { id: 'question', name: 'ask', fields: [] }
-const toolOnlyTurn: LiveTurn = { id: 'turn', sessionId: 'session', revision: 0, output: '', reasoning: '', status: 'running', blocks: [{ id: 'tool', kind: 'tool', call: toolMessage.toolCalls![0], status: 'running' }] }
+const toolOnlyTurn: LiveTurn = turnSnapshot({ id: 'turn', sessionId: 'session', blocks: [{ id: 'tool', kind: 'tool', call: toolMessage.toolCalls![0], status: 'running' }] })
 const file = { kind: 'file', name: 'report & notes.pdf', mimeType: 'application/pdf', path: 'C:\\reports\\report & notes.pdf' }
 
 function filesMessage(files: unknown, notice = '\u4ee5\u4e0a\u662f\u7d27\u968f\u5176\u540e\u7684\u7528\u6237\u8f93\u5165\u6240\u4e0a\u4f20\u7684\u6587\u4ef6\u3002'): Message {
@@ -17,6 +18,17 @@ function filesMessage(files: unknown, notice = '\u4ee5\u4e0a\u662f\u7d27\u968f\u
 }
 
 describe('conversation display projection', () => {
+  it('groups admitted input by its TurnID while retaining current pre-admission failures', () => {
+    const inputs = [
+      turnSnapshot({ id: 'first' }),
+      turnSnapshot({ id: 'second', sequence: 2 }),
+      turnSnapshot({ id: 'failed', sequence: 3, status: 'failed', persisted: false, sdkTurnId: undefined }),
+      turnSnapshot({ id: 'queued', sequence: 4, status: 'queued', started: false, persisted: false, sdkTurnId: undefined }),
+      turnSnapshot({ id: 'missing-turn-id', sequence: 5, sdkTurnId: undefined }),
+    ]
+    expect([...lifecycleStatusInputs(inputs)].sort()).toEqual(['failed', 'second'])
+  })
+
   it('hides only tool-only history messages when tool calls are hidden', () => {
     expect(shouldShowHistoryMessage(toolMessage, false)).toBe(false)
     expect(shouldShowHistoryMessage(toolMessage, true)).toBe(true)

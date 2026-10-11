@@ -25,7 +25,7 @@ func TestHubSequencesClonesAndIsolatesObservers(t *testing.T) {
 		switch detail := event.Detail.(type) {
 		case observation.TurnStarted:
 			started := detail
-			started.Turn.Attachments[0].Media.Source.Data[0] = 9
+			started.Turn.Inputs[0].Attachments[0].Media.Media.Source.Data[0] = 9
 		case observation.ModelStarted:
 			detail.Request.Messages[0].Content[0].Text = "mutated"
 			detail.Request.Tools[0].InputSchema[0] = '['
@@ -60,9 +60,9 @@ func TestHubSequencesClonesAndIsolatesObservers(t *testing.T) {
 	correlation := observation.Correlation{SessionID: "s", TurnID: "turn"}
 	ctx := observation.WithCorrelation(context.Background(), correlation)
 	data := []byte{1, 2, 3}
-	turn := agent.Turn{SessionID: "s", Attachments: []content.Attachment{{
+	turn := agent.Turn{SessionID: "s", Inputs: []agent.Input{{Attachments: agent.MediaAttachments([]content.Attachment{{
 		Kind: content.KindImage, Media: content.Inline(content.KindImage, "image/png", "x", data).Media,
-	}}}
+	}})}}}
 	exports.Consumer.Emit(ctx, observation.TurnStarted{Turn: turn})
 	data[0] = 8
 	exports.Consumer.Emit(ctx, observation.ModelStarted{Request: model.Request{
@@ -95,7 +95,7 @@ func TestHubSequencesClonesAndIsolatesObservers(t *testing.T) {
 		t.Fatalf("events=%#v", second)
 	}
 	started := second[0].Detail.(observation.TurnStarted)
-	if started.Turn.Attachments[0].Media.Source.Data[0] != 1 {
+	if started.Turn.Inputs[0].Attachments[0].Media.Media.Source.Data[0] != 1 {
 		t.Fatalf("observer snapshots aliased: %#v", started)
 	}
 	if got := second[1].Detail.(observation.ModelStarted); got.Request.Messages[0].Content[0].Text != "request" || got.Request.Tools[0].InputSchema[0] != '{' {

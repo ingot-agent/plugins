@@ -35,7 +35,9 @@ Plugin modules must not:
 
 - contain a `go.mod` `replace` directive;
 - depend on `github.com/ingot-agent/ingot` or any of its submodules; or
-- depend on another first-level plugin module's implementation packages.
+- depend on another first-level plugin module's implementation packages in
+  production code. Test-only integration imports may exercise the real composed
+  runtime; keep those imports in `_test.go` files.
 
 Plugins may depend on public capability contract packages exported by another
 plugin, using a published module version. The provider remains optional in the
@@ -58,6 +60,25 @@ The root `go.work` may contain `use` entries, but every entry must have the
 exact form `./<plugin-directory>` and reference a current first-level plugin
 module. External paths, parent paths, nested paths, Core paths, and duplicate
 entries are rejected. CI and release checks continue to use `GOWORK=off`.
+
+For changes spanning unpublished SDK or ABI contracts, `go.work` also permits
+the following optional development replacements. They require matching sibling
+checkouts and do not replace the published requirements in plugin `go.mod` files:
+
+```go
+replace github.com/ingot-agent/sdk => ../sdk
+replace github.com/ingot-agent/ingot-abi => ../ingot-abi
+```
+
+The Builder reads the nearest `go.work` from the CLI's current directory;
+a workspace inside this repository shadows one in its parent directory.
+After adding or changing replacements, run `ingot project resolve` from the
+same directory as `ingot up` to refresh an existing `plugins.lock`. A lock
+created before a replacement was added can still select the published module.
+Verify the lock's `replacements` entries point to the intended SDK/ABI checkouts.
+Use `GOWORK=auto` for local Go checks with this workspace. Release checks with
+`GOWORK=off` require the updated contracts to be published and the plugin
+requirements upgraded first.
 
 ## Local checks
 

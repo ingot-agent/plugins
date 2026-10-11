@@ -36,11 +36,13 @@ type memoryStore struct {
 func (s *memoryStore) Create(_ context.Context, request session.CreateRequest) (session.Metadata, error) {
 	return session.Metadata{ID: "created", Title: request.Title}, nil
 }
-func (s *memoryStore) Append(_ context.Context, id session.ID, entry session.Entry) error {
+func (s *memoryStore) Append(_ context.Context, id session.ID, entries ...session.Entry) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	entry.Payload = append([]byte(nil), entry.Payload...)
-	s.entries[id] = append(s.entries[id], entry)
+	for _, entry := range entries {
+		entry.Payload = append([]byte(nil), entry.Payload...)
+		s.entries[id] = append(s.entries[id], entry)
+	}
 	return nil
 }
 func (s *memoryStore) Load(_ context.Context, id session.ID) ([]session.Entry, error) {
@@ -180,7 +182,7 @@ func TestAgentRunsToolLoopAndPersistsExactOrder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := exports.Runtime.Run(context.Background(), agent.Turn{SessionID: "s", Input: "hello"})
+	result, err := exports.Runtime.(*runtime).execute(context.Background(), agent.Turn{SessionID: "s", Inputs: []agent.Input{{Text: "hello"}}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -222,7 +224,7 @@ func TestAgentMaterializesOrderedAttachmentsAndRestoresLazily(t *testing.T) {
 		{Kind: content.KindImage, Media: content.Inline(content.KindImage, "image/png", "one.png", imageData).Media},
 		{Kind: content.KindFile, Media: content.Inline(content.KindFile, "application/octet-stream", "two.bin", fileData).Media},
 	}
-	if _, err := exports.Runtime.Run(context.Background(), agent.Turn{SessionID: "s", Input: "caption", Attachments: attachments}); err != nil {
+	if _, err := exports.Runtime.(*runtime).execute(context.Background(), agent.Turn{SessionID: "s", Inputs: []agent.Input{{Text: "caption", Attachments: agent.MediaAttachments(attachments)}}}, nil); err != nil {
 		t.Fatal(err)
 	}
 	imageData[0] = 'X'
@@ -265,7 +267,7 @@ func TestAgentMaterializesOrderedAttachmentsAndRestoresLazily(t *testing.T) {
 	if _, err := exports.History.Load(context.Background(), "s"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := exports.Runtime.Run(context.Background(), agent.Turn{SessionID: "s", Input: "next"}); err != nil {
+	if _, err := exports.Runtime.(*runtime).execute(context.Background(), agent.Turn{SessionID: "s", Inputs: []agent.Input{{Text: "next"}}}, nil); err != nil {
 		t.Fatal(err)
 	}
 	assets.mu.Lock()
@@ -319,7 +321,7 @@ func TestAgentMaterializesToolImageBeforeFollowupAndPersistence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := exports.Runtime.Run(context.Background(), agent.Turn{SessionID: "s", Input: "draw"}); err != nil {
+	if _, err := exports.Runtime.(*runtime).execute(context.Background(), agent.Turn{SessionID: "s", Inputs: []agent.Input{{Text: "draw"}}}, nil); err != nil {
 		t.Fatal(err)
 	}
 	models.mu.Lock()
@@ -348,10 +350,10 @@ func TestAgentAllowsAttachmentOnlyTurn(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	turn := agent.Turn{SessionID: "s", Attachments: []content.Attachment{{
+	turn := agent.Turn{SessionID: "s", Inputs: []agent.Input{{Attachments: agent.MediaAttachments([]content.Attachment{{
 		Kind: content.KindImage, Media: content.Inline(content.KindImage, "image/png", "only.png", []byte("only")).Media,
-	}}}
-	if _, err := exports.Runtime.Run(context.Background(), turn); err != nil {
+	}})}}}
+	if _, err := exports.Runtime.(*runtime).execute(context.Background(), turn, nil); err != nil {
 		t.Fatal(err)
 	}
 	models.mu.Lock()
@@ -373,7 +375,7 @@ func TestAgentValidatesCompleteResponseBeforePersisting(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = exports.Runtime.Run(context.Background(), agent.Turn{SessionID: "s", Input: "hello"})
+	_, err = exports.Runtime.(*runtime).execute(context.Background(), agent.Turn{SessionID: "s", Inputs: []agent.Input{{Text: "hello"}}}, nil)
 	if !errors.Is(err, ErrInvalidModelMessage) {
 		t.Fatalf("error=%v", err)
 	}
@@ -415,7 +417,7 @@ func TestAgentCompactsEveryModelInvocationWithoutReplacingRawMessages(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := exports.Runtime.Run(context.Background(), agent.Turn{SessionID: "s", Input: "hello"})
+	result, err := exports.Runtime.(*runtime).execute(context.Background(), agent.Turn{SessionID: "s", Inputs: []agent.Input{{Text: "hello"}}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -466,7 +468,7 @@ func TestAgentCompactorErrorStopsModelAndPreservesCommittedUser(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = exports.Runtime.Run(context.Background(), agent.Turn{SessionID: "s", Input: "hello"})
+	_, err = exports.Runtime.(*runtime).execute(context.Background(), agent.Turn{SessionID: "s", Inputs: []agent.Input{{Text: "hello"}}}, nil)
 	if !errors.Is(err, compactErr) {
 		t.Fatalf("error=%v", err)
 	}
@@ -532,7 +534,7 @@ func TestAgentRecoversTrailingToolRoundWithoutRetry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := exports.Runtime.Run(context.Background(), agent.Turn{SessionID: "s", Input: "next"}); err != nil {
+	if _, err := exports.Runtime.(*runtime).execute(context.Background(), agent.Turn{SessionID: "s", Inputs: []agent.Input{{Text: "next"}}}, nil); err != nil {
 		t.Fatal(err)
 	}
 	if len(tools.calls) != 0 {
@@ -582,12 +584,12 @@ func TestAgentSerializesSameSession(t *testing.T) {
 	}
 	done := make(chan error, 2)
 	go func() {
-		_, runErr := exports.Runtime.Run(context.Background(), agent.Turn{SessionID: "s", Input: "one"})
+		_, runErr := exports.Runtime.(*runtime).execute(context.Background(), agent.Turn{SessionID: "s", Inputs: []agent.Input{{Text: "one"}}}, nil)
 		done <- runErr
 	}()
 	<-models.entered
 	go func() {
-		_, runErr := exports.Runtime.Run(context.Background(), agent.Turn{SessionID: "s", Input: "two"})
+		_, runErr := exports.Runtime.(*runtime).execute(context.Background(), agent.Turn{SessionID: "s", Inputs: []agent.Input{{Text: "two"}}}, nil)
 		done <- runErr
 	}()
 	time.Sleep(50 * time.Millisecond)
@@ -654,7 +656,7 @@ func TestHistoryWaitsForSameSessionTurn(t *testing.T) {
 	}
 	runDone := make(chan error, 1)
 	go func() {
-		_, runErr := exports.Runtime.Run(context.Background(), agent.Turn{SessionID: "s", Input: "hello"})
+		_, runErr := exports.Runtime.(*runtime).execute(context.Background(), agent.Turn{SessionID: "s", Inputs: []agent.Input{{Text: "hello"}}}, nil)
 		runDone <- runErr
 	}()
 	<-models.entered
@@ -696,7 +698,7 @@ func TestAgentRejectsInterceptorSessionIDRewriteBeforeTerminal(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = exports.Runtime.Run(context.Background(), agent.Turn{SessionID: "original", Input: "hello"})
+	_, err = exports.Runtime.(*runtime).execute(context.Background(), agent.Turn{SessionID: "original", Inputs: []agent.Input{{Text: "hello"}}}, nil)
 	if !errors.Is(err, ErrInvalidTurn) {
 		t.Fatalf("error=%v", err)
 	}
@@ -761,7 +763,7 @@ func TestToolInvocationsInheritTurnSessionScope(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := exports.Runtime.Run(context.Background(), agent.Turn{SessionID: "session-a", Input: "hello"}); err != nil {
+	if _, err := exports.Runtime.(*runtime).execute(context.Background(), agent.Turn{SessionID: "session-a", Inputs: []agent.Input{{Text: "hello"}}}, nil); err != nil {
 		t.Fatal(err)
 	}
 	if len(tools.scopes) != 3 {

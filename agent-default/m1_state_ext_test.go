@@ -1,6 +1,8 @@
 package agentdefault_test
 
 import (
+	"context"
+	"github.com/ingot-agent/sdk/session"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -25,6 +27,9 @@ func (s testStateScope) Dir() string { return s.dir }
 // untouched.
 func withState(t *testing.T, cfg agentdefault.Config, deps agentdefault.Dependencies) agentdefault.Dependencies {
 	t.Helper()
+	if deps.Sessions == nil {
+		deps.Sessions = testSessionManager{store: deps.Store}
+	}
 	dir := writeTestConfig(t, cfg)
 	if deps.State != nil {
 		// A test supplied its own scope; persist cfg into it instead of
@@ -67,4 +72,15 @@ func persistTestConfig(t *testing.T, dir string, cfg agentdefault.Config) {
 	if err := os.WriteFile(filepath.Join(dir, "config.toml"), data, 0o600); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// Only Get is used by the submission admission path in these tests.
+type testSessionManager struct {
+	session.Manager
+	store session.Store
+}
+
+func (m testSessionManager) Get(ctx context.Context, id session.ID) (session.Metadata, error) {
+	_, err := m.store.Load(ctx, id)
+	return session.Metadata{ID: id}, err
 }

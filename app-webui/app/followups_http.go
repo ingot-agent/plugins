@@ -48,7 +48,7 @@ func (a *application) handleCreateFollowup(w http.ResponseWriter, r *http.Reques
 	a.sessionMu.Lock()
 	defer a.sessionMu.Unlock()
 	for _, turn := range a.turns.Snapshots() {
-		if turn.SessionID == string(source) {
+		if turn.SessionID == string(source) && (turn.Status == "running" || turn.Status == "queued") {
 			writeAPIError(w, http.StatusConflict, "source_running", "wait for the current answer to finish")
 			return
 		}
@@ -92,15 +92,14 @@ func (a *application) handleCreateFollowup(w http.ResponseWriter, r *http.Reques
 }
 
 func (a *application) deleteFollowup(ctx context.Context, note followup) error {
-	for _, turn := range a.turns.Snapshots() {
-		if turn.SessionID == note.ID {
-			return errors.New("followup is still running")
-		}
+	if err := a.turns.PrepareDelete(session.ID(note.ID)); err != nil {
+		return err
 	}
 	if err := a.sessions.Delete(ctx, session.ID(note.ID)); err != nil && !errors.Is(err, session.ErrNotFound) {
 		return err
 	}
 	a.clearSessionUsage(ctx, session.ID(note.ID))
+	a.turns.ForgetSession(session.ID(note.ID))
 	_ = a.backend.Events().Publish(appbackend.Event{Type: "session.deleted", Data: map[string]string{"id": note.ID}})
 	_ = a.backend.Events().Publish(appbackend.Event{Type: "followup.deleted", Data: note})
 	return nil

@@ -62,11 +62,11 @@ func TestSessionIdentityIsExplicitAcrossCompactionStreamAndFallback(t *testing.T
 				if cleanup != nil {
 					defer cleanup(context.Background())
 				}
-				turn := agent.Turn{RootSessionID: root, SessionID: "s", Input: "hello"}
+				turn := agent.Turn{RootSessionID: root, SessionID: "s", Inputs: []agent.Input{{Text: "hello"}}}
 				if mode == "complete" {
-					_, err = exports.Runtime.Run(context.Background(), turn)
+					_, err = exports.Runtime.(*runtime).execute(context.Background(), turn, nil)
 				} else {
-					_, err = exports.Streaming.Stream(context.Background(), turn, func(agent.StreamEvent) error { return nil })
+					_, err = exports.Runtime.(*runtime).stream(context.Background(), turn, func(agent.StreamEvent) error { return nil })
 				}
 				if err != nil {
 					t.Fatal(err)
@@ -103,7 +103,7 @@ func TestTurnInterceptorCannotChangeTokenRoot(t *testing.T) {
 			return next(ctx, turn)
 		})}
 	})
-	_, err := exports.Runtime.Run(context.Background(), agent.Turn{RootSessionID: "main", SessionID: "s", Input: "hello"})
+	_, err := exports.Runtime.(*runtime).execute(context.Background(), agent.Turn{RootSessionID: "main", SessionID: "s", Inputs: []agent.Input{{Text: "hello"}}}, nil)
 	if !errors.Is(err, ErrInvalidTurn) || len(models.calls) != 0 {
 		t.Fatalf("calls=%v err=%v", models.calls, err)
 	}

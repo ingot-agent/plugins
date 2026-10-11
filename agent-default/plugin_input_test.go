@@ -146,7 +146,7 @@ func TestPluginInputsSurviveRestartAndTrailingRoundRecovery(t *testing.T) {
 	if !reflect.DeepEqual(before, after) {
 		t.Fatal("read-only history performed recovery")
 	}
-	if _, err := makeRuntime().Runtime.Run(ctx, agent.Turn{SessionID: "s", Input: "next"}); err != nil {
+	if _, err := makeRuntime().Runtime.(*runtime).execute(ctx, agent.Turn{SessionID: "s", Inputs: []agent.Input{{Text: "next"}}}, nil); err != nil {
 		t.Fatal(err)
 	}
 	messages := models.requests[0].Messages
@@ -222,13 +222,13 @@ func TestPluginInputsAppendedByToolsDoNotChangeTurnSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := exports.Runtime.Run(ctx, agent.Turn{SessionID: "s", Input: "first"}); err != nil {
+	if _, err := exports.Runtime.(*runtime).execute(ctx, agent.Turn{SessionID: "s", Inputs: []agent.Input{{Text: "first"}}}, nil); err != nil {
 		t.Fatal(err)
 	}
 	if len(models.requests) != 2 || len(models.requests[1].Messages) != 4 {
 		t.Fatalf("current turn snapshot changed: %#v", models.requests)
 	}
-	if _, err := exports.Runtime.Run(ctx, agent.Turn{SessionID: "s", Input: "next"}); err != nil {
+	if _, err := exports.Runtime.(*runtime).execute(ctx, agent.Turn{SessionID: "s", Inputs: []agent.Input{{Text: "next"}}}, nil); err != nil {
 		t.Fatal(err)
 	}
 	messages := models.requests[2].Messages

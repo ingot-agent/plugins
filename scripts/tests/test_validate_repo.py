@@ -54,6 +54,37 @@ class WorkspaceValidationTests(unittest.TestCase):
         self.assertEqual(len(errors), 1)
         self.assertIn("duplicate use path", errors[0])
 
+    def test_sibling_contract_replacements_are_valid(self) -> None:
+        self.assertEqual(
+            self.validate(
+                "go 1.24.2\nuse ./tool-shell\n"
+                "replace github.com/ingot-agent/sdk => ../sdk\n"
+                "replace github.com/ingot-agent/ingot-abi => ../ingot-abi\n",
+                ("tool-shell",),
+            ),
+            [],
+        )
+
+    def test_other_replacements_are_rejected(self) -> None:
+        for directive in (
+            "replace github.com/ingot-agent/ingot => ../ingot-agent",
+            "replace github.com/ingot-agent/sdk => D:/external/sdk",
+            "replace github.com/ingot-agent/sdk => ../ingot-abi",
+            "replace github.com/ingot-agent/sdk v0.2.16 => ../sdk",
+            "replace github.com/ingot-agent/sdk => github.com/example/sdk v1.0.0",
+        ):
+            with self.subTest(directive=directive):
+                self.assertEqual(len(self.validate("go 1.24.2\n" + directive + "\n")), 1)
+
+    def test_duplicate_contract_replacement_is_rejected(self) -> None:
+        errors = self.validate(
+            "go 1.24.2\n"
+            "replace github.com/ingot-agent/sdk => ../sdk\n"
+            "replace github.com/ingot-agent/sdk => ../sdk\n"
+        )
+        self.assertEqual(len(errors), 1)
+        self.assertIn("duplicate replace module", errors[0])
+
 
 class TopLevelDirectoryTests(unittest.TestCase):
     def test_plugins_require_both_marker_files_and_unknown_dirs_fail(self) -> None:

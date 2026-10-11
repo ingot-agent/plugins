@@ -28,3 +28,8 @@ use (
 	./tool-shell
 	./tool-subagent
 )
+
+// Local development of the unpublished SDK changes in the sibling checkouts.
+replace github.com/ingot-agent/sdk => ../sdk
+
+replace github.com/ingot-agent/ingot-abi => ../ingot-abi
