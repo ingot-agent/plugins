@@ -9,6 +9,10 @@
 
 ### Added
 
+- Paste clipboard files and screenshots into the composer. Upload bytes through
+  `POST /api/files/upload`, retain durable file-notice paths when a writer is
+  available, and support image-only Assets without one. Track upload status,
+  enforce size limits, cancel removed uploads and preserve per-session drafts.
 - Preview local file links and file attachments in a resizable, read-only pane,
   with syntax highlighting, line references, Markdown/source modes and a mobile
   full-screen view. Resolve relative paths against the originating Session or
@@ -38,8 +42,8 @@
   only the invocation ID when accepting a Turn.
 - Use native file selection in the composer. Send only PNG/JPEG/GIF/WebP images
   as model media; route all selected file paths through an `app.backend` plugin
-  notice. File selection remains available without an Asset Store. Clipboard and
-  drag-and-drop file input are not supported by this workflow.
+  notice. File selection remains available without an Asset Store. Drag-and-drop
+  file input is not supported by this workflow.
 - Recognize source-only plugin envelopes and associate uploaded files using the
   notification body rather than a plugin-name attribute.
 - Require SDK v0.2.16 for the published plugin-input and Session accounting
@@ -56,6 +60,9 @@
 
 ### Fixed
 
+- Keep image selection and sending available with an Asset Store when
+  `agent.PluginInputWriter` is absent. Omit file notices for these image-only
+  turns and reject unsupported local files during selection and submission.
 - Keep the selected slash-command group or operation visible when navigating
   with the arrow keys, including wrapping between the first and last options.
   Scroll only the option list and preserve focus in the composer.

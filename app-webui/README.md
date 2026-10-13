@@ -5,7 +5,7 @@
 - `host`（包 `./host`）依赖 ABI `state.Scope`，持有进程内的 `EventHub`，导出 `appbackend.Runtime`、全局 `interaction.Channel`、显式作用域的 `interaction.ExecutionBinder` 和 `observation.Observer`。该组件不依赖 Agent，因此 Agent 可以使用这些能力而不会在组件图中形成环。
 - `app`（包 `./app`）是没有能力导出的图叶节点，持有 HTTP 服务器、Controller、运行中的 Turn，以及保留的 Operation 结果。它依赖 host 的 `appbackend.Runtime`、`agent.History`、`session.Store`、`session.Manager`、`session.Query`、`workspace.Manager`、`workspace.Resolver`，以及 ABI `invocation.Invocation`、`lifecycle.Controller` 和 `state.Scope`。相互独立且可选的 `agent.Runtime` 与 `agent.StreamingRuntime` 至少需要提供一个。`asset.Store`、`modelselection.Controller` 和 `agent.PluginInputWriter` 是可选依赖；writer 用于在启动 Agent 前写入文件通知。Operation 通过 `[]operation.Operation` 收集；应用自身另外注册 `/app-webui config`。
 
-模块要求 Go 1.24.2，已发布的直接 SDK/ABI 版本由 [go.mod](go.mod) 固定，当前分别为 SDK `v0.2.17`、ABI `v0.1.0`。本分支的本地文件输入通过 SDK 已发布的通用 writer 接口调用 [context-input](../context-input/README.md)，由它统一校验并使用 `session.Store.Append` 写入，读取时统一格式化；Runtime 需组合该新插件、支持插件输入投影的 Agent 和收集 Contributor 的 Prompt。独立模块验证使用 `GOWORK=off`，不需要本地 SDK 替换。插件没有主程序，应由 Ingot Builder 组合成 Runtime Image。
+模块要求 Go 1.24.2，已发布的直接 SDK/ABI 版本由 [go.mod](go.mod) 固定，当前分别为 SDK `v0.2.17`、ABI `v0.1.0`。本分支的本地文件通知通过 SDK 已发布的通用 writer 接口调用 [context-input](../context-input/README.md)，由它统一校验并使用 `session.Store.Append` 写入，读取时统一格式化；使用文件通知的 Runtime 需组合该新插件、支持插件输入投影的 Agent 和收集 Contributor 的 Prompt。图片可通过 Asset Store 独立发送，不要求组合 `context-input`。独立模块验证使用 `GOWORK=off`，不需要本地 SDK 替换。插件没有主程序，应由 Ingot Builder 组合成 Runtime Image。
 
 ## 启动 Web UI
 
@@ -48,7 +48,7 @@ ingot start web
 - 对话消息不显示 Ingot 图标/名称；实时执行仍展示状态徽标。工具调用显示开关保存在浏览器本地偏好中，刷新后也会应用到历史消息；隐藏纯工具消息时不影响最终回答。
 - Markdown、代码高亮/复制、折叠推理、工具调用卡片和独立执行详情；Turn、Round、Model、Tool 与 Session 累计用量来自公开 SDK 能力。
 - 流式输出及 Run-only 降级、停止执行、内联审批/自由输入、跨会话待处理请求抽屉。
-- 通过宿主的系统文件选择器多选本地文件。图片按 Asset 能力预览并作为模型图片输入；其他文件以原路径通知模型，不复制文件。文件选择不依赖 Asset 能力。
+- 通过宿主的系统文件选择器多选本地文件。图片按 Asset 能力预览并作为模型图片输入；其他文件以原路径通知模型，不复制文件。有文件通知 writer 时，文件选择不依赖 Asset 能力；只有 Asset Store 时仍可选择并发送图片。
 - Operation 简单表单与复杂 JSON 输入、服务端 Schema 校验、结果恢复和取消；JSON 模式保留提交的原始文本，不经数值转换。
 - 浅色/深色/跟随系统、中英文、桌面侧栏及移动端抽屉；最小适配宽度 360px。
 
@@ -95,6 +95,7 @@ Web 命令 `/app-webui config`（Group `app-webui`、Name `config`、输入 `{}`
 | 原文追问 | `GET/POST /api/sessions/{id}/followups`、`DELETE /api/followups/{id}` |
 | Workspace 目录选择 | `POST /api/workspace/select` |
 | 本地文件选择 | `POST /api/files/select` |
+| 剪贴板文件上传 | `POST /api/files/upload?name=<文件名>` |
 | 本地文本预览与打开 | `POST /api/files/preview`、`POST /api/files/open` |
 | 历史消息 | `GET /api/sessions/{id}/history` |
 | Asset | `POST /api/assets`、`GET /api/assets/{id}` |
@@ -173,15 +174,19 @@ Token 卡片同时显示 `context-compact.session-context/<sessionId>` 的 `inpu
 }
 ```
 
-路径由后端解析符号链接并规范为绝对路径，必须是现存的普通文件，大小不超过 `max_asset_bytes`。文件名、MIME 和大小由后端读取，不信任浏览器提交的同名字段。PNG、JPEG、GIF、WebP 在配置 Asset Store 时导入现有 Asset 机制并返回 `assetId`，用于图片预览及模型图片输入；没有 Asset Store 时只提供路径。其他格式（包括文档、音视频、SVG、AVIF）不读取正文或复制到插件目录，也不发送为供应商媒体输入。
+路径由后端解析符号链接并规范为绝对路径，必须是现存的普通文件，大小不超过 `max_asset_bytes`。文件名、MIME 和大小由后端读取，不信任浏览器提交的同名字段。PNG、JPEG、GIF、WebP 在配置 Asset Store 时导入现有 Asset 机制并返回 `assetId`，用于图片预览及模型图片输入；没有 Asset Store 但有文件通知 writer 时只提供路径。其他格式（包括文档、音视频、SVG、AVIF）需要文件通知 writer，不读取正文或复制到插件目录，也不发送为供应商媒体输入。
 
-发送时，WebUI 为本次选择的所有文件生成一条 `app.backend` 插件输入，正文包含 JSON 文件列表及“以上是紧随其后的用户输入所上传的文件。”。完成文件、会话和工作目录校验后，HTTP app 调用 `agent.PluginInputWriter.Append`，由 `context.input` 校验、编码并通过普通 `session.Store.Append` 写入。通知写入成功后才启动 Agent，由 Agent 正常读取历史、保存用户输入并生成首次模型请求；后续轮次沿用这个上下文。通知写入失败时直接返回错误，不启动 Turn，也不自动重试。
+有文件通知 writer 时，WebUI 为本次选择的所有文件生成一条 `app.backend` 插件输入，正文包含 JSON 文件列表及“以上是紧随其后的用户输入所上传的文件。”。完成文件、会话和工作目录校验后，HTTP app 调用 `agent.PluginInputWriter.Append`，由 `context.input` 校验、编码并通过普通 `session.Store.Append` 写入。通知写入成功后才启动 Agent，由 Agent 正常读取历史、保存用户输入并生成首次模型请求；后续轮次沿用这个上下文。通知写入失败时直接返回错误，不启动 Turn，也不自动重试。
 
-校验、Entry 格式、XML 外壳及来源系统说明均由 `context.input` 提供。WebUI 仅负责文件正文与追加时机，不依赖该插件的实现包。没有 writer 时不向界面声明文件选择可用，提交本地文件返回 `501`，不启动 Turn。通知文本校验在 `Append` 时进行；被拒绝时不启动 Agent，本次用户消息尚未保存。
+校验、Entry 格式、XML 外壳及来源系统说明均由 `context.input` 提供。WebUI 仅负责文件正文与追加时机，不依赖该插件的实现包。`files.available` 要求文件选择器存在，并且 Asset Store 或 writer 至少有一个。没有 writer 但有 Asset Store 时，仍可选择、预览和发送 PNG、JPEG、GIF、WebP，发送时仅传图片媒体，不生成文件通知；选择或提交其他文件返回 `501`，混合提交也会整体拒绝，不启动 Turn。两种能力都缺失时禁用附件按钮。通知文本校验在 `Append` 时进行；被拒绝时不启动 Agent，本次用户消息尚未保存。
 
 WebUI 正常流程中文件通知位于对应用户消息之前，两者是独立的 Append，不提供成对原子提交、失败后的自动重试或其他写入者之间的隔离。通知成功后、用户消息保存前中断，可能只留下通知记录；已提交的通知保留在历史中。这个顺序由 WebUI 的调用约束实现，SDK 没有额外的文件关联接口或历史分组格式。
 
-发送后的临时消息直接使用文件选择器返回的文件列表；读取历史后，界面从持久通知中提取文件信息。两者均按选择顺序显示在所属用户消息中；纯文件发送显示附件，非图片暂仅显示图标、文件名和类型。上下文保留空用户消息，插件通知在主对话和追问窗口中均不渲染，发送中和刷新后遵循同一显示规则。原始历史和消息索引保持完整，重启及 Fork 保留上下文顺序。
+输入框支持通过粘贴事件接收剪贴板文件和截图。浏览器提供文件内容，不提供可信的宿主原路径；前端逐文件调用 `POST /api/files/upload?name=<URL 编码的文件名>`，请求体为原始文件字节，`Content-Type` 为 `application/octet-stream`，要求 `Content-Length`，单文件仍受 `max_asset_bytes` 限制。成功返回 `201` 和一个 `Attachment`。文件名不得包含目录成分，MIME 根据扩展名识别。
+
+有 writer 时，上传文件保存在插件 state 下的 `uploads/file-<随机标识>/<原文件名>`，保持文件通知和混合附件顺序；支持的图片另行导入 Asset 供预览及模型使用。同名文件互不覆盖，成功上传的文件保留供发送、历史及 Fork 引用，不随草稿移除自动删除；失败或中断上传会清理不完整文件。没有 writer 时，支持的图片可直接进入 Asset，无须文件副本，其他文件返回 `501`。上传中的附件可移除以取消请求，完成前不能发送当前草稿；上传结果始终归属粘贴时的会话。纯文本粘贴保持浏览器默认行为。
+
+发送后的临时消息直接使用文件选择器返回的文件列表；读取历史后，界面从持久通知中提取文件信息，没有 writer 时则直接显示用户消息中的图片媒体。两者均按选择顺序显示在所属用户消息中；纯文件发送显示附件，非图片暂仅显示图标、文件名和类型。上下文保留空用户消息，插件通知在主对话和追问窗口中均不渲染，发送中和刷新后遵循同一显示规则。原始历史和消息索引保持完整，重启及 Fork 保留上下文顺序。
 
 选择器打开在 Runtime 所在主机：Windows 使用 COM `IFileOpenDialog`，macOS 使用 `NSOpenPanel`，Linux 使用 Zenity 或 KDialog，Linux 仍需要桌面会话。不可用时返回 `file_picker_unavailable`。浏览器原生文件输入不暴露真实绝对路径，因此这里调用宿主选择器；远程浏览器不能用此接口选择远程设备上的文件。当前只支持文件选择，不处理粘贴或拖放文件；原文件后续被移动、删除或修改时，路径通知不会保存一份副本。
 

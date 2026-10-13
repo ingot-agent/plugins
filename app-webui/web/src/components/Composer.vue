@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
-import { ArrowUp, Paperclip, Square, X, File, LoaderCircle } from 'lucide-vue-next'
+import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
+import { ArrowUp, Paperclip, Square, X, File as FileIcon, LoaderCircle } from 'lucide-vue-next'
 import { useI18n } from 'vue-i18n'
 import type { Attachment, LiveTurn, Operation } from '../protocol'
-import { command, errorMessage } from '../api'
+import { command, errorMessage, request } from '../api'
 import { useRuntime } from '../stores/runtime'
 import { filterGroups, filterOperations, operationGroups, parseComposerInput } from '../commands'
 import CommandPalette from './CommandPalette.vue'
@@ -21,7 +21,7 @@ const selecting = ref(false)
 let selection: AbortController | undefined
 const paletteDismissed = ref(false)
 const selectedCommand = ref(0)
-interface Upload { id: number; attachment: Attachment; preview?: string }
+interface Upload { id: number; attachment: Attachment; preview?: string; pending?: boolean; controller?: AbortController }
 const uploads = ref<Upload[]>([])
 const drafts = new Map<string, { text: string; uploads: Upload[] }>()
 let nextId = 0
@@ -32,7 +32,7 @@ const operationCandidates = computed(() => parsed.value.kind === 'operation-sear
 const paletteOpen = computed(() => !paletteDismissed.value && (parsed.value.kind === 'group-search' || parsed.value.kind === 'operation-search'))
 const commandReady = computed(() => parsed.value.kind === 'command' && uploads.value.length === 0)
 const canSend = computed(() => runtime.connection === 'online' && !props.sending && !selecting.value && !props.archived && !props.disabled &&
-  !props.running.length && parsed.value.kind === 'message' && (!!parsed.value.text.trim() || uploads.value.length > 0))
+  !props.running.length && !uploads.value.some(item => item.pending) && parsed.value.kind === 'message' && (!!parsed.value.text.trim() || uploads.value.length > 0))
 const canSubmit = computed(() => canSend.value || (runtime.connection === 'online' && !props.sending && !props.archived && commandReady.value))
 function fit() { if (input.value) { input.value.style.height = 'auto'; input.value.style.height = Math.min(input.value.scrollHeight, 200) + 'px' } }
 watch(() => props.sessionKey, (key, previous) => {
@@ -47,11 +47,53 @@ watch(() => props.sessionKey, (key, previous) => {
 })
 watch(text, () => { paletteDismissed.value = false; selectedCommand.value = 0; fit() }, { flush: 'post' })
 const size = (bytes: number) => bytes < 1048576 ? Math.ceil(bytes / 1024) + ' KB' : (bytes / 1048576).toFixed(1) + ' MB'
-function release(item: Upload) { if (item.preview?.startsWith('blob:')) URL.revokeObjectURL(item.preview) }
+function release(item: Upload) {
+  item.controller?.abort()
+  if (item.preview?.startsWith('blob:')) URL.revokeObjectURL(item.preview)
+}
 function remove(id: number) {
-  const item = uploads.value.find(item => item.id === id)
-  if (item) release(item)
-  uploads.value = uploads.value.filter(item => item.id !== id)
+  const index = uploads.value.findIndex(item => item.id === id)
+  if (index < 0) return
+  release(uploads.value[index]!)
+  uploads.value.splice(index, 1)
+}
+function paste(event: ClipboardEvent) {
+  const clipboard = event.clipboardData
+  let files = Array.from(clipboard?.files || [])
+  if (!files.length) files = Array.from(clipboard?.items || []).flatMap(item => {
+    const file = item.kind === 'file' ? item.getAsFile() : null
+    return file ? [file] : []
+  })
+  if (!files.length) return
+  event.preventDefault()
+  if (selecting.value || props.archived || props.disabled || props.sending) return
+  if (!runtime.files.available && !runtime.assets.available) { runtime.notify(t('assetUnavailable')); return }
+  const maxBytes = runtime.files.maxBytes || runtime.assets.maxBytes
+  const target = uploads.value
+  for (const file of files) {
+    if (file.size > maxBytes) { runtime.notify(t('attachmentTooLarge', { name: file.name, size: size(maxBytes) })); continue }
+    void uploadClipboardFile(file, target)
+  }
+}
+async function uploadClipboardFile(file: File, target: Upload[]) {
+  const controller = new AbortController()
+  const item = reactive<Upload>({ id: ++nextId, attachment: { kind: 'file', name: file.name, size: file.size }, pending: true, controller })
+  target.push(item)
+  try {
+    const attachment = await request<Attachment>('/files/upload?name=' + encodeURIComponent(file.name), {
+      method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: file, signal: controller.signal,
+    })
+    if (controller.signal.aborted) return
+    item.attachment = attachment
+    item.preview = attachment.kind === 'image' && attachment.assetId ? '/api/assets/' + encodeURIComponent(attachment.assetId) : undefined
+    item.pending = false
+  } catch (error) {
+    const index = target.indexOf(item)
+    if (index >= 0) target.splice(index, 1)
+    if (!controller.signal.aborted) runtime.notify(file.name + ': ' + errorMessage(error))
+  } finally {
+    item.controller = undefined
+  }
 }
 async function selectFiles() {
   if (!runtime.files.available || selecting.value || props.archived || props.disabled || props.sending) return
@@ -147,12 +189,12 @@ onBeforeUnmount(() => {
     <form class="composer" @submit.prevent="send">
       <div v-if="uploads.length" class="upload-list">
         <div v-for="item in uploads" :key="item.id" class="upload-chip" :title="item.attachment.path">
-          <img v-if="item.preview" :src="item.preview" alt="" /><File v-else :size="20" class="muted" />
-          <span class="min-w-0"><strong class="block truncate">{{ item.attachment.name }}</strong><small>{{ size(item.attachment.size || 0) }}</small></span>
+          <LoaderCircle v-if="item.pending" class="spin" :size="20" /><img v-else-if="item.preview" :src="item.preview" alt="" /><FileIcon v-else :size="20" class="muted" />
+          <span class="min-w-0"><strong class="block truncate">{{ item.attachment.name }}</strong><small>{{ item.pending ? t('uploading') : size(item.attachment.size || 0) }}</small></span>
           <button type="button" class="icon-button" :aria-label="t('remove') + ': ' + item.attachment.name" :disabled="sending" @click="remove(item.id)"><X :size="13" /></button>
         </div>
       </div>
-      <textarea ref="input" v-model="text" class="composer-input" :placeholder="t('composer')" :aria-label="t('composer')" rows="2" :disabled="archived || sending" @keydown="keydown" />
+      <textarea ref="input" v-model="text" class="composer-input" :placeholder="t('composer')" :aria-label="t('composer')" rows="2" :disabled="archived || sending" @keydown="keydown" @paste="paste" />
       <div class="composer-toolbar">
         <button type="button" class="icon-button" :disabled="!runtime.files.available || selecting || archived || disabled || sending" :aria-label="t('attach')" :title="runtime.files.available ? t('uploadLimit', { size: size(runtime.files.maxBytes) }) : t('assetUnavailable')" @click="selectFiles"><LoaderCircle v-if="selecting" class="spin" :size="19" /><Paperclip v-else :size="19" /></button>
         <ModelSelectionPicker />

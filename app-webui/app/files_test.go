@@ -261,30 +261,158 @@ func TestLocalFilesRejectMissingRelativeDirectoriesOversizeAndLegacyMedia(t *tes
 	}
 }
 
-func TestMissingFileNoticeWriterPreventsTurnStart(t *testing.T) {
-	a := testApplication(t)
-	root := t.TempDir()
-	path := localTestFile(t, root, "file.txt", "data")
-	created, err := a.sessions.Create(context.Background(), "files", workspace.Binding{Root: root})
-	if err != nil {
-		t.Fatal(err)
+func TestFileSelectionCapabilities(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		picker    bool
+		assets    bool
+		writer    bool
+		available bool
+	}{
+		{name: "images-only", picker: true, assets: true, available: true},
+		{name: "file-notices-only", picker: true, writer: true, available: true},
+		{name: "images-and-file-notices", picker: true, assets: true, writer: true, available: true},
+		{name: "no-attachment-support", picker: true},
+		{name: "no-picker", assets: true, writer: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			a := testApplication(t)
+			if test.picker {
+				a.filePicker = &stubFilePicker{}
+			}
+			if test.assets {
+				a.assets = &uploadStore{}
+			}
+			if !test.writer {
+				a.pluginInputs = nil
+			}
+			w := httptest.NewRecorder()
+			a.routes().ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/state", nil))
+			var state appbackend.StateSnapshot
+			if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &state) != nil || state.Files.Available != test.available {
+				t.Fatalf("attachment availability=%d %s", w.Code, w.Body.String())
+			}
+		})
 	}
-	a.pluginInputs = nil
-	a.filePicker = &stubFilePicker{}
-	stateResponse := httptest.NewRecorder()
-	a.routes().ServeHTTP(stateResponse, httptest.NewRequest(http.MethodGet, "/api/state", nil))
-	var state appbackend.StateSnapshot
-	if stateResponse.Code != http.StatusOK || json.Unmarshal(stateResponse.Body.Bytes(), &state) != nil || state.Files.Available {
-		t.Fatalf("missing writer exposed file selection: %d %s", stateResponse.Code, stateResponse.Body.String())
+}
+
+func TestLocalImageTurnsWithoutFileNoticeWriter(t *testing.T) {
+	for _, selected := range []bool{false, true} {
+		name := "import-on-send"
+		if selected {
+			name = "reuse-selected-asset"
+		}
+		t.Run(name, func(t *testing.T) {
+			a := testApplication(t)
+			a.pluginInputs = nil
+			assets := &uploadStore{}
+			a.assets = assets
+			root := t.TempDir()
+			path := localTestFile(t, root, "photo.png", "image")
+			files := []appbackend.Attachment{{Path: path}}
+			if selected {
+				a.filePicker = &stubFilePicker{paths: []string{path}}
+				w := httptest.NewRecorder()
+				a.routes().ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/files/select", strings.NewReader(`{}`)))
+				var result struct {
+					Files []appbackend.Attachment `json:"files"`
+				}
+				if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &result) != nil || len(result.Files) != 1 || result.Files[0].AssetID != "asset-one" {
+					t.Fatalf("image selection=%d %s", w.Code, w.Body.String())
+				}
+				files = result.Files
+			}
+			created, err := a.sessions.Create(context.Background(), "images", workspace.Binding{Root: root})
+			if err != nil {
+				t.Fatal(err)
+			}
+			received := make(chan agent.Turn, 1)
+			runtime := &testAgent{run: func(_ context.Context, turn agent.Turn) (agent.Execution, error) {
+				received <- turn
+				return agent.Execution{}, nil
+			}}
+			a.turns.agent, err = newAgentController(ingotabi.Some[agent.Runtime](runtime), ingotabi.None[agent.StreamingRuntime](), runtime)
+			if err != nil {
+				t.Fatal(err)
+			}
+			body, _ := json.Marshal(createTurnRequest{SessionID: created.ID, Attachments: files})
+			w := httptest.NewRecorder()
+			a.routes().ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/turns", strings.NewReader(string(body))))
+			if w.Code != http.StatusAccepted {
+				t.Fatalf("image-only turn=%d %s", w.Code, w.Body.String())
+			}
+			select {
+			case turn := <-received:
+				if turn.Input != "" || len(turn.Attachments) != 1 {
+					t.Fatalf("image-only turn=%#v", turn)
+				}
+				image := turn.Attachments[0]
+				if image.Kind != content.KindImage || image.Media.MIMEType != "image/png" || image.Media.Name != "photo.png" || image.Media.Source.Kind != content.SourceAsset || image.Media.Source.Asset.ID != "asset-one" || assets.calls != 1 {
+					t.Fatalf("image=%#v asset writes=%d", image, assets.calls)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("image-only turn did not reach runtime")
+			}
+			entries, err := a.sessions.(*defaultSessionController).store.Load(context.Background(), session.ID(created.ID))
+			if err != nil || len(entries) != 0 {
+				t.Fatalf("image-only turn wrote a file notice: %#v err=%v", entries, err)
+			}
+		})
 	}
-	body, _ := json.Marshal(createTurnRequest{SessionID: created.ID, Attachments: []appbackend.Attachment{{Kind: "file", Path: path}}})
-	w := httptest.NewRecorder()
-	a.routes().ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/turns", strings.NewReader(string(body))))
-	if w.Code != http.StatusNotImplemented || a.turns.nextID.Load() != 0 {
-		t.Fatalf("missing writer started a turn: status=%d body=%s", w.Code, w.Body.String())
-	}
-	entries, err := a.sessions.(*defaultSessionController).store.Load(context.Background(), session.ID(created.ID))
-	if err != nil || len(entries) != 0 {
-		t.Fatalf("missing writer wrote history: %#v err=%v", entries, err)
+}
+
+func TestMissingFileNoticeWriterRejectsUnsupportedFiles(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		assets bool
+		files  []string
+	}{
+		{name: "file-without-assets", files: []string{"file.txt"}},
+		{name: "file-with-assets", assets: true, files: []string{"file.txt"}},
+		{name: "unsupported-image", assets: true, files: []string{"photo.svg"}},
+		{name: "mixed", assets: true, files: []string{"photo.png", "file.txt"}},
+		{name: "image-without-assets", files: []string{"photo.png"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			a := testApplication(t)
+			a.pluginInputs = nil
+			if test.assets {
+				a.assets = &uploadStore{}
+			}
+			root := t.TempDir()
+			var paths []string
+			var files []appbackend.Attachment
+			for _, name := range test.files {
+				path := localTestFile(t, root, name, "data")
+				paths = append(paths, path)
+				// Client-supplied image metadata must not bypass local file checks.
+				files = append(files, appbackend.Attachment{Kind: "image", MIMEType: "image/png", AssetID: "asset-one", Path: path})
+			}
+			if !test.assets {
+				for i := range files {
+					files[i].AssetID = ""
+				}
+			}
+			a.filePicker = &stubFilePicker{paths: paths}
+			w := httptest.NewRecorder()
+			a.routes().ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/files/select", strings.NewReader(`{}`)))
+			if w.Code != http.StatusNotImplemented {
+				t.Fatalf("unsupported selection=%d %s", w.Code, w.Body.String())
+			}
+			created, err := a.sessions.Create(context.Background(), "files", workspace.Binding{Root: root})
+			if err != nil {
+				t.Fatal(err)
+			}
+			body, _ := json.Marshal(createTurnRequest{SessionID: created.ID, Attachments: files})
+			w = httptest.NewRecorder()
+			a.routes().ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/turns", strings.NewReader(string(body))))
+			if w.Code != http.StatusNotImplemented || a.turns.nextID.Load() != 0 {
+				t.Fatalf("missing writer started a turn: status=%d body=%s", w.Code, w.Body.String())
+			}
+			entries, err := a.sessions.(*defaultSessionController).store.Load(context.Background(), session.ID(created.ID))
+			if err != nil || len(entries) != 0 {
+				t.Fatalf("missing writer wrote history: %#v err=%v", entries, err)
+			}
+		})
 	}
 }

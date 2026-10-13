@@ -756,6 +756,52 @@ test('native image selection can be previewed after refreshing', async ({ page }
   await expect(page.locator('.transcript')).not.toContainText('以上是紧随其后的用户输入所上传的文件')
 })
 
+test('clipboard screenshot can be pasted with the keyboard', async ({ page }) => {
+  await page.context().grantPermissions(['clipboard-read', 'clipboard-write'])
+  await ready(page)
+  await page.evaluate(async () => {
+    const canvas = document.createElement('canvas')
+    canvas.width = canvas.height = 2
+    canvas.getContext('2d')!.fillRect(0, 0, 2, 2)
+    const image = await new Promise<Blob>(resolve => canvas.toBlob(blob => resolve(blob!), 'image/png'))
+    await navigator.clipboard.write([new ClipboardItem({ 'image/png': image })])
+  })
+  await page.getByRole('textbox', { name: 'Message your agent…', exact: true }).press('Control+V')
+  await expect(page.locator('.upload-chip img')).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Send message', exact: true })).toBeEnabled()
+  await page.getByRole('button', { name: 'Send message', exact: true }).click()
+  await expect(page.getByText('Attachment received.', { exact: true })).toBeVisible()
+})
+
+test('clipboard images and documents can be sent and previewed after refreshing', async ({ page }) => {
+  await ready(page)
+  await page.getByRole('textbox', { name: 'Message your agent…', exact: true }).evaluate(async element => {
+    const canvas = document.createElement('canvas')
+    canvas.width = canvas.height = 2
+    canvas.getContext('2d')!.fillRect(0, 0, 2, 2)
+    const image = await new Promise<Blob>(resolve => canvas.toBlob(blob => resolve(blob!), 'image/png'))
+    const clipboard = new DataTransfer()
+    clipboard.items.add(new File([image], 'clipboard.png', { type: 'image/png' }))
+    clipboard.items.add(new File(['Clipboard document contents'], 'clipboard.txt', { type: 'text/plain' }))
+    element.dispatchEvent(new ClipboardEvent('paste', { clipboardData: clipboard, bubbles: true, cancelable: true }))
+  })
+  await expect(page.locator('.upload-chip')).toHaveCount(2)
+  await expect(page.locator('.upload-chip img')).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Send message', exact: true })).toBeEnabled()
+  await page.getByRole('button', { name: 'Send message', exact: true }).click()
+  await expect(page.getByText('Attachment received.', { exact: true })).toBeVisible()
+  await page.reload()
+  const files = page.locator('.message-user .file-row')
+  await expect(files).toHaveCount(2)
+  await expect(files.nth(0)).toContainText('clipboard.png')
+  await expect(files.nth(1)).toContainText('clipboard.txt')
+  await files.nth(0).getByRole('button', { name: 'Preview', exact: true }).click()
+  await expect(page.getByRole('img', { name: 'clipboard.png', exact: true })).toBeVisible()
+  await files.nth(1).getByRole('button', { name: 'clipboard.txt', exact: true }).click()
+  await expect(page.locator('.file-preview')).toContainText('Clipboard document contents')
+  await expect(page.locator('.transcript')).not.toContainText('以上是紧随其后的用户输入所上传的文件')
+})
+
 test('local document renders as an attachment while its plugin message stays hidden', async ({ page }) => {
   const errors: string[] = []
   page.on('pageerror', error => errors.push(error.message))
