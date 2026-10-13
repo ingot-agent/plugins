@@ -85,6 +85,13 @@ tool messages so the model can correct its request. Other tool execution errors
 stop the turn. A tool side effect followed by persistence failure is not rolled
 back and must not be blindly retried.
 
+New history uses `agent.message` v2, retaining opaque provider replay state and
+tool argument bytes exactly, including whitespace and JSON escape spelling.
+Version 1 records remain readable and are not rewritten; older Agent binaries
+cannot read new v2 records. Replay state survives tool rounds, reloads and snapshot
+cloning independently of visible content. Replay support uses SDK v0.2.18;
+validate this module independently with `GOWORK=off`.
+
 The final allowed root round still advertises ordinary tools, but a returned tool
 call fails with `ErrMaxRounds` before that decision is committed. Child sessions retain their
 result-submission boundary as described below. A normal assistant decision with

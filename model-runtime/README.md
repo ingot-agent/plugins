@@ -87,6 +87,11 @@ repaired. Providers with no declared models cannot be selected through the picke
 
 ## Invocation behavior
 
+Request and response snapshots preserve `Message.Replay` and copy its opaque bytes,
+including during default resolution and interceptor short circuits. Replay format
+and scope validation remain the adapter's responsibility. Replay support uses
+SDK v0.2.18; validate this module independently with `GOWORK=off`.
+
 Each `Complete`, `Stream`, and `ResolveRequest` call snapshots the provider sources
 and default configuration. Source entries must have a nonempty UTF-8 name and a
 `Complete` callback; names must be unique across all sources. The snapshot lasts

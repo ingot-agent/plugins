@@ -20,15 +20,17 @@ import (
 )
 
 type responseRequest struct {
-	Model           string              `json:"model"`
-	Reasoning       *responseReasoning  `json:"reasoning,omitempty"`
-	Instructions    string              `json:"instructions,omitempty"`
-	Input           []responseInputItem `json:"input"`
-	Tools           []responseTool      `json:"tools,omitempty"`
-	Temperature     *float64            `json:"temperature,omitempty"`
-	MaxOutputTokens *int                `json:"max_output_tokens,omitempty"`
-	Stream          bool                `json:"stream"`
-	Store           bool                `json:"store"`
+	Model           string             `json:"model"`
+	Reasoning       *responseReasoning `json:"reasoning,omitempty"`
+	Instructions    string             `json:"instructions,omitempty"`
+	Input           []json.RawMessage  `json:"input"`
+	Include         []string           `json:"include"`
+	PromptCacheKey  string             `json:"prompt_cache_key,omitempty"`
+	Tools           []responseTool     `json:"tools,omitempty"`
+	Temperature     *float64           `json:"temperature,omitempty"`
+	MaxOutputTokens *int               `json:"max_output_tokens,omitempty"`
+	Stream          bool               `json:"stream"`
+	Store           bool               `json:"store"`
 }
 
 type responseReasoning struct {
@@ -79,9 +81,14 @@ type responseIncompleteDetails struct {
 }
 
 type responseUsage struct {
-	InputTokens  *int `json:"input_tokens"`
-	OutputTokens *int `json:"output_tokens"`
-	TotalTokens  *int `json:"total_tokens"`
+	InputTokens        *int                       `json:"input_tokens"`
+	OutputTokens       *int                       `json:"output_tokens"`
+	TotalTokens        *int                       `json:"total_tokens"`
+	InputTokensDetails *responseInputTokenDetails `json:"input_tokens_details"`
+}
+
+type responseInputTokenDetails struct {
+	CachedTokens *int `json:"cached_tokens"`
 }
 
 type responseOutputItemType struct {
@@ -90,6 +97,7 @@ type responseOutputItemType struct {
 
 type responseMessageOutput struct {
 	Type    string                  `json:"type"`
+	Phase   string                  `json:"phase"`
 	Status  string                  `json:"status"`
 	Role    string                  `json:"role"`
 	Content []responseOutputContent `json:"content"`
@@ -126,14 +134,28 @@ func (p *provider) encodeResponseRequest(ctx context.Context, request model.Requ
 		messageStart = 1
 	}
 
-	input := make([]responseInputItem, 0, len(request.Messages)-messageStart)
+	input := make([]json.RawMessage, 0, len(request.Messages)-messageStart)
 	for i := messageStart; i < len(request.Messages); i++ {
 		message := request.Messages[i]
+		replayed, ok, err := p.replayInput(request.Model, message)
+		if err != nil {
+			return nil, fmt.Errorf("messages[%d]: %w", i, err)
+		}
+		if ok {
+			input = append(input, replayed...)
+			continue
+		}
 		mapped, err := p.encodeInputMessage(ctx, i, message)
 		if err != nil {
 			return nil, fmt.Errorf("messages[%d]: %w", i, err)
 		}
-		input = append(input, mapped...)
+		for _, item := range mapped {
+			raw, err := json.Marshal(item)
+			if err != nil {
+				return nil, fmt.Errorf("encode input item: %w", err)
+			}
+			input = append(input, raw)
+		}
 	}
 	tools := make([]responseTool, len(request.Tools))
 	for i, definition := range request.Tools {
@@ -150,7 +172,8 @@ func (p *provider) encodeResponseRequest(ctx context.Context, request model.Requ
 	payload := responseRequest{
 		Model: request.Model, Instructions: instructions, Input: input, Tools: tools,
 		Temperature: request.Temperature, MaxOutputTokens: request.MaxTokens,
-		Stream: stream, Store: false,
+		Stream: stream, Store: false, Include: []string{"reasoning.encrypted_content"},
+		PromptCacheKey: sessionCacheKey(ctx),
 	}
 	if request.ReasoningEffort != "" {
 		payload.Reasoning = &responseReasoning{Effort: request.ReasoningEffort}
@@ -322,7 +345,7 @@ func validJSONObject(raw json.RawMessage) bool {
 	return len(trimmed) >= 2 && trimmed[0] == '{' && trimmed[len(trimmed)-1] == '}'
 }
 
-func decodeResponse(raw []byte, providerName, secret string) (model.Response, error) {
+func decodeResponse(raw []byte, providerName, secret string, scope replayScope, observeUsage func(*responseUsage)) (model.Response, error) {
 	if !utf8.Valid(raw) {
 		return model.Response{}, protocolError("response is not valid UTF-8")
 	}
@@ -335,10 +358,14 @@ func decodeResponse(raw []byte, providerName, secret string) (model.Response, er
 	if err := decoder.Decode(&extra); err != io.EOF {
 		return model.Response{}, protocolError("multiple JSON values in response")
 	}
-	return decodeResponseObject(response, providerName, secret)
+	result, err := decodeResponseObject(response, providerName, secret, scope)
+	if err == nil && observeUsage != nil {
+		observeUsage(response.Usage)
+	}
+	return result, err
 }
 
-func decodeResponseObject(response responseObject, providerName, secret string) (model.Response, error) {
+func decodeResponseObject(response responseObject, providerName, secret string, scope replayScope) (model.Response, error) {
 	if response.Object != "response" || response.Model == "" || !utf8.ValidString(response.Model) {
 		return model.Response{}, protocolError("response requires object=response and a non-empty model")
 	}
@@ -355,54 +382,9 @@ func decodeResponseObject(response responseObject, providerName, secret string) 
 		return model.Response{}, protocolError("response has non-terminal status %q", response.Status)
 	}
 
-	message := model.Message{Role: model.RoleAssistant}
-	for i, rawItem := range response.Output {
-		var itemType responseOutputItemType
-		if err := json.Unmarshal(rawItem, &itemType); err != nil || itemType.Type == "" {
-			return model.Response{}, protocolError("invalid output item at index %d", i)
-		}
-		switch itemType.Type {
-		case "message":
-			var item responseMessageOutput
-			if err := json.Unmarshal(rawItem, &item); err != nil {
-				return model.Response{}, protocolError("decode message output at index %d: %v", i, err)
-			}
-			if item.Role != "assistant" || (item.Status != "" && item.Status != "completed" && item.Status != "incomplete") {
-				return model.Response{}, protocolError("invalid message output at index %d", i)
-			}
-			for j, part := range item.Content {
-				var text string
-				switch part.Type {
-				case "output_text":
-					text = part.Text
-				case "refusal":
-					text = part.Refusal
-				default:
-					return model.Response{}, protocolError("unsupported message content type %q at output %d part %d", part.Type, i, j)
-				}
-				if !utf8.ValidString(text) {
-					return model.Response{}, protocolError("message content at output %d part %d is not valid UTF-8", i, j)
-				}
-				message.Content = append(message.Content, content.Text(text))
-			}
-		case "function_call":
-			var item responseFunctionCallOutput
-			if err := json.Unmarshal(rawItem, &item); err != nil {
-				return model.Response{}, protocolError("decode function call at index %d: %v", i, err)
-			}
-			if item.CallID == "" || item.Name == "" || !utf8.ValidString(item.CallID) || !utf8.ValidString(item.Name) || !json.Valid([]byte(item.Arguments)) ||
-				(item.Status != "" && item.Status != "completed" && item.Status != "incomplete") {
-				return model.Response{}, protocolError("invalid function call at output index %d", i)
-			}
-			message.ToolCalls = append(message.ToolCalls, tool.Call{
-				ID: item.CallID, Name: item.Name, Arguments: json.RawMessage(item.Arguments),
-			})
-		case "reasoning":
-			// Reasoning output items are transient provider metadata. Streaming
-			// summary deltas are exposed separately through the reasoning semantic.
-		default:
-			return model.Response{}, protocolError("unsupported output item type %q at index %d", itemType.Type, i)
-		}
+	message, err := decodeOutput(response.Output)
+	if err != nil {
+		return model.Response{}, err
 	}
 
 	usage, err := decodeUsage(response.Usage)
@@ -426,6 +408,11 @@ func decodeResponseObject(response responseObject, providerName, secret string) 
 			finishReason = response.IncompleteDetails.Reason
 		}
 	}
+	replayData, err := json.Marshal(replayPayload{Origin: scope.origin, Output: response.Output})
+	if err != nil {
+		return model.Response{}, protocolError("encode replay state")
+	}
+	message.Replay = &model.ReplayState{Format: responsesReplayFormat, Provider: providerName, Model: scope.model, Data: replayData}
 	return model.Response{
 		Message: message, FinishReason: finishReason, Usage: usage,
 		Provider: providerName, Model: response.Model,
@@ -462,4 +449,65 @@ func decodeUsage(value *responseUsage) (model.Usage, error) {
 		InputTokens: *value.InputTokens, OutputTokens: *value.OutputTokens,
 		TotalTokens: *value.TotalTokens, Reported: true,
 	}, nil
+}
+
+// decodeOutput projects ordered wire output into the public message fields.
+func decodeOutput(output []json.RawMessage) (model.Message, error) {
+	message := model.Message{Role: model.RoleAssistant}
+	for i, rawItem := range output {
+		var itemType responseOutputItemType
+		if err := json.Unmarshal(rawItem, &itemType); err != nil || itemType.Type == "" {
+			return model.Message{}, protocolError("invalid output item at index %d", i)
+		}
+		switch itemType.Type {
+		case "message":
+			var item responseMessageOutput
+			if err := json.Unmarshal(rawItem, &item); err != nil {
+				return model.Message{}, protocolError("decode message output at index %d: %v", i, err)
+			}
+			if item.Role != "assistant" || (item.Status != "" && item.Status != "completed" && item.Status != "incomplete") {
+				return model.Message{}, protocolError("invalid message output at index %d", i)
+			}
+			for j, part := range item.Content {
+				var text string
+				switch part.Type {
+				case "output_text":
+					text = part.Text
+				case "refusal":
+					text = part.Refusal
+				default:
+					return model.Message{}, protocolError("unsupported message content type %q at output %d part %d", part.Type, i, j)
+				}
+				if !utf8.ValidString(text) {
+					return model.Message{}, protocolError("message content at output %d part %d is not valid UTF-8", i, j)
+				}
+				message.Content = append(message.Content, content.Text(text))
+			}
+		case "function_call":
+			var item responseFunctionCallOutput
+			if err := json.Unmarshal(rawItem, &item); err != nil {
+				return model.Message{}, protocolError("decode function call at index %d: %v", i, err)
+			}
+			if item.CallID == "" || item.Name == "" || !utf8.ValidString(item.CallID) || !utf8.ValidString(item.Name) || !json.Valid([]byte(item.Arguments)) ||
+				(item.Status != "" && item.Status != "completed" && item.Status != "incomplete") {
+				return model.Message{}, protocolError("invalid function call at output index %d", i)
+			}
+			message.ToolCalls = append(message.ToolCalls, tool.Call{
+				ID: item.CallID, Name: item.Name, Arguments: json.RawMessage(item.Arguments),
+			})
+		case "reasoning":
+			// Keep encrypted continuation state separate from visible content.
+			var item struct {
+				EncryptedContent string            `json:"encrypted_content"`
+				Summary          []json.RawMessage `json:"summary"`
+			}
+			if err := json.Unmarshal(rawItem, &item); err != nil {
+				return model.Message{}, protocolError("invalid reasoning output at index %d", i)
+			}
+		default:
+			return model.Message{}, protocolError("unsupported output item type %q at index %d", itemType.Type, i)
+		}
+	}
+
+	return message, nil
 }

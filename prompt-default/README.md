@@ -51,6 +51,11 @@ input. The resulting message sequence is:
 2. The supplied history, in its existing order.
 3. One user message containing the current input, including valid attachments.
 
+History replay state is preserved without rendering it as a block. Its opaque
+bytes are cloned for contributors and returned messages, preventing one consumer
+from changing another's history prefix. Replay support uses SDK v0.2.18; validate
+this module independently with `GOWORK=off`.
+
 Each block is prefixed with `## <block name>\n`; adjacent blocks are separated by
 two newlines. Nonempty configured text and the first block are
 separated by two newlines. Block names must be nonempty UTF-8 and contain no CR/LF. Blocks

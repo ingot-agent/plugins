@@ -263,7 +263,7 @@ func TestResolverMaterializesDefaultsWithoutInvocation(t *testing.T) {
 
 	arguments := json.RawMessage(`{"value":true}`)
 	request := model.Request{
-		Messages: []model.Message{{Role: model.RoleUser, ToolCalls: []tool.Call{{ID: "call", Name: "tool", Arguments: arguments}}}},
+		Messages: []model.Message{{Role: model.RoleUser, Replay: &model.ReplayState{Format: "example.v1", Data: []byte("opaque")}, ToolCalls: []tool.Call{{ID: "call", Name: "tool", Arguments: arguments}}}},
 	}
 	resolved, err := exports.Resolver.ResolveRequest(context.Background(), request)
 	if err != nil {
@@ -271,6 +271,13 @@ func TestResolverMaterializesDefaultsWithoutInvocation(t *testing.T) {
 	}
 	if resolved.Provider != "provider" || resolved.Model != "default-model" {
 		t.Fatalf("resolved selection = (%q, %q)", resolved.Provider, resolved.Model)
+	}
+	if string(resolved.Messages[0].Replay.Data) != "opaque" {
+		t.Fatal("resolver lost replay state")
+	}
+	resolved.Messages[0].Replay.Data[0] = 'X'
+	if string(request.Messages[0].Replay.Data) != "opaque" {
+		t.Fatal("resolver aliases replay state")
 	}
 	resolved.Messages[0].ToolCalls[0].Arguments[0] = 'X'
 	if string(arguments) != `{"value":true}` {
@@ -296,9 +303,10 @@ func TestResolverMaterializesDefaultsWithoutInvocation(t *testing.T) {
 
 func TestShortCircuitIsNotSourceNormalizedAndCallerIsOwned(t *testing.T) {
 	provider := &fakeProvider{}
+	replay := &model.ReplayState{Format: "example.v1", Data: []byte("opaque")}
 	shortArguments := json.RawMessage(`{"cached":true}`)
 	short := interceptorFunc(func(context.Context, model.Request, pipeline.Next[model.Request, model.Response]) (model.Response, error) {
-		return model.Response{Provider: "cache", Model: "cache", Message: model.Message{Role: model.RoleAssistant, Content: content.FromText("cached"), ToolCalls: []tool.Call{{ID: "cached", Name: "cached", Arguments: shortArguments}}}}, nil
+		return model.Response{Provider: "cache", Model: "cache", Message: model.Message{Role: model.RoleAssistant, Content: content.FromText("cached"), Replay: replay, ToolCalls: []tool.Call{{ID: "cached", Name: "cached", Arguments: shortArguments}}}}, nil
 	})
 	exports, _, err := modelruntime.New(context.Background(), withState(t, modelruntime.Config{DefaultModel: "m"}, modelruntime.Dependencies{
 		ProviderSources: []model.ProviderSource{fixedProviderSource{Name: "p", Complete: provider.Complete}}, Interceptors: []model.Interceptor{short},
@@ -331,6 +339,14 @@ func TestShortCircuitIsNotSourceNormalizedAndCallerIsOwned(t *testing.T) {
 	if string(original) != `{"x":1}` {
 		t.Fatalf("caller arguments=%s", original)
 	}
+	if string(response.Message.Replay.Data) != "opaque" {
+		t.Fatal("runtime lost response replay state")
+	}
+	response.Message.Replay.Data[0] = 'X'
+	if string(replay.Data) != "opaque" {
+		t.Fatal("runtime aliases response replay state")
+	}
+
 }
 
 func TestRequestClonePreservesPresenceAndOwnership(t *testing.T) {

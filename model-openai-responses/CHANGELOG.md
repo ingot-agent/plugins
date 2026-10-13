@@ -4,6 +4,21 @@ All notable changes to this plugin are documented in this file.
 
 ## Unreleased
 
+- Derive a stable Session cache key for `prompt_cache_key` and the Responses
+  `session-id` / `thread-id` headers so compatible gateways can route related
+  requests consistently across rounds, turns and runtime restarts.
+- Report provider `input_tokens` and `cached_input_tokens` in successful
+  Complete/Stream diagnostics, preserving missing versus explicit zero counts.
+
+- Preserve ordered Responses output items, encrypted reasoning, assistant phase,
+  and message boundaries for subsequent stateless requests. Request encrypted
+  reasoning explicitly. Scope replay to the provider, requested model and endpoint;
+  edits to message fields fall back to ordinary encoding. Malformed matching
+  state fails before dispatch. Complete and Stream use the same replay path.
+
+Requires published SDK v0.2.18 for `model.Message.Replay`; validate with
+`GOWORK=off` against that exact dependency.
+
 ### Changed
 
 - Mark truncated SSE, transient provider error codes and explicit HTTP/2 transport failures retryable; diagnostics report whether stream reset is required.
@@ -43,7 +58,7 @@ All notable changes to this plugin are documented in this file.
   typed SSE streaming support.
 - Map SDK messages, images, function calls, function outputs, tools, usage,
   incomplete responses, and transient reasoning summaries.
-- Keep invocation stateless with `store:false`; document the current SDK limit
-  around replaying opaque reasoning output items across tool rounds.
+- Keep invocation stateless with `store:false`; provider continuation state is
+  replayed through durable SDK messages across tool rounds.
 - Expose provider configuration through `/model-openai-responses config` with
   secret-safe API key and header updates.

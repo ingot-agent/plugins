@@ -4,6 +4,13 @@ All notable changes to this plugin are documented in this file.
 
 ## Unreleased
 
+- Preserve opaque provider replay data in untouched messages and clone it at
+  ownership boundaries. Include it in checkpoint source identity while excluding
+  it from summary prompts; generated summaries carry no inherited replay state.
+
+Requires published SDK v0.2.18 for `model.Message.Replay`; validate with
+`GOWORK=off` against that exact dependency.
+
 ### Changed
 
 - Require SDK v0.2.15 for the published Session accounting contracts and

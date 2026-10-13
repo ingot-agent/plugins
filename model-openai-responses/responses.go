@@ -430,7 +430,7 @@ func (p *provider) Complete(ctx context.Context, request model.Request) (result 
 		return model.Response{}, wrapReadError(err)
 	}
 	diagnostic.stage = "decode"
-	return decodeResponse(raw, p.name, p.apiKey)
+	return decodeResponse(raw, p.name, p.apiKey, p.replayScope(request.Model), diagnostic.recordUsage)
 }
 
 func (p *provider) readAsset(ctx context.Context, reference asset.Reference) ([]byte, error) {
@@ -501,6 +501,7 @@ func (p *provider) do(ctx context.Context, body []byte, accept string) (*http.Re
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Accept", accept)
 	request.Header.Set("User-Agent", userAgent)
+	addSessionHeaders(ctx, request.Header)
 	if p.apiKey != "" {
 		request.Header.Set("Authorization", "Bearer "+p.apiKey)
 	}

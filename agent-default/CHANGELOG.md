@@ -4,6 +4,14 @@ All notable changes to this plugin are documented in this file.
 
 ## Unreleased
 
+- Write `agent.message` v2 with opaque provider replay state and exact tool
+  argument bytes; continue reading legacy v1 records. Preserve state through
+  history reload and owned runtime/observation snapshots. Older Agents cannot
+  consume new v2 records.
+
+Requires published SDK v0.2.18 for `model.Message.Replay`; validate with
+`GOWORK=off` against that exact dependency.
+
 ### Changed
 
 - Forward model retries with attempt-local text retraction and recovery status while preserving earlier rounds and preventing failed attempts from executing tools.
@@ -23,8 +31,8 @@ All notable changes to this plugin are documented in this file.
   record recognition/projection to its provider. Defer inputs inside tool rounds until
   their results are complete, and rebuild history after interrupted recovery.
   Read plugin entries at Turn start. Subsequent rounds retain that context;
-  later appends are read in a future Turn. Ordinary `agent.message`
-  records remain version 1; plugins own input association through Store Appends.
+  later appends are read in a future Turn. Plugins own their input records and
+  input association through Store Appends.
   Requires SDK v0.2.16 and a provider such as `context.input`; the Agent owns no
   plugin-input wire format.
 - Enable three built-in child types (`coder`, `explorer`, `reviewer`) when no
