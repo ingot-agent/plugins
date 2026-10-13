@@ -44,6 +44,7 @@ export function reduceTurn(turns: Record<string, LiveTurn>, event: WebEvent) {
     const turn = turns[data.invocationId]
     if (!turn || turn.status !== 'running' || data.revision <= turn.revision) return
     turn.revision = data.revision
+    turn.retry = undefined
     const key = event.type === 'agent.output.delta' ? 'output' : 'reasoning'
     const blocks = turn.blocks ||= snapshotBlocks(turn)
     turn[key] += data.text
@@ -52,6 +53,29 @@ export function reduceTurn(turns: Record<string, LiveTurn>, event: WebEvent) {
     const last = blocks.at(-1)
     if (last?.kind === key && last.boundary === boundary) last.text += data.text
     else blocks.push({ id: 'delta-' + data.revision, kind: key, text: data.text, boundary })
+  } else if (event.type === 'agent.output.reset' || event.type === 'agent.output.resumed') {
+    const turn = turns[data.invocationId]
+    if (!turn || turn.status !== 'running' || data.revision <= turn.revision) return
+    turn.revision = data.revision
+    turn.retry = event.type === 'agent.output.reset' ? data.retry : undefined
+    if (event.type === 'agent.output.reset') {
+      const blocks = turn.blocks ||= snapshotBlocks(turn)
+      for (const key of ['output', 'reasoning'] as const) {
+        // The server sends authoritative UTF-8-safe prefixes. JS string lengths
+        // count UTF-16 units, so never apply the Agent's byte offsets here.
+        let remove = turn[key].length - data[key].length
+        for (let i = blocks.length - 1; i >= 0 && remove > 0; i--) {
+          const block = blocks[i]!
+          if (block.kind !== key) continue
+          const cut = Math.min(remove, block.text.length)
+          block.text = block.text.slice(0, block.text.length - cut)
+          remove -= cut
+          if (!block.text) blocks.splice(i, 1)
+        }
+        turn[key] = data[key]
+      }
+      turn.streamBoundary = (turn.streamBoundary || 0) + 1
+    }
   } else if (event.type === 'agent.invocation.finished') {
     const id = data.invocationId
     const previous = turns[id]
@@ -60,6 +84,7 @@ export function reduceTurn(turns: Record<string, LiveTurn>, event: WebEvent) {
       id, sessionId: event.scope?.agent?.sessionId || previous?.sessionId || '',
       revision: previous?.revision || 0, output: previous?.output || '', reasoning: previous?.reasoning || '',
       status: data.status, stopping: false, outcome: data.outcome,
+      retry: undefined,
       result: data.result, error: data.error,
     }
   } else if (/^agent\.(turn|round|model|tool)\./.test(event.type) || event.type === 'interaction.requested') {

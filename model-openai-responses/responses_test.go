@@ -419,7 +419,7 @@ func TestStreamRejectsMissingTerminalAndMismatchedFinal(t *testing.T) {
 		body := "event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"output_index\":0,\"content_index\":0,\"delta\":\"x\"}\n\n"
 		provider := newProvider(t, openairesponses.ProviderConfig{Name: "p", BaseURL: "https://example.test"}, staticClient(body), assetResolver{data: map[string][]byte{}})
 		_, err := provider.Stream(context.Background(), model.Request{Model: "m"}, func(model.StreamEvent) error { return nil })
-		if !errors.Is(err, openairesponses.ErrProtocol) {
+		if !errors.Is(err, io.ErrUnexpectedEOF) {
 			t.Fatalf("error = %v", err)
 		}
 	})

@@ -456,7 +456,7 @@ func TestStreamingDeliversOrderedTextAndRequiresDone(t *testing.T) {
 	})
 	exports, _, _ = openaicompat.New(context.Background(), withState(t, openaicompat.Config{Providers: []openaicompat.ProviderConfig{{Name: "p", BaseURL: "https://example.test"}}}, dependencies(client)))
 	_, err = providerEntries(t, exports)[0].Stream(context.Background(), model.Request{Model: "m"}, func(model.StreamEvent) error { return nil })
-	if !errors.Is(err, openaicompat.ErrProtocol) {
+	if !errors.Is(err, io.ErrUnexpectedEOF) {
 		t.Fatalf("missing DONE error=%v", err)
 	}
 }

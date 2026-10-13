@@ -88,7 +88,7 @@ func TestDiagnosticsProviderFailureAndRedaction(t *testing.T) {
 				"level": "WARN", "failure_origin": "provider_response", "provider_code": "upstream_http2_stream_error",
 				"http_status": float64(200), "http_protocol": "HTTP/2.0", "request_id": "req-[REDACTED]-[REDACTED]",
 				"response_id": "resp_test", "last_event": "response.failed", "keepalives": float64(2), "sse_comments": float64(1),
-				"session_id": "s", "turn_id": "turn", "round": float64(2), "adapter_retryable": false, "stream_replay_blocked": partial,
+				"session_id": "s", "turn_id": "turn", "round": float64(2), "adapter_retryable": true, "stream_reset_required": partial,
 			} {
 				if failure[key] != want {
 					t.Errorf("%s = %v, want %v", key, failure[key], want)
@@ -158,7 +158,7 @@ func TestDiagnosticsHTTP2ReuseAndStreamReset(t *testing.T) {
 	first, failure := records[2], records[5]
 	for key, want := range map[string]any{
 		"failure_origin": "local_transport_read", "http_protocol": "HTTP/2.0", "tls_alpn": "h2",
-		"connection_reused": true, "http2_stream_error": true, "http2_error_code": "INTERNAL_ERROR", "stream_replay_blocked": true,
+		"connection_reused": true, "http2_stream_error": true, "http2_error_code": "INTERNAL_ERROR", "stream_reset_required": true, "adapter_retryable": true,
 	} {
 		if failure[key] != want {
 			t.Errorf("%s = %v, want %v (error: %v)", key, failure[key], want, err)

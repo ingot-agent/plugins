@@ -138,7 +138,12 @@ func (o *setupOperation) Invoke(ctx context.Context, request operation.Request) 
 		effortField.Default = valuePointer(interaction.StringValue(string(current.DefaultReasoningEffort)))
 	}
 	effortResponse, err := request.Interaction.Request(ctx, interaction.Request{
-		Name: setupOperationName, Description: "Select the default reasoning effort.", Fields: []interaction.Field{effortField},
+		Name: setupOperationName, Description: "Select reasoning effort and provider retry limits.", Fields: []interaction.Field{
+			effortField,
+			retryIntegerField("retry_max_attempts", "Maximum attempts (0 = 8, 1 disables retries)", current.RetryMaxAttempts),
+			retryIntegerField("retry_initial_delay_ms", "Initial retry delay in ms (0 = 1000)", current.RetryInitialDelayMS),
+			retryIntegerField("retry_max_delay_ms", "Maximum retry delay in ms (0 = 30000)", current.RetryMaxDelayMS),
+		},
 	})
 	if err != nil {
 		return operation.Result{}, err
@@ -148,6 +153,24 @@ func (o *setupOperation) Invoke(ctx context.Context, request operation.Request) 
 		selectedEffort = string(current.DefaultReasoningEffort)
 	}
 	updated := Config{DefaultProvider: configuredProvider, DefaultModel: selectedModel, DefaultReasoningEffort: model.ReasoningEffort(selectedEffort)}
+	updated.RetryMaxAttempts, updated.RetryInitialDelayMS, updated.RetryMaxDelayMS = current.RetryMaxAttempts, current.RetryInitialDelayMS, current.RetryMaxDelayMS
+	for _, answer := range effortResponse.Values {
+		var target *int
+		switch answer.Name {
+		case "retry_max_attempts":
+			target = &updated.RetryMaxAttempts
+		case "retry_initial_delay_ms":
+			target = &updated.RetryInitialDelayMS
+		case "retry_max_delay_ms":
+			target = &updated.RetryMaxDelayMS
+		default:
+			continue
+		}
+		if answer.Value.Kind != interaction.ValueInteger || answer.Value.Integer < 0 || answer.Value.Integer > 300000 {
+			return operation.Result{}, fmt.Errorf("invalid %s: %w", answer.Name, ErrInvalidConfig)
+		}
+		*target = int(answer.Value.Integer)
+	}
 	if err := validateConfig(updated); err != nil {
 		return operation.Result{}, err
 	}
@@ -195,6 +218,9 @@ func (o *setupOperation) Invoke(ctx context.Context, request operation.Request) 
 }
 
 func validateConfig(config Config) error {
+	if _, err := configuredRetry(config); err != nil {
+		return err
+	}
 	if !utf8.ValidString(config.DefaultProvider) || !utf8.ValidString(config.DefaultModel) || !utf8.ValidString(string(config.DefaultReasoningEffort)) {
 		return fmt.Errorf("provider or model contains invalid UTF-8: %w", ErrInvalidConfig)
 	}
@@ -202,6 +228,10 @@ func validateConfig(config Config) error {
 		return fmt.Errorf("providerDefault is a request override, not a runtime default: %w", ErrInvalidConfig)
 	}
 	return nil
+}
+
+func retryIntegerField(name, label string, value int) interaction.Field {
+	return interaction.Field{Name: name, Label: label, Kind: interaction.FieldInteger, Default: valuePointer(interaction.IntegerValue(int64(value)))}
 }
 
 func providerOptions(names []string) []interaction.Option {

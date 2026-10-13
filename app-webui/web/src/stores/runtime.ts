@@ -194,7 +194,7 @@ export const useRuntime = defineStore('runtime', () => {
     if (event.type === 'model.selection.updated') {
       modelSelectionRevision++
       modelSelection.value = data as ModelSelectionSnapshot
-    } else if (event.type.startsWith('agent.invocation.') || event.type === 'agent.output.delta' || event.type === 'agent.reasoning.delta') {
+    } else if (event.type.startsWith('agent.invocation.') || event.type === 'agent.output.delta' || event.type === 'agent.reasoning.delta' || event.type === 'agent.output.reset' || event.type === 'agent.output.resumed') {
       if (event.type === 'agent.invocation.finished') {
         const sid = event.scope?.agent?.sessionId
         if (sid && (sid === activeSession.value || histories.value[sid])) {

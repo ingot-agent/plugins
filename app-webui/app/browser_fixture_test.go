@@ -271,6 +271,23 @@ func (b *browserAgent) Stream(ctx context.Context, turn agent.Turn, handler agen
 		return result, err
 	}
 	emit(observation.ModelStarted{Request: model.Request{Provider: "fixture", Model: "chat"}})
+	if strings.Contains(turn.Input, "retry") {
+		for _, event := range []agent.StreamEvent{
+			{Kind: agent.StreamOutputDelta, TextDelta: "Discard this failed response."},
+			{Kind: agent.StreamReasoningDelta, TextDelta: "Discard this failed reasoning."},
+			{Kind: agent.StreamRetry, Attempt: 2, RetryDelay: 5 * time.Second,
+				DiscardOutputBytes: len("Discard this failed response."), DiscardReasoningBytes: len("Discard this failed reasoning.")},
+		} {
+			if err = handler(event); err != nil {
+				return result, err
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return result, ctx.Err()
+		case <-time.After(5 * time.Second):
+		}
+	}
 	for _, chunk := range strings.SplitAfter(output, " ") {
 		select {
 		case <-ctx.Done():
@@ -278,6 +295,11 @@ func (b *browserAgent) Stream(ctx context.Context, turn agent.Turn, handler agen
 		case <-time.After(20 * time.Millisecond):
 		}
 		if err = handler(agent.StreamEvent{Kind: agent.StreamOutputDelta, TextDelta: chunk}); err != nil {
+			return result, err
+		}
+	}
+	if strings.Contains(turn.Input, "retry") {
+		if err = handler(agent.StreamEvent{Kind: agent.StreamRecovered}); err != nil {
 			return result, err
 		}
 	}

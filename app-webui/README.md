@@ -5,7 +5,7 @@
 - `host`（包 `./host`）依赖 ABI `state.Scope`，持有进程内的 `EventHub`，导出 `appbackend.Runtime`、全局 `interaction.Channel`、显式作用域的 `interaction.ExecutionBinder` 和 `observation.Observer`。该组件不依赖 Agent，因此 Agent 可以使用这些能力而不会在组件图中形成环。
 - `app`（包 `./app`）是没有能力导出的图叶节点，持有 HTTP 服务器、Controller、运行中的 Turn，以及保留的 Operation 结果。它依赖 host 的 `appbackend.Runtime`、`agent.History`、`session.Store`、`session.Manager`、`session.Query`、`workspace.Manager`、`workspace.Resolver`，以及 ABI `invocation.Invocation`、`lifecycle.Controller` 和 `state.Scope`。相互独立且可选的 `agent.Runtime` 与 `agent.StreamingRuntime` 至少需要提供一个。`asset.Store`、`modelselection.Controller` 和 `agent.PluginInputWriter` 是可选依赖；writer 用于在启动 Agent 前写入文件通知。Operation 通过 `[]operation.Operation` 收集；应用自身另外注册 `/app-webui config`。
 
-模块要求 Go 1.24.2，已发布的直接 SDK/ABI 版本由 [go.mod](go.mod) 固定，当前分别为 SDK `v0.2.16`、ABI `v0.1.0`。本分支的本地文件输入通过 SDK 已发布的通用 writer 接口调用 [context-input](../context-input/README.md)，由它统一校验并使用 `session.Store.Append` 写入，读取时统一格式化；Runtime 需组合该新插件、支持插件输入投影的 Agent 和收集 Contributor 的 Prompt。独立模块验证使用 `GOWORK=off`，不需要本地 SDK 替换。插件没有主程序，应由 Ingot Builder 组合成 Runtime Image。
+模块要求 Go 1.24.2，已发布的直接 SDK/ABI 版本由 [go.mod](go.mod) 固定，当前分别为 SDK `v0.2.17`、ABI `v0.1.0`。本分支的本地文件输入通过 SDK 已发布的通用 writer 接口调用 [context-input](../context-input/README.md)，由它统一校验并使用 `session.Store.Append` 写入，读取时统一格式化；Runtime 需组合该新插件、支持插件输入投影的 Agent 和收集 Contributor 的 Prompt。独立模块验证使用 `GOWORK=off`，不需要本地 SDK 替换。插件没有主程序，应由 Ingot Builder 组合成 Runtime Image。
 
 ## 启动 Web UI
 
@@ -335,3 +335,20 @@ GOWORK=off go test -race ./...
 PowerShell 使用 `$env:GOWORK = 'off'` 后执行上述 Go 命令；`-race` 需要当前平台具备相应 Go race/C 工具链。前端 lint、类型检查、单元测试与浏览器回归命令见 [前端开发说明](web/README.md)。后端单元测试使用 SDK 接口替身，跨插件集成可通过 workspace 组合 Agent、Prompt、context.input 和本模块进行验证；浏览器 fixture 只在测试中提供。
 
 返回 [插件文档索引](../docs/README.md)。
+
+## Streaming retries (unreleased)
+
+`agent.StreamRetry` retracts only the failed attempt's output and reasoning by
+validated UTF-8 byte counts. The backend publishes `agent.output.reset` with
+complete replacement output/reasoning prefixes, a monotonic revision and retry
+attempt/delay metadata. Running-turn snapshots retain this state across
+reconnects. The frontend trims only the removed text blocks and preserves earlier
+content, tools and interactions. It shows retry status until new text,
+`agent.output.resumed` (from `agent.StreamRecovered`), or invocation completion.
+Replayed reset/resume events are deduplicated by the same revision as deltas.
+Cancellation uses the existing Stop action.
+
+These events use the contracts published in SDK v0.2.17, pinned in `go.mod`.
+Standalone Go checks and the default browser fixture use `GOWORK=off` without
+a local SDK checkout. Compose this plugin with an Agent and ModelRuntime that
+support the same retry events.

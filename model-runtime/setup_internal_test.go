@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/ingot-agent/plugins/app-webui/modelselection"
+
 	"github.com/ingot-agent/sdk/interaction"
 	"github.com/ingot-agent/sdk/model"
 	"github.com/ingot-agent/sdk/operation"
@@ -147,6 +149,44 @@ func defaultsResponse(request interaction.Request) (interaction.Response, error)
 		}
 	}
 	return interaction.Response{Values: answers}, nil
+}
+
+func TestRetryConfigurationAppliesLiveAndSurvivesModelSelection(t *testing.T) {
+	exports, scope, _ := selectionFixture(t)
+	ctx := context.Background()
+	channel := &setupTestChannel{respond: func(request interaction.Request) (interaction.Response, error) {
+		response, err := defaultsResponse(request)
+		for i := range response.Values {
+			switch response.Values[i].Name {
+			case "retry_max_attempts":
+				response.Values[i].Value = interaction.IntegerValue(1)
+			case "retry_initial_delay_ms":
+				response.Values[i].Value = interaction.IntegerValue(25)
+			case "retry_max_delay_ms":
+				response.Values[i].Value = interaction.IntegerValue(100)
+			}
+		}
+		return response, err
+	}}
+	if _, err := exports.Operations[0].Invoke(ctx, operation.Request{Interaction: channel}); err != nil {
+		t.Fatal(err)
+	}
+	active := exports.Runtime.(*runtime)
+	if active.config.Load().RetryMaxAttempts != 1 {
+		t.Fatal("retry configuration was not applied live")
+	}
+	snapshot, err := exports.Selection.Snapshot(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = exports.Selection.Update(ctx, modelselection.Selection{Provider: "second", Model: "new", ReasoningEffort: "low"}, snapshot.Revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored, err := loadConfig(scope.Dir())
+	if err != nil || stored.RetryMaxAttempts != 1 || stored.RetryInitialDelayMS != 25 || stored.RetryMaxDelayMS != 100 {
+		t.Fatalf("stored=%+v err=%v", stored, err)
+	}
 }
 
 func findSetupField(t *testing.T, request interaction.Request, name string) interaction.Field {

@@ -58,6 +58,7 @@ export interface Turn {
   revision: number
   reasoning: string
   output: string
+  retry?: { attempt: number; delayMs: number }
 }
 export type TurnBlock =
   | { id: string; kind: 'output' | 'reasoning'; text: string; boundary: number }

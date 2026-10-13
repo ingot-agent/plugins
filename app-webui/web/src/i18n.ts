@@ -2,6 +2,7 @@ import { createI18n } from 'vue-i18n'
 import { readPreference } from './theme'
 
 export const en = {
+  modelRetry: 'Retrying response (attempt {attempt})…',
   app: 'Ingot', newChat: 'New conversation', newInWorkspace: 'New conversation in this workspace', conversations: 'Conversations', search: 'Search conversations',
   archive: 'Archive', archived: 'Archived', active: 'Active', restore: 'Restore', rename: 'Rename',
   delete: 'Delete', fork: 'Fork conversation', save: 'Save', cancel: 'Cancel', close: 'Close',
@@ -92,6 +93,7 @@ export const en = {
 }
 
 const zh: typeof en = {
+  modelRetry: '正在重试（第 {attempt} 次尝试）…',
   app: 'Ingot', newChat: '新对话', newInWorkspace: '在此工作区新建对话', conversations: '会话', search: '搜索会话',
   archive: '归档', archived: '已归档', active: '进行中', restore: '恢复', rename: '重命名',
   delete: '删除', fork: '创建会话分支', save: '保存', cancel: '取消', close: '关闭',

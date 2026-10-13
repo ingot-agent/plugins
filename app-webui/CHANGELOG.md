@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Changed
+
+- Retract failed model attempts, display retry status and retain retry state across reconnects without removing earlier output or tool activity.
+- Require published SDK v0.2.17 for retry events; standalone Go and browser checks no longer need a local SDK workspace.
+
 ### Added
 
 - Preview local file links and file attachments in a resizable, read-only pane,

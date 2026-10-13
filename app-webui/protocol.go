@@ -73,11 +73,19 @@ type Session struct {
 
 // TurnSnapshot is the recoverable projection of a running turn.
 type TurnSnapshot struct {
-	ID        string `json:"id"`
-	SessionID string `json:"sessionId"`
-	Revision  uint64 `json:"revision"`
-	Reasoning string `json:"reasoning"`
-	Output    string `json:"output"`
+	ID        string     `json:"id"`
+	SessionID string     `json:"sessionId"`
+	Revision  uint64     `json:"revision"`
+	Reasoning string     `json:"reasoning"`
+	Output    string     `json:"output"`
+	Retry     *TurnRetry `json:"retry,omitempty"`
+}
+
+// TurnRetry is the latest planned model retry, retained across reconnects until
+// text resumes or the invocation finishes. DelayMS is the original planned wait.
+type TurnRetry struct {
+	Attempt int   `json:"attempt"`
+	DelayMS int64 `json:"delayMs"`
 }
 
 // StateSnapshot bootstraps all process-local Web state. Session history is

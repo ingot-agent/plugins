@@ -9,6 +9,30 @@ async function send(page: Page, input: string) {
   await page.getByRole('button', { name: 'Send message', exact: true }).click()
   await expect(page).toHaveURL(/#\/sessions\//)
 }
+
+test('model retry retracts failed output and survives a browser reconnect', async ({ page }) => {
+  await ready(page)
+  await send(page, 'retry recovery')
+  await expect(page.locator('.retry-status')).toHaveText('Retrying response (attempt 2)…')
+  await expect(page.locator('.turn-content')).not.toContainText('Discard this failed')
+  await page.reload()
+  await expect(page.locator('.retry-status')).toHaveText('Retrying response (attempt 2)…')
+  await expect(page.locator('.turn-content')).not.toContainText('Discard this failed')
+  await expect(page.getByText('Your workspace is ready. We can take the next step together.', { exact: true })).toHaveCount(1)
+  await expect(page.locator('.retry-status')).toHaveCount(0)
+  await expect(page.locator('.transcript')).not.toContainText('Discard this failed')
+})
+
+test('canceling a model retry stops the pending attempt', async ({ page }) => {
+  await ready(page)
+  await send(page, 'retry cancellation')
+  await expect(page.locator('.retry-status')).toBeVisible()
+  await page.getByRole('button', { name: 'Stop execution', exact: true }).click()
+  await expect(page.getByRole('button', { name: /Canceled/ })).toBeVisible()
+  await expect(page.locator('.retry-status')).toHaveCount(0)
+  await expect(page.locator('.transcript')).not.toContainText('Discard this failed')
+  await expect(page.getByText('Your workspace is ready. We can take the next step together.', { exact: true })).toHaveCount(0)
+})
 async function selectAnswerText(page: Page, passage: string) {
   const answer = page.locator('.message-assistant[data-message-index] .markdown').last()
   await expect(answer).toContainText(passage)

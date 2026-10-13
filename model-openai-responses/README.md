@@ -161,7 +161,8 @@ Preparation failures after validation are labeled `request_preparation`.
 Typed provider status/code, error-chain types, network errno/timeout, and known
 Go HTTP/2 stream/GOAWAY IDs and protocol codes are recorded when available.
 `adapter_retryable` is only the existing adapter hint, not evidence of an actual
-retry; `stream_replay_blocked` reports whether any SDK event was delivered.
+retry; `stream_reset_required` reports whether any SDK event was delivered and must
+be retracted before replay.
 Neither HTTP negotiation nor retry behavior is changed by diagnostics.
 
 Request/response bodies, prompts, output/tool arguments, arbitrary error messages,
@@ -198,7 +199,21 @@ endpoints. See [CONTRIBUTING](../CONTRIBUTING.md) for workspace instructions.
 
 The adapter marks dispatch/response-read network interruptions and HTTP 408,
 429, 500, 502, 503, and 504 as retryable for callers that support retries.
-It parses `Retry-After` (seconds or HTTP-date) as a bounded delay hint. Invalid
-requests, decoding errors, and cancellation are not marked. In streaming mode,
-the caller must additionally check that no events were delivered before replay.
+It parses `Retry-After` (seconds or HTTP-date) as a delay hint bounded to five
+minutes; ModelRuntime applies its configured wait cap (30 seconds by default). Invalid
+requests, decoding errors, and cancellation are not marked. EOF before the required
+stream terminator is reported as a retryable `io.ErrUnexpectedEOF`. Known Go
+HTTP/2 stream/GOAWAY transport errors are retryable for INTERNAL_ERROR,
+REFUSED_STREAM, CANCEL and ENHANCE_YOUR_CALM (also NO_ERROR for GOAWAY); other
+codes are not marked. Caller cancellation always takes precedence. A caller
+replaying a partial stream must retract the failed attempt's provisional output
+before accepting new progress; these adapters never replay requests themselves.
 A retry may still incur duplicate provider charges.
+
+Responses errors with status `failed` are also retryable for these explicit codes:
+`server_error`, `internal_server_error`, `rate_limit_exceeded`, `too_many_requests`,
+`overloaded`, `overloaded_error`, `service_unavailable`, `temporarily_unavailable`,
+`upstream_http2_stream_error`, `upstream_connect_error`, `upstream_timeout`, and
+`request_timeout`. This applies to complete responses, `response.failed` and SSE
+`error` events. Unknown codes, quota/authentication/validation errors and provider
+cancellation are not retried.

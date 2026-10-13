@@ -54,7 +54,7 @@ not silently fall back to another provider.
 
 Operation `config`, group `model-runtime` (`/model-runtime config`), accepts `{}`
 with no additional fields. It queries current sources, offers live provider
-choices, and collects the default model and reasoning effort. `Automatic` is
+choices, and collects the default model, reasoning effort and retry limits. `Automatic` is
 available only when one provider exists. With no providers it returns `operation.ErrUnavailable`: configure
 an adapter first. Saving rechecks providers and detects concurrent configuration
 changes, persists the file, then updates the defaults with
@@ -127,17 +127,51 @@ within the invocation's snapshot. A missing stream callback returns
 `model.ErrStreamingUnsupported`; this runtime does not itself retry as a complete
 request. `agent.default` implements its own pre-output fallback.
 
-At the provider boundary, a single complete or stream invocation can retry
-transient errors explicitly marked by the provider adapter. It makes at most
-three attempts (including the first) with bounded exponential jitter and honors
-a bounded provider Retry-After hint. Cancellation interrupts the wait. The
-selected provider snapshot and request are kept for all attempts; interceptors
-run once around the invocation. Streaming retries only before the provider has
-passed any event to its handler (including reasoning or part-start); after any
-event, failure is returned without replay. Invalid responses, interceptor and
-consumer errors, and unsupported streaming are not retried. A failed attempt
-may have consumed provider resources without returning authoritative usage.
-Retry-specific observation is intentionally deferred.
+At the provider boundary, complete and stream invocations retry transient errors
+explicitly marked by the adapter. Defaults are eight total attempts, a 1000 ms
+initial delay and a 30000 ms maximum delay. Exponential backoff uses equal
+jitter (50–100% of the current cap), so the default seven waits total 45.5–91
+seconds without a provider hint; request time is additional. `Retry-After` is
+used as a minimum, capped by the configured maximum. Cancellation interrupts
+the wait; the runtime does not impose an overall request deadline.
+
+Configure `/model-runtime config`, or the plugin's `config.toml` at startup:
+
+```toml
+retry_max_attempts = 8
+retry_initial_delay_ms = 1000
+retry_max_delay_ms = 30000
+```
+
+Zero selects the corresponding default; one attempt disables retries. Attempts
+must be 1–20, initial delay 1–60000 ms, and maximum delay between the effective
+initial delay and 300000 ms. Operation updates apply to subsequent calls; an
+in-flight invocation keeps its provider, request and retry policy snapshot.
+The model picker preserves these retry settings. Each attempt receives a fresh
+request clone; interceptors run once around the invocation.
+
+A transient streaming failure can retry after partial content or reasoning.
+Before waiting, the runtime sends `model.StreamRetry` with the next attempt and
+planned delay. Interceptors and consumers must discard the failed attempt's
+provisional content, reasoning and part state; both part indices restart at
+zero. A failed retry callback aborts immediately. Providers may not emit this
+runtime control event. On exhausted retries, the final error and last attempt's
+partial progress remain available; failed attempts never become canonical
+messages or execute Agent tools.
+
+Invalid responses, interceptor/consumer failures, unsupported streaming and
+usage persistence failures do not retry the provider. The last successful
+provider response is the only source of settled usage; failed attempts may
+still have incurred provider charges without authoritative usage. Each scheduled
+retry logs provider/model, attempt, limit, delay and available execution
+correlation, without request or response content.
+
+This behavior uses the `model.StreamRetry`, `agent.StreamRetry` and
+`agent.StreamRecovered` contracts published in SDK v0.2.17. Use matching Agent
+and stream consumers that support retraction. The SDK dependency is pinned in
+`go.mod`; standalone validation uses `GOWORK=off` without a local SDK checkout.
+For SDK development, `tools/test-local-sdk.sh /absolute/path/to/sdk` runs
+combined validation from the repository root.
 
 Provider and interceptor responses are validated: the final role must be
 assistant; provider/model identities must be present; usage counts must be

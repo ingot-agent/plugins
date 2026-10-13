@@ -7,6 +7,7 @@ import (
 	"sort"
 	"sync"
 	"sync/atomic"
+	"unicode/utf8"
 
 	appbackend "github.com/ingot-agent/plugins/app-webui"
 	"github.com/ingot-agent/plugins/app-webui/internal/projection"
@@ -22,6 +23,7 @@ type turnInvocation struct {
 	revision  uint64
 	reasoning string
 	output    string
+	retry     *appbackend.TurnRetry
 }
 
 type turnRegistry struct {
@@ -96,6 +98,7 @@ func (r *turnRegistry) Snapshots() []appbackend.TurnSnapshot {
 		result = append(result, appbackend.TurnSnapshot{
 			ID: invocation.id, SessionID: string(invocation.sessionID), Revision: invocation.revision,
 			Reasoning: invocation.reasoning, Output: invocation.output,
+			Retry: cloneTurnRetry(invocation.retry),
 		})
 	}
 	r.mu.Unlock()
@@ -155,6 +158,10 @@ func (r *turnRegistry) delta(ctx context.Context, invocation *turnInvocation, ev
 		eventType = "agent.output.delta"
 	case agent.StreamReasoningDelta:
 		eventType = "agent.reasoning.delta"
+	case agent.StreamRetry:
+		eventType = "agent.output.reset"
+	case agent.StreamRecovered:
+		eventType = "agent.output.resumed"
 	default:
 		return fmt.Errorf("unknown agent stream event kind %d", event.Kind)
 	}
@@ -164,15 +171,56 @@ func (r *turnRegistry) delta(ctx context.Context, invocation *turnInvocation, ev
 		return appbackend.ErrTurnNotFound
 	}
 	revision := invocation.revision + 1
+	if event.Kind == agent.StreamRecovered {
+		if err := r.events.Publish(appbackend.Event{Type: eventType,
+			Scope: &appbackend.Scope{Agent: &appbackend.AgentScope{SessionID: string(invocation.sessionID)}},
+			Data:  map[string]any{"invocationId": invocation.id, "revision": revision}}); err != nil {
+			return err
+		}
+		invocation.revision, invocation.retry = revision, nil
+		return nil
+	}
+	if event.Kind == agent.StreamRetry {
+		output, outputOK := retractText(invocation.output, event.DiscardOutputBytes)
+		reasoning, reasoningOK := retractText(invocation.reasoning, event.DiscardReasoningBytes)
+		if !outputOK || !reasoningOK || event.Attempt < 2 || event.RetryDelay < 0 || event.TextDelta != "" {
+			return errors.New("invalid agent stream retry")
+		}
+		retry := &appbackend.TurnRetry{Attempt: event.Attempt, DelayMS: event.RetryDelay.Milliseconds()}
+		if err := r.events.Publish(appbackend.Event{Type: eventType,
+			Scope: &appbackend.Scope{Agent: &appbackend.AgentScope{SessionID: string(invocation.sessionID)}},
+			Data:  map[string]any{"invocationId": invocation.id, "revision": revision, "output": output, "reasoning": reasoning, "retry": retry}}); err != nil {
+			return err
+		}
+		invocation.revision, invocation.output, invocation.reasoning, invocation.retry = revision, output, reasoning, retry
+		return nil
+	}
 	if err := r.events.Publish(appbackend.Event{Type: eventType, Scope: &appbackend.Scope{Agent: &appbackend.AgentScope{SessionID: string(invocation.sessionID)}},
 		Data: map[string]any{"invocationId": invocation.id, "revision": revision, "text": event.TextDelta}}); err != nil {
 		return err
 	}
 	invocation.revision = revision
+	invocation.retry = nil
 	if event.Kind == agent.StreamOutputDelta {
 		invocation.output += event.TextDelta
 	} else {
 		invocation.reasoning += event.TextDelta
 	}
 	return nil
+}
+
+func retractText(text string, count int) (string, bool) {
+	if count < 0 || count > len(text) {
+		return "", false
+	}
+	kept := text[:len(text)-count]
+	return kept, utf8.ValidString(kept)
+}
+
+func cloneTurnRetry(retry *appbackend.TurnRetry) *appbackend.TurnRetry {
+	if retry == nil {
+		return nil
+	}
+	copy := *retry
+	return &copy
 }

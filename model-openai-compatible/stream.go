@@ -163,7 +163,7 @@ func (p *provider) decodeStream(ctx context.Context, response *http.Response, ha
 		}
 	}
 	if !done {
-		return model.Response{}, protocolError("stream ended before [DONE]")
+		return model.Response{}, wrapReadError(fmt.Errorf("stream ended before [DONE]: %w", io.ErrUnexpectedEOF))
 	}
 	if err := accumulator.finish(handler); err != nil {
 		return model.Response{}, err

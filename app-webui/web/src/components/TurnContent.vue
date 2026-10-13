@@ -38,6 +38,7 @@ const blocks = computed<DisplayBlock[]>(() => {
       <ToolCard v-else-if="block.kind === 'tool'" :name="block.call.name" :arguments="block.call.arguments" :content="block.content" :status="block.status" :error="block.error" />
       <InteractionCard v-else-if="block.kind === 'interaction'" :interaction="interactions[block.interactionId]!" />
     </template>
-    <div v-if="turn.status === 'running'" class="thinking-dots" role="status" :aria-label="t('status.running')"><i /><i /><i /></div>
+    <div v-if="turn.status === 'running' && turn.retry" class="retry-status" role="status">{{ t('modelRetry', { attempt: turn.retry.attempt }) }}</div>
+    <div v-else-if="turn.status === 'running'" class="thinking-dots" role="status" :aria-label="t('status.running')"><i /><i /><i /></div>
   </div>
 </template>
