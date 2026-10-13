@@ -17,16 +17,17 @@ import (
 
 const (
 	agentMessageKind    = "agent.message"
-	agentMessageVersion = 1
+	agentMessageVersion = 2
 	interruptedContent  = "tool result unavailable [interrupted]: previous execution was interrupted; outcome unknown"
 )
 
 type persistedMessage struct {
-	Role       string          `json:"role"`
-	Content    []persistedPart `json:"content"`
-	Name       string          `json:"name"`
-	ToolCallID string          `json:"tool_call_id"`
-	ToolCalls  []persistedCall `json:"tool_calls"`
+	Role       string             `json:"role"`
+	Content    []persistedPart    `json:"content"`
+	Name       string             `json:"name"`
+	ToolCallID string             `json:"tool_call_id"`
+	ToolCalls  []persistedCall    `json:"tool_calls"`
+	Replay     *model.ReplayState `json:"replay,omitempty"`
 }
 
 type persistedPart struct {
@@ -103,9 +104,10 @@ func (value *persistedOpaqueString) UnmarshalJSON(raw []byte) error {
 }
 
 type persistedCall struct {
-	ID        string          `json:"id"`
-	Name      string          `json:"name"`
-	Arguments json.RawMessage `json:"arguments"`
+	ID            string          `json:"id"`
+	Name          string          `json:"name"`
+	Arguments     json.RawMessage `json:"arguments,omitempty"`
+	ArgumentBytes []byte          `json:"argument_bytes,omitempty"`
 }
 
 type trailingRound struct {
@@ -146,7 +148,7 @@ func (r *runtime) loadHistory(ctx context.Context, id session.ID) ([]model.Messa
 			}
 			continue
 		}
-		if entry.Version != agentMessageVersion {
+		if entry.Version != 1 && entry.Version != agentMessageVersion {
 			return nil, fmt.Errorf("entry %d version %d: %w", i, entry.Version, ErrUnsupportedEntryVersion)
 		}
 		message, err := decodePersistedMessage(entry.Payload)
@@ -288,10 +290,10 @@ func encodePersistedMessage(message model.Message) ([]byte, error) {
 	}
 	persisted := persistedMessage{
 		Role: string(message.Role), Content: encodeContent(message.Content), Name: message.Name,
-		ToolCallID: message.ToolCallID, ToolCalls: make([]persistedCall, len(message.ToolCalls)),
+		ToolCallID: message.ToolCallID, ToolCalls: make([]persistedCall, len(message.ToolCalls)), Replay: message.Replay.Clone(),
 	}
 	for i, call := range message.ToolCalls {
-		persisted.ToolCalls[i] = persistedCall{ID: call.ID, Name: call.Name, Arguments: append(json.RawMessage(nil), call.Arguments...)}
+		persisted.ToolCalls[i] = persistedCall{ID: call.ID, Name: call.Name, ArgumentBytes: append([]byte(nil), call.Arguments...)}
 	}
 	raw, err := json.Marshal(persisted)
 	if err != nil {
@@ -320,10 +322,17 @@ func decodePersistedMessage(raw []byte) (model.Message, error) {
 	}
 	message := model.Message{
 		Role: model.Role(persisted.Role), Content: messageContent, Name: persisted.Name,
-		ToolCallID: persisted.ToolCallID, ToolCalls: make([]tool.Call, len(persisted.ToolCalls)),
+		ToolCallID: persisted.ToolCallID, ToolCalls: make([]tool.Call, len(persisted.ToolCalls)), Replay: persisted.Replay.Clone(),
 	}
 	for i, call := range persisted.ToolCalls {
-		message.ToolCalls[i] = tool.Call{ID: call.ID, Name: call.Name, Arguments: append(json.RawMessage(nil), call.Arguments...)}
+		arguments := call.Arguments
+		if call.ArgumentBytes != nil {
+			if len(arguments) != 0 {
+				return model.Message{}, fmt.Errorf("tool call has two argument representations: %w", ErrCorruptHistory)
+			}
+			arguments = call.ArgumentBytes
+		}
+		message.ToolCalls[i] = tool.Call{ID: call.ID, Name: call.Name, Arguments: append(json.RawMessage(nil), arguments...)}
 	}
 	if err := validateStoredMessage(message); err != nil {
 		return model.Message{}, err
@@ -357,6 +366,7 @@ func cloneMessages(messages []model.Message) []model.Message {
 }
 
 func cloneMessage(message model.Message) model.Message {
+	message.Replay = message.Replay.Clone()
 	message.Content = content.Clone(message.Content)
 	message.ToolCalls = cloneCalls(message.ToolCalls)
 	return message

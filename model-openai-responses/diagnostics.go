@@ -40,6 +40,7 @@ type requestDiagnostic struct {
 	firstEvent, lastEventAt, previousEventAt, lastRead time.Time
 	consumerFailed                                     bool
 	requestBytes                                       int
+	inputTokens, cachedInputTokens                     *int
 
 	// net/http trace callbacks can run concurrently, even after Do returns.
 	mu         sync.Mutex
@@ -55,7 +56,7 @@ func (p *provider) startDiagnostic(ctx context.Context, request model.Request, s
 	if correlation, ok := observation.CorrelationFromContext(ctx); ok {
 		d.logger = d.logger.With("session_id", d.clean(string(correlation.SessionID)), "turn_id", d.clean(string(correlation.TurnID)), "round", correlation.RoundIndex)
 	}
-	attrs := []any{"messages", len(request.Messages), "tools", len(request.Tools), "go_version", runtime.Version()}
+	attrs := []any{"messages", len(request.Messages), "tools", len(request.Tools), "go_version", runtime.Version(), "cache_session_key_present", sessionCacheKey(ctx) != ""}
 	if request.MaxTokens != nil {
 		attrs = append(attrs, "max_output_tokens", *request.MaxTokens)
 	}
@@ -147,6 +148,19 @@ func (d *requestDiagnostic) event(kind string, response *responseObject) {
 	if response != nil && response.ID != "" {
 		d.responseID = d.clean(response.ID)
 	}
+	if response != nil && (kind == "response.completed" || kind == "response.incomplete") {
+		d.recordUsage(response.Usage)
+	}
+}
+
+func (d *requestDiagnostic) recordUsage(usage *responseUsage) {
+	if usage == nil {
+		return
+	}
+	d.inputTokens = usage.InputTokens
+	if usage.InputTokensDetails != nil {
+		d.cachedInputTokens = usage.InputTokensDetails.CachedTokens
+	}
 }
 
 func (d *requestDiagnostic) finish(ctx context.Context, err error) {
@@ -155,6 +169,12 @@ func (d *requestDiagnostic) finish(ctx context.Context, err error) {
 		"http_protocol", d.protocol, "request_id", d.requestID, "response_id", d.responseID, "cf_ray", d.cfRay,
 		"request_bytes", d.requestBytes, "response_bytes", d.bytes, "sse_events", d.events, "sse_comments", d.comments, "keepalives", d.keepalives,
 		"delivered_events", d.delivered, "last_event", d.lastEvent, "consumer_failed", d.consumerFailed}
+	if err == nil && d.inputTokens != nil {
+		attrs = append(attrs, "input_tokens", *d.inputTokens)
+		if d.cachedInputTokens != nil {
+			attrs = append(attrs, "cached_input_tokens", *d.cachedInputTokens)
+		}
+	}
 	if !d.firstEvent.IsZero() {
 		attrs = append(attrs, "first_event_after_ms", d.firstEvent.Sub(d.started).Milliseconds())
 	}

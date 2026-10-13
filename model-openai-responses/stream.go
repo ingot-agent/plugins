@@ -58,6 +58,7 @@ type accumulatedFunctionCall struct {
 type streamAccumulator struct {
 	provider string
 	secret   string
+	scope    replayScope
 
 	contentParts  map[streamPartKey]*accumulatedStreamPart
 	contentOrder  []*accumulatedStreamPart
@@ -100,10 +101,10 @@ func (p *provider) Stream(ctx context.Context, request model.Request, handler mo
 		return model.Response{}, err
 	}
 	diagnostic.stage = "stream"
-	return p.decodeStream(ctx, response, handler, diagnostic)
+	return p.decodeStream(ctx, response, handler, diagnostic, p.replayScope(request.Model))
 }
 
-func (p *provider) decodeStream(ctx context.Context, response *http.Response, handler model.StreamHandler, diagnostic *requestDiagnostic) (model.Response, error) {
+func (p *provider) decodeStream(ctx context.Context, response *http.Response, handler model.StreamHandler, diagnostic *requestDiagnostic, scope replayScope) (model.Response, error) {
 	consumer := handler
 	handler = func(event model.StreamEvent) error {
 		if err := ctx.Err(); err != nil {
@@ -121,6 +122,7 @@ func (p *provider) decodeStream(ctx context.Context, response *http.Response, ha
 	dataLines := make([]string, 0, 1)
 	eventName := ""
 	accumulator := newStreamAccumulator(p.name, p.apiKey)
+	accumulator.scope = scope
 
 	dispatch := func() error {
 		defer func() {
@@ -301,7 +303,7 @@ func (a *streamAccumulator) add(event responseStreamEvent, handler model.StreamH
 		if event.Response.Status != wantStatus {
 			return protocolError("terminal event %q carries response status %q", event.Type, event.Response.Status)
 		}
-		result, err := decodeResponseObject(*event.Response, a.provider, a.secret)
+		result, err := decodeResponseObject(*event.Response, a.provider, a.secret, a.scope)
 		if err != nil {
 			return err
 		}
@@ -314,7 +316,7 @@ func (a *streamAccumulator) add(event responseStreamEvent, handler model.StreamH
 		if event.Response == nil {
 			return protocolError("terminal event %q is missing response", event.Type)
 		}
-		_, err := decodeResponseObject(*event.Response, a.provider, a.secret)
+		_, err := decodeResponseObject(*event.Response, a.provider, a.secret, a.scope)
 		return err
 	case "error":
 		return providerResponseError("failed", &responseError{Code: event.Code, Message: event.Message}, a.secret)

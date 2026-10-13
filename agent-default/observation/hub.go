@@ -324,6 +324,7 @@ func cloneMessages(values []model.Message) []model.Message {
 }
 
 func cloneMessage(value model.Message) model.Message {
+	value.Replay = value.Replay.Clone()
 	value.Content = content.Clone(value.Content)
 	if value.ToolCalls == nil {
 		return value

@@ -22,9 +22,13 @@ func TestRendererFormatsInStableOrderAndIsolatesContributors(t *testing.T) {
 	originalArguments := []byte(`{"x":1}`)
 	first := contributorFunc(func(_ context.Context, request prompt.Request) ([]prompt.Block, error) {
 		request.History[0].ToolCalls[0].Arguments[0] = 'X'
+		request.History[0].Replay.Data[0] = 'X'
 		return []prompt.Block{{Name: "first", Content: content.FromText("one")}}, nil
 	})
 	second := contributorFunc(func(_ context.Context, request prompt.Request) ([]prompt.Block, error) {
+		if string(request.History[0].Replay.Data) != "opaque" {
+			t.Fatal("contributor mutated replay state")
+		}
 		if string(request.History[0].ToolCalls[0].Arguments) != `{"x":1}` {
 			t.Fatalf("second contributor saw mutation: %s", request.History[0].ToolCalls[0].Arguments)
 		}
@@ -34,7 +38,7 @@ func TestRendererFormatsInStableOrderAndIsolatesContributors(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	history := []model.Message{{Role: model.RoleAssistant, Content: content.FromText("old"), ToolCalls: []tool.Call{{ID: "id", Name: "t", Arguments: originalArguments}}}}
+	history := []model.Message{{Role: model.RoleAssistant, Content: content.FromText("old"), Replay: &model.ReplayState{Format: "example.v1", Data: []byte("opaque")}, ToolCalls: []tool.Call{{ID: "id", Name: "t", Arguments: originalArguments}}}}
 	messages, err := exports.Renderer.Render(context.Background(), prompt.Request{Input: content.FromText("new"), History: history})
 	if err != nil {
 		t.Fatal(err)
@@ -45,6 +49,13 @@ func TestRendererFormatsInStableOrderAndIsolatesContributors(t *testing.T) {
 	newText, newOK := content.TextOnly(messages[2].Content)
 	if len(messages) != 3 || !systemOK || systemText != wantSystem || !oldOK || oldText != "old" || messages[2].Role != model.RoleUser || !newOK || newText != "new" {
 		t.Fatalf("messages=%#v", messages)
+	}
+	if string(messages[1].Replay.Data) != "opaque" {
+		t.Fatal("prompt lost replay state")
+	}
+	messages[1].Replay.Data[0] = 'Y'
+	if string(history[0].Replay.Data) != "opaque" {
+		t.Fatal("rendered replay aliases caller history")
 	}
 	if string(originalArguments) != `{"x":1}` {
 		t.Fatalf("caller history mutated: %s", originalArguments)

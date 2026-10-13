@@ -101,7 +101,10 @@ func (m *fakeModel) Complete(_ context.Context, _, _ session.ID, request model.R
 
 func TestCompactNoOpReturnsOwnedMessages(t *testing.T) {
 	t.Parallel()
-	request := model.Request{Messages: []model.Message{{Role: model.RoleUser, Content: textContent("hello")}}}
+	request := model.Request{Messages: []model.Message{
+		{Role: model.RoleUser, Content: textContent("hello")},
+		{Role: model.RoleAssistant, Content: textContent("answer"), Replay: &model.ReplayState{Format: "example.v1", Data: []byte("opaque-state")}},
+	}}
 	raw, err := canonicalRequestBytes(request)
 	if err != nil {
 		t.Fatal(err)
@@ -118,6 +121,10 @@ func TestCompactNoOpReturnsOwnedMessages(t *testing.T) {
 	}
 	if result.Changed || !reflect.DeepEqual(result.Messages, request.Messages) || len(models.requests) != 0 {
 		t.Fatalf("result=%#v summary calls=%d", result, len(models.requests))
+	}
+	result.Messages[1].Replay.Data[0] = 'X'
+	if string(request.Messages[1].Replay.Data) != "opaque-state" {
+		t.Fatal("compactor aliases replay state")
 	}
 	result.Messages[0].Content = textContent("changed")
 	if messageText(request.Messages[0]) != "hello" {
@@ -150,6 +157,8 @@ func TestInspectRequestRejectsOpaqueInvalidUTF8(t *testing.T) {
 func TestCompactPreservesRecentRoundsAndPersistsDelta(t *testing.T) {
 	t.Parallel()
 	request := longRequest()
+	request.Messages[2].Replay = &model.ReplayState{Format: "example.v1", Data: []byte("covered-opaque-state")}
+	request.Messages[len(request.Messages)-1].Replay = &model.ReplayState{Format: "example.v1", Data: []byte("recent-opaque-state")}
 	raw, err := canonicalRequestBytes(request)
 	if err != nil {
 		t.Fatal(err)
@@ -187,6 +196,19 @@ func TestCompactPreservesRecentRoundsAndPersistsDelta(t *testing.T) {
 	if models.requests[0].Tools == nil || len(models.requests[0].Tools) != 0 || models.requests[0].Temperature == nil || *models.requests[0].Temperature != 0 {
 		t.Fatalf("summary request=%#v", models.requests[0])
 	}
+	if !reflect.DeepEqual(result.Messages[4].Replay, request.Messages[len(request.Messages)-1].Replay) {
+		t.Fatal("compaction lost suffix replay state")
+	}
+	for _, message := range result.Messages[1:3] {
+		if message.Replay != nil {
+			t.Fatal("summary inherited replay state")
+		}
+	}
+	for _, message := range models.requests[0].Messages {
+		if strings.Contains(messageText(message), "opaque-state") {
+			t.Fatal("opaque replay included in summary prompt")
+		}
+	}
 	store.mu.Lock()
 	entries := append([]session.Entry(nil), store.entries["s"]...)
 	store.mu.Unlock()
@@ -213,6 +235,11 @@ func TestCompactPreservesRecentRoundsAndPersistsDelta(t *testing.T) {
 	if !reused.Changed || len(restartedModel.requests) != 0 || !reflect.DeepEqual(reused.Messages, result.Messages) {
 		t.Fatalf("reused=%#v calls=%d", reused, len(restartedModel.requests))
 	}
+	reused.Messages[4].Replay.Data[0] = 'X'
+	if string(request.Messages[len(request.Messages)-1].Replay.Data) != "recent-opaque-state" || string(result.Messages[4].Replay.Data) != "recent-opaque-state" {
+		t.Fatal("checkpoint reuse aliases suffix replay state")
+	}
+
 }
 
 func TestIncrementalSegmentsKeepFrozenPrefixAndUpdateState(t *testing.T) {
@@ -701,4 +728,32 @@ func textContent(value string) content.Content { return content.FromText(value) 
 func messageText(message model.Message) string {
 	value, _ := content.TextOnly(message.Content)
 	return value
+}
+
+func TestReplayStateAffectsCheckpointIdentityOnly(t *testing.T) {
+	messages := []model.Message{{Role: model.RoleAssistant, Content: textContent("visible")}}
+	before, err := messageDigest(messages)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The old projection remains the source identity when no replay state exists.
+	legacy, err := json.Marshal(projectMessages(messages))
+	if err != nil {
+		t.Fatal(err)
+	}
+	messages[0].Replay = &model.ReplayState{Format: "example.v1", Data: []byte("opaque")}
+	after, err := messageDigest(messages)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before == after {
+		t.Fatal("checkpoint ignored replay state")
+	}
+	summary, err := jsonMessages(messages)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(legacy) != string(summary) {
+		t.Fatal("replay changed visible summary projection")
+	}
 }
