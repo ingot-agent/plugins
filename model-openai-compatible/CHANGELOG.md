@@ -4,6 +4,10 @@ All notable changes to this plugin are documented in this file.
 
 ## Unreleased
 
+### Changed
+
+- Mark truncated SSE and explicit transient HTTP/2 transport failures retryable, including after partial progress for callers supporting retraction.
+
 ### Added
 
 - Publish configured models and their supported reasoning-effort values through

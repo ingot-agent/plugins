@@ -4,6 +4,10 @@ All notable changes to this plugin are documented in this file.
 
 ## Unreleased
 
+### Changed
+
+- Mark truncated SSE, transient provider error codes and explicit HTTP/2 transport failures retryable; diagnostics report whether stream reset is required.
+
 ### Added
 
 - Add per-attempt structured diagnostics for Responses requests: correlation,

@@ -4,6 +4,47 @@ import type { LiveTurn, OperationInvocation, Snapshot, WebEvent } from './protoc
 
 const event = (type: string, data: WebEvent['data']): WebEvent => ({ type, data, scope: { agent: { sessionId: 's' } } })
 describe('authoritative turn projections', () => {
+  it('retracts only failed attempt text across blocks and ignores duplicate retry events', () => {
+    const turns = bootstrapTurns({ turns: [{ id: 'web', sessionId: 's', revision: 0, reasoning: '', output: '' }] } as Snapshot)
+    reduceTurn(turns, event('agent.output.delta', { invocationId: 'web', revision: 1, text: '已完成🙂' }))
+    reduceTurn(turns, event('agent.reasoning.delta', { invocationId: 'web', revision: 2, text: '之前' }))
+    const scope = { agent: { sessionId: 's', turnId: 'sdk', toolCallId: 'once' } }
+    reduceTurn(turns, { type: 'agent.tool.started', scope, data: { call: { id: 'once', name: 'echo', arguments: {} } } })
+    reduceTurn(turns, { type: 'agent.tool.finished', scope, data: { status: 'succeeded' } })
+    reduceTurn(turns, event('agent.model.started', {}))
+    reduceTurn(turns, event('agent.output.delta', { invocationId: 'web', revision: 3, text: '失败🌍' }))
+    reduceTurn(turns, event('agent.reasoning.delta', { invocationId: 'web', revision: 4, text: '思考' }))
+    reduceTurn(turns, event('agent.output.delta', { invocationId: 'web', revision: 5, text: '还有' }))
+    const reset = event('agent.output.reset', { invocationId: 'web', revision: 6, output: '已完成🙂', reasoning: '之前', retry: { attempt: 2, delayMs: 1000 } })
+    reduceTurn(turns, reset)
+    expect(turns.web.output).toBe('已完成🙂')
+    expect(turns.web.reasoning).toBe('之前')
+    expect(turns.web.blocks?.map(b => b.kind)).toEqual(['output', 'reasoning', 'tool'])
+    expect(turns.web.retry?.attempt).toBe(2)
+    reduceTurn(turns, event('agent.output.delta', { invocationId: 'web', revision: 7, text: '成功' }))
+    reduceTurn(turns, reset)
+    expect(turns.web.output).toBe('已完成🙂成功')
+    expect(turns.web.retry).toBeUndefined()
+    expect(turns.web.blocks?.at(-1)).toMatchObject({ text: '成功' })
+  })
+
+  it('retracts from reconnect snapshots and clears status for a recovered tool-only response', () => {
+    const turns = bootstrapTurns({ turns: [{ id: 'web', sessionId: 's', revision: 4, reasoning: '保留思考失败', output: '保留🙂失败', retry: { attempt: 2, delayMs: 1000 } }] } as Snapshot)
+    reduceTurn(turns, event('agent.output.reset', { invocationId: 'web', revision: 5, output: '保留🙂', reasoning: '保留思考', retry: { attempt: 3, delayMs: 2000 } }))
+    expect(turns.web.blocks).toEqual([
+      { id: 'snapshot-reasoning', kind: 'reasoning', text: '保留思考', boundary: -1 },
+      { id: 'snapshot-output', kind: 'output', text: '保留🙂', boundary: -1 },
+    ])
+    expect(turns.web.retry?.attempt).toBe(3)
+    reduceTurn(turns, event('agent.output.resumed', { invocationId: 'web', revision: 6 }))
+    expect(turns.web.retry).toBeUndefined()
+    expect(turns.web.output).toBe('保留🙂')
+    reduceTurn(turns, event('agent.invocation.finished', { invocationId: 'web', status: 'canceled' }))
+    reduceTurn(turns, event('agent.output.reset', { invocationId: 'web', revision: 7, output: '', reasoning: '', retry: { attempt: 4, delayMs: 4000 } }))
+    expect(turns.web.output).toBe('保留🙂')
+    expect(turns.web.retry).toBeUndefined()
+  })
+
   it('ignores replay overlapping a bootstrap and shares revisions across output and reasoning', () => {
     const turns = bootstrapTurns({ turns: [{ id: 'web', sessionId: 's', revision: 4, reasoning: 'thinking', output: 'hello' }] } as Snapshot)
     reduceTurn(turns, event('agent.invocation.started', { id: 'web', sessionId: 's', revision: 0, output: '', reasoning: '' }))

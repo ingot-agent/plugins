@@ -218,7 +218,7 @@ func (p *provider) decodeStream(ctx context.Context, response *http.Response, ha
 		}
 	}
 	if accumulator.terminal == nil {
-		return model.Response{}, protocolError("stream ended before a terminal response event")
+		return model.Response{}, wrapReadError(fmt.Errorf("stream ended before a terminal response event: %w", io.ErrUnexpectedEOF))
 	}
 	if err := accumulator.finish(handler); err != nil {
 		return model.Response{}, err

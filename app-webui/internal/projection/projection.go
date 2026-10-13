@@ -124,6 +124,9 @@ func ModelResponse(response model.Response) map[string]any {
 
 // ModelProgress keeps stream semantic and part lifecycle separate.
 func ModelProgress(event model.StreamEvent) map[string]any {
+	if event.Kind == model.StreamRetry {
+		return map[string]any{"kind": "retry", "attempt": event.Attempt, "delayMs": event.RetryDelay.Milliseconds()}
+	}
 	kind := map[model.StreamEventKind]string{model.StreamPartStart: "part.start", model.StreamPartDelta: "part.delta", model.StreamPartEnd: "part.end"}[event.Kind]
 	semantic := "content"
 	if event.Semantic == model.StreamSemanticReasoning {

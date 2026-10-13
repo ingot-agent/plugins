@@ -106,8 +106,13 @@ their own new identity for both root and current.
 `Stream` requires a handler. With no model streaming capability it uses complete
 invocation. It also falls back to complete when streaming returns
 `model.ErrStreamingUnsupported` before any mapped stream event has been delivered.
-It does not retry after partial output or a consumer error. Streaming reasoning
-is transient; it is not persisted as canonical assistant content. The deprecated
+Provider retries remain owned by ModelRuntime. A `model.StreamRetry` becomes
+`agent.StreamRetry`, retracting only the current attempt's emitted output and
+reasoning by UTF-8 byte counts. Earlier model rounds and completed tools are
+preserved. These retry contracts require SDK v0.2.17, pinned in `go.mod`.
+A successful retried invocation emits `agent.StreamRecovered`, even
+for tool-only responses. Retry/recovery callback failures abort before tools
+are dispatched. Streaming reasoning is transient; it is not persisted as canonical assistant content. The deprecated
 `streaming` TOML field is ignored; the caller selects the API.
 
 History uses version-1 `agent.message` entries for individual messages. Unknown versions, malformed

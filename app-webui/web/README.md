@@ -41,9 +41,9 @@ npm run test:e2e
 
 Playwright 启动两个真实 Go HTTP/SSE 服务（`17316` 流式、`17317` Run-only），使用仅存在于 Go 测试代码中的确定性 SDK adapters，不访问模型、不需要凭据。覆盖会话生命周期、审批与自由文本、跨标签页同步、运行中历史阻塞、取消后的部分输出、附件历史、Operation、过期 cursor 和中英文/深色/移动布局。失败时保留 trace、截图及 HTML 报告。
 
-默认 fixture 使用 `GOWORK=off` 验证插件声明的已发布依赖；SDK v0.2.16
-已包含本地文件输入所用的通用 `agent.PluginInput` 能力接口，WebUI 在启动
-Agent 前调用注入的 writer 写入通知。浏览器回归无需本地 SDK workspace。
+默认 fixture 使用 `GOWORK=off` 验证插件声明的已发布依赖；当前固定 SDK v0.2.17，
+包含流式重试控制事件及本地文件输入所用的通用 `agent.PluginInput` 能力接口。
+WebUI 在启动 Agent 前调用注入的 writer 写入通知。浏览器回归无需本地 SDK workspace。
 开发时可用 `INGOT_WEBUI_FIXTURE_GOWORK=/absolute/path/to/go.work npm run test:e2e`
 指定 workspace；该选项只影响测试子进程，不改变插件的发布依赖。
 

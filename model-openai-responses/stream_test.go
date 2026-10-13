@@ -3,6 +3,7 @@ package openairesponses_test
 import (
 	"context"
 	"errors"
+	"io"
 	"reflect"
 	"strings"
 	"testing"
@@ -86,7 +87,12 @@ func TestStreamKeepalivePreservesProtocolErrors(t *testing.T) {
 				t.Fatalf("unexpected stream event: %#v", event)
 				return nil
 			})
-			if !errors.Is(err, openairesponses.ErrProtocol) || !strings.Contains(err.Error(), tt.want) {
+			wantError := openairesponses.ErrProtocol
+			if tt.name == "missing terminal" {
+				wantError = io.ErrUnexpectedEOF
+			}
+			checkRetry(t, err, tt.name == "missing terminal")
+			if !errors.Is(err, wantError) || !strings.Contains(err.Error(), tt.want) {
 				t.Fatalf("error = %v, want protocol error containing %q", err, tt.want)
 			}
 		})

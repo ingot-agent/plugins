@@ -5,6 +5,8 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/http/httptest"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -29,6 +31,49 @@ func checkRetry(t *testing.T, err error, want bool) time.Duration {
 		t.Fatalf("error %v retry=%v want=%v", err, ok, want)
 	}
 	return delay
+}
+
+func TestHTTP2ResetAfterPartialOutputIsRetryable(t *testing.T) {
+	consumed := make(chan struct{})
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "data: {\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"partial\"}}]}\n\n")
+		w.(http.Flusher).Flush()
+		select {
+		case <-consumed:
+		case <-r.Context().Done():
+			return
+		}
+		panic(http.ErrAbortHandler)
+	}))
+	server.EnableHTTP2 = true
+	server.StartTLS()
+	defer server.Close()
+	p := newProvider(t, openaicompat.ProviderConfig{Name: "p", BaseURL: server.URL}, clientFunc(func(ctx context.Context, request *http.Request) (*http.Response, error) {
+		return server.Client().Do(request.WithContext(ctx))
+	}))
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var once sync.Once
+	_, err := p.Stream(ctx, model.Request{Model: "m"}, func(model.StreamEvent) error { once.Do(func() { close(consumed) }); return nil })
+	checkRetry(t, err, true)
+}
+
+func TestTruncatedStreamIsRetryableButMalformedDataIsNot(t *testing.T) {
+	for _, tc := range []struct {
+		body  string
+		retry bool
+	}{
+		{"", true},
+		{"data: {\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"partial\"}}]}\n\n", true},
+		{"data: {\n\n", false},
+	} {
+		p := newProvider(t, openaicompat.ProviderConfig{Name: "p", BaseURL: "https://example.test"}, clientFunc(func(context.Context, *http.Request) (*http.Response, error) {
+			return response(http.StatusOK, tc.body), nil
+		}))
+		_, err := p.Stream(context.Background(), model.Request{Model: "m"}, func(model.StreamEvent) error { return nil })
+		checkRetry(t, err, tc.retry)
+	}
 }
 func TestRetryHintsFromHTTPAndNetwork(t *testing.T) {
 	for _, tc := range []struct {

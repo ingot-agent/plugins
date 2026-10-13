@@ -26,7 +26,7 @@ modules=(
     "$plugins_dir/model-runtime"
     "$plugins_dir/agent-default"
     "$plugins_dir/context-compact"
-    "$plugins_dir/usage-default"
+    "$plugins_dir/app-webui"
 )
 
 validation_dir=$(mktemp -d "${TMPDIR:-/tmp}/ingot-local-sdk.XXXXXXXX")

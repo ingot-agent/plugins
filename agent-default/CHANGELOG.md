@@ -4,6 +4,11 @@ All notable changes to this plugin are documented in this file.
 
 ## Unreleased
 
+### Changed
+
+- Forward model retries with attempt-local text retraction and recovery status while preserving earlier rounds and preventing failed attempts from executing tools.
+- Require published SDK v0.2.17 for stream retry and recovery events.
+
 ### Added
 
 - Export `/agent-default subagents` from the session-tree component to configure

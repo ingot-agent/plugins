@@ -185,7 +185,7 @@ func (d *requestDiagnostic) finish(ctx context.Context, err error) {
 	if !d.consumerFailed && errors.As(err, &hint) {
 		_, retryable = hint.RetryDelay()
 	}
-	attrs = append(attrs, "adapter_retryable", retryable, "stream_replay_blocked", d.stream && d.delivered > 0)
+	attrs = append(attrs, "adapter_retryable", retryable, "stream_reset_required", d.stream && d.delivered > 0)
 	if !d.consumerFailed {
 		var responseErr *ProviderResponseError
 		if errors.As(err, &responseErr) {
