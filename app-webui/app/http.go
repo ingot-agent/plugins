@@ -47,6 +47,7 @@ func (a *application) routes() http.Handler {
 
 	mux.HandleFunc("POST /api/assets", a.handleUploadAsset)
 	mux.HandleFunc("POST /api/files/select", a.handleSelectFiles)
+	mux.HandleFunc("POST /api/files/upload", a.handleUploadFile)
 	mux.HandleFunc("POST /api/files/preview", a.handlePreviewFile)
 	mux.HandleFunc("POST /api/files/open", a.handleOpenFile)
 	mux.HandleFunc("GET /api/assets/{id}", a.handleReadAsset)
@@ -77,7 +78,7 @@ func (a *application) handleState(w http.ResponseWriter, r *http.Request) {
 		Cursor:               cursor,
 		Agent:                appbackend.AgentState{Capabilities: a.agent.Capabilities()},
 		Assets:               appbackend.AssetState{Available: a.assets != nil, MaxBytes: a.config.MaxAssetBytes},
-		Files:                appbackend.AssetState{Available: a.filePicker != nil && a.pluginInputs != nil, MaxBytes: a.config.MaxAssetBytes},
+		Files:                appbackend.AssetState{Available: a.filePicker != nil && (a.assets != nil || a.pluginInputs != nil), MaxBytes: a.config.MaxAssetBytes},
 		Workspace:            appbackend.WorkspaceState{DefaultPath: a.defaultWorkspace},
 		Sessions:             sessions,
 		Operations:           a.operations.List(),

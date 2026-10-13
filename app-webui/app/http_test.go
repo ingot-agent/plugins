@@ -282,6 +282,7 @@ func testApplication(t *testing.T) *application {
 		backend: deps.Backend, agent: controller, sessions: sessions,
 		pluginInputs:     testPluginInputs{store: deps.Store},
 		defaultWorkspace: defaultWorkspace,
+		uploadDirectory:  filepath.Join(t.TempDir(), "uploads"),
 		workspacePicker:  &stubWorkspacePicker{canceled: true},
 	}
 	a.turns = newTurnRegistry(ctx, controller, deps.Backend.Events())

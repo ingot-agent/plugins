@@ -5,9 +5,9 @@ import Composer from './Composer.vue'
 import { useRuntime } from '../stores/runtime'
 import { i18n } from '../i18n'
 import type { Operation } from '../protocol'
-import { command } from '../api'
+import { command, request } from '../api'
 
-vi.mock('../api', async importOriginal => ({ ...await importOriginal<typeof import('../api')>(), command: vi.fn() }))
+vi.mock('../api', async importOriginal => ({ ...await importOriginal<typeof import('../api')>(), command: vi.fn(), request: vi.fn() }))
 
 let wrapper: VueWrapper
 function composer(operations: Operation[] = []) {
@@ -19,6 +19,127 @@ function composer(operations: Operation[] = []) {
   return wrapper
 }
 afterEach(() => { wrapper?.unmount(); vi.resetAllMocks() })
+
+function pasteFiles(view: VueWrapper, files: File[], itemsOnly = false) {
+  const event = new Event('paste', { bubbles: true, cancelable: true })
+  Object.defineProperty(event, 'clipboardData', { value: {
+    files: itemsOnly ? [] : files,
+    items: files.map(file => ({ kind: 'file', getAsFile: () => file })),
+  } })
+  view.get('textarea').element.dispatchEvent(event)
+  return event
+}
+
+describe('clipboard attachments', () => {
+  it('leaves ordinary text paste to the browser', () => {
+    const view = composer()
+    expect(pasteFiles(view, []).defaultPrevented).toBe(false)
+    expect(request).not.toHaveBeenCalled()
+  })
+
+  it('uploads pasted images and documents in clipboard order before allowing send', async () => {
+    const view = composer()
+    useRuntime().files = { available: true, maxBytes: 1000 }
+    const image = new File(['image'], 'photo.png', { type: 'image/png' })
+    const document = new File(['document'], 'report.pdf', { type: 'application/pdf' })
+    const attachments = [
+      { kind: 'image', name: image.name, mimeType: image.type, assetId: 'clipboard-image', size: image.size },
+      { kind: 'file', name: document.name, mimeType: document.type, path: '/uploads/file-1/report.pdf', size: document.size },
+    ]
+    let complete!: (value: unknown) => void
+    vi.mocked(request).mockReturnValueOnce(new Promise(resolve => { complete = resolve })).mockResolvedValueOnce(attachments[1])
+    await view.get('textarea').setValue('keep this text')
+    expect(pasteFiles(view, [image, document]).defaultPrevented).toBe(true)
+    await flushPromises()
+    expect(view.findAll('.upload-chip').map(item => item.text())).toEqual([expect.stringContaining('photo.png'), expect.stringContaining('report.pdf')])
+    expect(view.get('button[type=submit]').attributes('disabled')).toBeDefined()
+    await view.get('form').trigger('submit')
+    expect(view.emitted('send')).toBeUndefined()
+    expect(request).toHaveBeenNthCalledWith(1, '/files/upload?name=photo.png', expect.objectContaining({ method: 'POST', body: image, signal: expect.any(AbortSignal) }))
+    expect(request).toHaveBeenNthCalledWith(2, '/files/upload?name=report.pdf', expect.objectContaining({ body: document }))
+    complete(attachments[0])
+    await flushPromises()
+    expect(view.get('.upload-chip img').attributes('src')).toBe('/api/assets/clipboard-image')
+    await view.get('form').trigger('submit')
+    expect(view.emitted('send')?.[0].slice(0, 2)).toEqual(['keep this text', attachments])
+  })
+
+  it('accepts clipboard items with only Asset support and retains the originating draft', async () => {
+    const view = composer()
+    useRuntime().assets = { available: true, maxBytes: 1000 }
+    let complete!: (value: unknown) => void
+    vi.mocked(request).mockReturnValueOnce(new Promise(resolve => { complete = resolve }))
+    pasteFiles(view, [new File(['image'], 'image.png')], true)
+    await view.setProps({ sessionKey: 'other' })
+    complete({ kind: 'image', name: 'image.png', assetId: 'image-one', size: 5 })
+    await flushPromises()
+    expect(view.find('.upload-chip').exists()).toBe(false)
+    await view.setProps({ sessionKey: 'new' })
+    expect(view.get('.upload-chip').text()).toContain('image.png')
+    expect(view.get('button[type=submit]').attributes('disabled')).toBeUndefined()
+  })
+
+  it('cancels a removed upload without losing other pending files', async () => {
+    const view = composer()
+    useRuntime().files = { available: true, maxBytes: 1000 }
+    const completions: ((value: unknown) => void)[] = []
+    vi.mocked(request).mockImplementation(() => new Promise(resolve => { completions.push(resolve) }))
+    pasteFiles(view, [new File(['a'], 'a.txt'), new File(['b'], 'b.txt')])
+    await view.vm.$nextTick()
+    const signal = vi.mocked(request).mock.calls[0]![1]!.signal!
+    await view.findAll('.upload-chip button')[0]!.trigger('click')
+    expect(signal.aborted).toBe(true)
+    completions[0]!({ kind: 'file', name: 'a.txt', path: '/uploads/a.txt' })
+    completions[1]!({ kind: 'file', name: 'b.txt', path: '/uploads/b.txt' })
+    await flushPromises()
+    await view.get('form').trigger('submit')
+    expect(view.emitted('send')?.[0][1]).toEqual([{ kind: 'file', name: 'b.txt', path: '/uploads/b.txt' }])
+  })
+
+  it('reports oversize and failed uploads while preserving the text draft', async () => {
+    const view = composer()
+    const runtime = useRuntime()
+    runtime.files = { available: true, maxBytes: 3 }
+    vi.mocked(request).mockRejectedValueOnce(new Error('Upload failed'))
+    await view.get('textarea').setValue('keep me')
+    pasteFiles(view, [new File(['large'], 'large.txt'), new File(['ok'], 'small.txt')])
+    await flushPromises()
+    expect(request).toHaveBeenCalledTimes(1)
+    expect(runtime.notices.map(item => item.message)).toEqual([
+      i18n.global.t('attachmentTooLarge', { name: 'large.txt', size: '1 KB' }), 'small.txt: Upload failed',
+    ])
+    expect(view.find('.upload-chip').exists()).toBe(false)
+    expect(view.get('textarea').element.value).toBe('keep me')
+    expect(view.get('button[type=submit]').attributes('disabled')).toBeUndefined()
+  })
+
+  it.each(['archived', 'disabled', 'sending'] as const)('blocks file paste when %s', async prop => {
+    const view = composer()
+    useRuntime().files = { available: true, maxBytes: 1000 }
+    await view.setProps({ [prop]: true })
+    expect(pasteFiles(view, [new File(['file'], 'file.txt')]).defaultPrevented).toBe(true)
+    expect(request).not.toHaveBeenCalled()
+  })
+
+  it('reports unavailable attachments without uploading', () => {
+    const view = composer()
+    pasteFiles(view, [new File(['file'], 'file.txt')])
+    expect(request).not.toHaveBeenCalled()
+    expect(useRuntime().notices[0]?.message).toBe(i18n.global.t('assetUnavailable'))
+  })
+
+  it('aborts uploads from inactive drafts when unmounted', async () => {
+    const view = composer()
+    useRuntime().files = { available: true, maxBytes: 1000 }
+    vi.mocked(request).mockReturnValueOnce(new Promise(() => {}))
+    pasteFiles(view, [new File(['file'], 'file.txt')])
+    const signal = vi.mocked(request).mock.calls[0]![1]!.signal!
+    await view.setProps({ sessionKey: 'other' })
+    view.unmount()
+    expect(signal.aborted).toBe(true)
+    expect(useRuntime().notices).toEqual([])
+  })
+})
 
 describe('composer drafts', () => {
   it('selects a local file and sends it without creating a browser upload', async () => {
