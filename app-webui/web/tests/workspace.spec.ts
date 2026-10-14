@@ -379,6 +379,37 @@ test('multi-round reasoning, commentary, tools and interactions append in order'
   await expect(history).toHaveText(["I'll inspect the workspace first.", 'workspace.inspect', "The first check is complete. I'll verify the result.", 'workspace.verify', 'Your workspace is ready. We can take the next step together.'])
 })
 
+test('tool output preserves whitespace live, in history, and after reload', async ({ page }) => {
+  const output = 'stdout:\n  第一行  with spaces\n\n\tsecond line\n<b>literal</b> \\n\n' + 'x'.repeat(200) + '\n'
+  await ready(page)
+  await send(page, 'timeline multiline')
+  await expect(page.getByText('Continue with verification?', { exact: true })).toBeVisible()
+
+  const card = page.locator('.tool-card').filter({ hasText: 'workspace.inspect' })
+  const result = card.locator('.tool-body > p')
+  const checkOutput = async () => {
+    await card.locator('summary').click()
+    await expect(result).toBeVisible()
+    // toHaveText normalizes whitespace; compare the unmodified DOM text instead.
+    expect(await result.textContent()).toBe(output)
+    await expect(result).toHaveCSS('white-space', 'pre-wrap')
+    await expect(result).toHaveCSS('overflow-wrap', 'anywhere')
+    expect(await result.innerText()).toBe(output)
+    await expect(result.locator('b')).toHaveCount(0)
+  }
+  await checkOutput()
+  await page.getByRole('textbox', { name: 'Answer', exact: true }).fill('Continue')
+  await page.getByRole('button', { name: 'Submit response', exact: true }).click()
+  await expect(page.locator('.message-assistant[data-message-index]').getByText('Your workspace is ready. We can take the next step together.', { exact: true })).toBeVisible()
+  await checkOutput()
+
+  await page.reload()
+  await checkOutput()
+  await page.setViewportSize({ width: 390, height: 740 })
+  expect(await result.evaluate(element => element.scrollWidth)).toBeLessThanOrEqual(await result.evaluate(element => element.clientWidth))
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390)
+})
+
 test('tool call visibility is a persistent conversation preference', async ({ page }) => {
   await ready(page)
   await send(page, 'timeline approve')

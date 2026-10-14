@@ -33,3 +33,22 @@ func TestMultimodalHistoryPreservesOrderAndSources(t *testing.T) {
 		t.Fatal("content order or metadata changed")
 	}
 }
+
+func TestToolResultWhitespaceSurvivesJSONProjection(t *testing.T) {
+	text := "\nstdout:\n  第一行  with spaces\n\n\tsecond line\r\n" + `literal \n` + "\n"
+	messages := []model.Message{{Role: model.RoleTool, ToolCallID: "call", Content: content.FromText(text)}}
+	encoded, err := json.Marshal(Messages(messages))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded []Message
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if len(decoded) != 1 || decoded[0].Role != "tool" || decoded[0].ToolCallID != "call" || len(decoded[0].Content) != 1 {
+		t.Fatalf("unexpected tool result: %#v", decoded)
+	}
+	if got := decoded[0].Content[0].Text; got != text {
+		t.Fatalf("projected text=%q want=%q", got, text)
+	}
+}

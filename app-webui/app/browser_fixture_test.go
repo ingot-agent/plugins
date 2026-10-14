@@ -175,7 +175,11 @@ func (b *browserAgent) Stream(ctx context.Context, turn agent.Turn, handler agen
 			return result, err
 		}
 	}
-	emit(observation.ToolFinished{Status: observation.StatusSucceeded, Result: &tool.Result{Content: content.FromText("Workspace is ready.")}})
+	toolOutput := "Workspace is ready."
+	if strings.Contains(turn.Input, "multiline") {
+		toolOutput = "stdout:\n  第一行  with spaces\n\n\tsecond line\n" + `<b>literal</b> \n` + "\n" + strings.Repeat("x", 200) + "\n"
+	}
+	emit(observation.ToolFinished{Status: observation.StatusSucceeded, Result: &tool.Result{Content: content.FromText(toolOutput)}})
 	if strings.Contains(turn.Input, "tool-only") {
 		b.mu.Lock()
 		for index, names := range [][]string{{"edit_file", "shell_exec"}, {"edit_file"}, {"shell_exec"}} {
@@ -198,7 +202,7 @@ func (b *browserAgent) Stream(ctx context.Context, turn agent.Turn, handler agen
 		b.mu.Lock()
 		b.history[turn.SessionID] = append(b.history[turn.SessionID],
 			model.Message{Role: model.RoleAssistant, Content: content.FromText(commentary), ToolCalls: []tool.Call{call}},
-			model.Message{Role: model.RoleTool, ToolCallID: call.ID, Content: content.FromText("Workspace is ready.")})
+			model.Message{Role: model.RoleTool, ToolCallID: call.ID, Content: content.FromText(toolOutput)})
 		b.mu.Unlock()
 		correlation.ToolCallID = ""
 		emit(observation.RoundFinished{Status: observation.StatusSucceeded})
