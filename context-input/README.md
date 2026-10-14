@@ -72,13 +72,12 @@ agent.message records; this independent writer retains its existing semantics.
 
 ## Validation
 
-The writer and projector interfaces are published in SDK v0.2.16, pinned in
-`go.mod`. This branch also adapts tests to the unreleased variadic Store.Append
-contract. Validate with the matching local SDK workspace until coordinated
-versions are published.
+The module pins published SDK v0.2.19 for the writer/projector interfaces and
+variadic Store.Append contract. Validate independently without a local SDK
+workspace:
 
 ```powershell
-$env:GOWORK = 'D:\absolute\path\to\go.work'
+$env:GOWORK = 'off'
 go mod tidy -diff
 go vet ./...
 go test -race ./...

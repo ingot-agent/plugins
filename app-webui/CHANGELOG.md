@@ -10,7 +10,9 @@
 ### Changed
 
 - Retract failed model attempts, display retry status and retain retry state across reconnects without removing earlier output or tool activity.
-- Require published SDK v0.2.17 for retry events; standalone Go and browser checks no longer need a local SDK workspace.
+- Pin published SDK v0.2.19 and the matching agent-default test dependency at
+  commit f4095a4931d9. Standalone Go and browser checks use GOWORK=off without
+  sibling SDK/ABI checkouts or the obsolete agent-default v0.1.0 implementation.
 
 ### Added
 

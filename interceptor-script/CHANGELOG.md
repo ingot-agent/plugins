@@ -5,6 +5,7 @@ All notable changes to this plugin are documented in this file.
 ## Unreleased
 
 - Agent request projection now uses inputs with per-input text, paths and media attachments.
+- Pin published SDK v0.2.19 for Turn.Inputs so standalone CI needs no local SDK workspace.
 
 ### Changed
 

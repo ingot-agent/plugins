@@ -77,4 +77,4 @@ Web 命令 `/interceptor-script config` 对应 Group `interceptor-script`、Name
 
 返回 [插件文档索引](../docs/README.md)。
 
-Agent hook 仍包围整个 Turn，只在生命周期入口执行一次。`inputs` 是入口快照，Round 间新增输入由 Agent 队列接入，不重新触发 Turn hook。输入附件包含 `name`、`mime_type`、`size`、`path` 和可选 `media`；媒体仍沿用现有 content 投影。该分支需要本地 SDK，旧脚本需迁移原单条 input/attachments 字段。
+Agent hook 仍包围整个 Turn，只在生命周期入口执行一次。`inputs` 是入口快照，Round 间新增输入由 Agent 队列接入，不重新触发 Turn hook。输入附件包含 `name`、`mime_type`、`size`、`path` 和可选 `media`；媒体仍沿用现有 content 投影。本模块固定依赖已发布的 SDK v0.2.19，支持 `GOWORK=off` 独立验证；旧脚本需迁移原单条 input/attachments 字段。

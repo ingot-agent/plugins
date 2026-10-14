@@ -41,11 +41,11 @@ npm run test:e2e
 
 Playwright 启动两个真实 Go HTTP/SSE 服务（`17316` 流式、`17317` 模型 Complete），使用仅存在于 Go 测试代码中的确定性 SDK adapters，不访问模型、不需要凭据。覆盖会话生命周期、审批与自由文本、跨标签页同步、运行中完整历史边界、取消后的部分输出、附件历史、Operation、过期 cursor 和中英文/深色/移动布局。失败时保留 trace、截图及 HTML 报告。
 
-浏览器 fixture 使用真实 agent-default 调度与持久化逻辑，模型、工具和存储由测试适配器提供。本分支需要当前 SDK 与 Agent 的本地 workspace：
+浏览器 fixture 使用真实 agent-default 调度与持久化逻辑，模型、工具和存储由测试适配器提供。默认使用 `GOWORK=off`，从 `go.mod` 加载 SDK v0.2.19 和固定提交版本的 Agent，无需本地 SDK 或 ABI checkout。仅在验证跨插件的本地改动时使用工作区覆盖：
 
 `INGOT_WEBUI_FIXTURE_GOWORK=/absolute/path/to/go.work npm run test:e2e`
 
-workspace 应包含当前 SDK、ABI 和受影响插件。该环境变量只影响测试子进程。
+workspace 应包含需要覆盖的插件；只有同时修改 SDK 或 ABI 时才添加它们的本地替换。该环境变量只影响测试子进程。
 
 PowerShell 对应设置为 `$env:INGOT_WEBUI_FIXTURE_GOWORK = 'D:\absolute\path\go.work'`；测试结束后可用 `Remove-Item Env:INGOT_WEBUI_FIXTURE_GOWORK` 恢复默认。不要将本机路径提交进模块或 package.json。
 

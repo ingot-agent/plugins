@@ -24,7 +24,7 @@ including through checkpoint reuse. Checkpoint source digests account for that
 state; histories without Replay retain their existing digest representation.
 Summary prompts omit opaque state, and synthesized summary messages carry none.
 The local text estimator does not measure tokens hidden inside encrypted provider
-state. Replay support uses SDK v0.2.18; validate this module independently with
+state. This module pins SDK v0.2.19 for Replay and atomic batch Store.Append; validate independently with
 `GOWORK=off`.
 
 ## Context Snapshots

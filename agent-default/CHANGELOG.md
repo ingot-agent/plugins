@@ -17,8 +17,8 @@ All notable changes to this plugin are documented in this file.
   history reload and owned runtime/observation snapshots. Older Agents cannot
   consume new v2 records.
 
-Requires published SDK v0.2.18 for `model.Message.Replay`; validate with
-`GOWORK=off` against that exact dependency.
+Requires published SDK v0.2.19 for SendMessage, Turn.Inputs, runtime updates and
+atomic Store.Append; validate with `GOWORK=off` without sibling SDK/ABI checkouts.
 
 ### Changed
 

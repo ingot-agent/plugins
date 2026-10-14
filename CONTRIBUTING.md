@@ -61,7 +61,9 @@ exact form `./<plugin-directory>` and reference a current first-level plugin
 module. External paths, parent paths, nested paths, Core paths, and duplicate
 entries are rejected. CI and release checks continue to use `GOWORK=off`.
 
-For changes spanning unpublished SDK or ABI contracts, `go.work` also permits
+The committed workspace uses published SDK and ABI dependencies and does not
+require sibling checkouts. For local changes spanning unpublished SDK or ABI
+contracts, `go.work` also permits
 the following optional development replacements. They require matching sibling
 checkouts and do not replace the published requirements in plugin `go.mod` files:
 
@@ -76,9 +78,9 @@ After adding or changing replacements, run `ingot project resolve` from the
 same directory as `ingot up` to refresh an existing `plugins.lock`. A lock
 created before a replacement was added can still select the published module.
 Verify the lock's `replacements` entries point to the intended SDK/ABI checkouts.
-Use `GOWORK=auto` for local Go checks with this workspace. Release checks with
-`GOWORK=off` require the updated contracts to be published and the plugin
-requirements upgraded first.
+Use `GOWORK=auto` for local Go checks with this workspace. Remove development
+replacements before submitting a PR, and run the independent checks below using
+published dependencies. The Round-input contracts are published in SDK v0.2.19.
 
 ## Local checks
 

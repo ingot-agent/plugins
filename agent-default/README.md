@@ -103,8 +103,8 @@ New history uses `agent.message` v2, retaining opaque provider replay state and
 tool argument bytes exactly, including whitespace and JSON escape spelling.
 Version 1 records remain readable and are not rewritten; older Agent binaries
 cannot read new v2 records. Replay state survives tool rounds, reloads and snapshot
-cloning independently of visible content. Replay support uses SDK v0.2.18;
-validate this branch with the matching local SDK workspace; release checks require published SendMessage contracts.
+cloning independently of visible content. This module pins SDK v0.2.19 for
+Replay, SendMessage and atomic batch Store.Append; validate with `GOWORK=off`.
 
 The final allowed root round still advertises ordinary tools, but a returned tool
 call fails with `ErrMaxRounds` before that decision is committed. Child sessions retain their
@@ -168,10 +168,9 @@ and projection of non-agent records to it. Recognized invalid records fail with
 their Entry position; without a projector, non-agent entries remain opaque and
 are skipped. Neither wire formats nor envelopes are built into the Agent.
 
-This branch requires the matching local SDK and atomic batch Store. Use a
-separate workspace containing SDK and the plugins for development; published
-module pins must be updated together before release. Existing databases and
-agent.message version 1 need no migration.
+This module requires SDK v0.2.19 and a Store implementing atomic batch Append.
+Standalone checks use the published dependencies in go.mod and need no local
+SDK checkout. Existing databases and agent.message version 1 need no migration.
 
 
 An input persisted between a tool decision and its results is buffered only
