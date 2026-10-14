@@ -22,6 +22,8 @@ All notable changes to this plugin are documented in this file.
 
 ### Fixed
 
+- Ignore SSE `keepalive` heartbeats before, during, and after a terminal response
+  instead of aborting the stream with a protocol error.
 - Persist reasoning-effort selections submitted by a host as a MultiChoice
   value so `model-runtime` can expose the configured choices.
 - Map the leading SDK system message to the Responses API `instructions`

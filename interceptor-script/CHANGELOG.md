@@ -4,6 +4,8 @@ All notable changes to this plugin are documented in this file.
 
 ## Unreleased
 
+- Agent request projection now uses inputs with per-input text, paths and media attachments.
+
 ### Changed
 
 - Dispatch through stable target interceptors so hook additions, removals,

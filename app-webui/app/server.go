@@ -29,8 +29,8 @@ import (
 // Dependencies contains capabilities consumed by the Web application.
 type Dependencies struct {
 	Backend           appbackend.Runtime
-	Agent             ingotabi.Optional[agent.Runtime]
-	Streaming         ingotabi.Optional[agent.StreamingRuntime]
+	Agent             agent.Runtime
+	AgentControl      agent.Control
 	History           agent.History
 	Store             session.Store
 	Sessions          session.Manager
@@ -38,7 +38,6 @@ type Dependencies struct {
 	Workspaces        workspace.Manager
 	WorkspaceResolver workspace.Resolver
 	Assets            ingotabi.Optional[asset.Store]
-	PluginInputs      ingotabi.Optional[agent.PluginInputWriter]
 	Operations        []operation.Operation
 	ModelSelection    ingotabi.Optional[modelselection.Controller]
 	Invocation        invocation.Invocation
@@ -59,7 +58,6 @@ type application struct {
 	modelSelection       modelselection.Controller
 	operationInvocations *operationRegistry
 	assets               asset.Store
-	pluginInputs         agent.PluginInputWriter
 	server               *http.Server
 	listener             net.Listener
 	serveDone            chan struct{}
@@ -92,7 +90,7 @@ func New(ctx context.Context, deps Dependencies) (Exports, ingotabi.Cleanup, err
 	if err != nil {
 		return Exports{}, nil, err
 	}
-	agentController, err := newAgentController(deps.Agent, deps.Streaming, deps.History)
+	agentController, err := newAgentController(deps.Agent, deps.AgentControl, deps.History)
 	if err != nil {
 		return Exports{}, nil, fmt.Errorf("construct app.backend app: %v: %w", err, appbackend.ErrInvalidConfig)
 	}
@@ -113,9 +111,7 @@ func New(ctx context.Context, deps Dependencies) (Exports, ingotabi.Cleanup, err
 	if deps.ModelSelection.Valid && isNil(deps.ModelSelection.Value) {
 		return Exports{}, nil, fmt.Errorf("nil model selection controller: %w", appbackend.ErrInvalidConfig)
 	}
-	if deps.PluginInputs.Valid && isNil(deps.PluginInputs.Value) {
-		return Exports{}, nil, fmt.Errorf("nil plugin input writer: %w", appbackend.ErrInvalidConfig)
-	}
+
 	if deps.Invocation.Mode() == invocation.ModeCheck {
 		return Exports{}, nil, nil
 	}
@@ -145,9 +141,7 @@ func New(ctx context.Context, deps Dependencies) (Exports, ingotabi.Cleanup, err
 	if deps.Assets.Valid {
 		instance.assets = deps.Assets.Value
 	}
-	if deps.PluginInputs.Valid {
-		instance.pluginInputs = deps.PluginInputs.Value
-	}
+
 	instance.server = &http.Server{
 		Handler:           instance.routes(),
 		BaseContext:       func(net.Listener) context.Context { return runCtx },

@@ -5,12 +5,13 @@ import { ArrowUp, LoaderCircle, MessageCircleQuestion, Square, Trash2, X } from 
 import { errorMessage } from '../api'
 import { useRuntime } from '../stores/runtime'
 import { readPreference, savePreference } from '../theme'
-import { displayMessage, isPluginContextMessage } from '../views/conversationDisplay'
+import { displayMessage, hasVisibleTurnContent, isPluginContextMessage, lifecycleStatusInputs } from '../views/conversationDisplay'
 import type { Followup, FollowupAnchor, Message } from '../protocol'
 import ContentParts from './ContentParts.vue'
 import TurnContent from './TurnContent.vue'
 import InteractionCard from './InteractionCard.vue'
 import Brand from './Brand.vue'
+import TurnQueue from './TurnQueue.vue'
 
 const props = defineProps<{ sourceSessionId: string; anchor: FollowupAnchor; note?: Followup }>()
 const emit = defineEmits<{ close: []; created: [item: Followup]; deleted: []; dragStart: [event: PointerEvent] }>()
@@ -24,7 +25,8 @@ const noteId = computed(() => props.note?.id || '')
 const history = computed(() => (runtime.histories[noteId.value] || []).slice(props.note?.baseMessageCount || 0)
   .map((message, index, messages) => displayMessage(message, messages[index - 1]))
   .filter(item => item.role !== 'tool' && !isPluginContextMessage(item)))
-const turns = computed(() => Object.values(runtime.turns).filter(turn => turn.sessionId === noteId.value && (!turn.reconciled || turn.status !== 'succeeded')))
+const turns = computed(() => Object.values(runtime.turns).filter(turn => turn.sessionId === noteId.value && turn.status !== 'queued' && turn.started !== false && (!turn.reconciled || turn.status !== 'succeeded')))
+const statusInputs = computed(() => lifecycleStatusInputs(turns.value))
 const running = computed(() => runtime.running(noteId.value))
 const requests = computed(() => Object.values(runtime.interactions).filter(item => item.scope?.agent?.sessionId === noteId.value))
 function visibleParts(message: Message, index: number) {
@@ -53,8 +55,9 @@ watch(question, () => { void nextTick(fitInput) }, { flush: 'post' })
 onMounted(fitInput)
 
 async function send() {
+  const sentQuestion = question.value
   const input = question.value.trim()
-  if (!input || sending.value || running.value.length || runtime.connection !== 'online') return
+  if (!input || sending.value || runtime.connection !== 'online') return
   sending.value = true
   try {
     let item = props.note
@@ -62,10 +65,10 @@ async function send() {
       item = await runtime.createFollowup(props.sourceSessionId, props.anchor)
       emit('created', item)
     }
-    const prompt = history.value.length || (runtime.histories[item.id] || []).length > item.baseMessageCount
+    const prompt = history.value.length || Object.values(runtime.turns).some(turn => turn.sessionId === item.id && (turn.started || turn.status === 'queued')) || (runtime.histories[item.id] || []).length > item.baseMessageCount
       ? input : t('followupContext', { quote: item.quote }) + '\n\n' + input
     await runtime.send(item.id, prompt, [])
-    question.value = ''
+    if (question.value === sentQuestion) question.value = ''
   } catch (error) { runtime.notify(errorMessage(error)) }
   finally { sending.value = false }
 }
@@ -104,15 +107,16 @@ function keydown(event: KeyboardEvent) {
       <div v-for="(message, index) in history" :key="index" class="followup-message" :class="'followup-' + message.role"><div v-if="message.role === 'assistant'" class="followup-byline"><Brand /><span>Ingot</span></div><ContentParts :parts="visibleParts(message, index)" /></div>
       <template v-for="turn in turns" :key="turn.id">
         <div v-if="runtime.optimistic[turn.id] && !isPluginContextMessage(runtime.optimistic[turn.id].message)" class="followup-message followup-user"><ContentParts :parts="visibleParts(runtime.optimistic[turn.id].message, history.length)" /></div>
-        <div class="followup-message followup-assistant"><div class="followup-byline"><Brand /><span>Ingot</span></div><TurnContent :turn="turn" :interactions="runtime.interactions" :historical-tool-ids="new Set()" :show-tool-calls="true" /><p v-if="turn.error" class="error-text">{{ turn.error.message }}</p></div>
+        <div v-if="statusInputs.has(turn.id) || turn.error || hasVisibleTurnContent(turn, true, runtime.interactions)" class="followup-message followup-assistant"><div class="followup-byline"><Brand /><span>Ingot</span></div><TurnContent :turn="turn" :interactions="runtime.interactions" :historical-tool-ids="new Set()" :show-tool-calls="true" :show-activity="statusInputs.has(turn.id)" /><p v-if="turn.error" class="error-text">{{ turn.error.message }}</p></div>
       </template>
       <InteractionCard v-for="request in requests" :key="request.id" :interaction="request" />
     </div>
+    <TurnQueue v-if="note" :session-id="note.id" />
     <div class="followup-compose">
       <div class="followup-compose-field">
         <textarea ref="input" v-model="question" rows="1" :placeholder="t('followupPlaceholder')" :aria-label="t('followupPlaceholder')" :disabled="runtime.connection !== 'online'" @keydown="keydown" />
         <button v-if="running.length" type="button" class="followup-send stopping-button" :aria-label="t('stop')" :title="t('stop')" @click="stop"><Square :size="15" /></button>
-        <button v-else type="button" class="followup-send" :aria-label="t('send')" :title="t('send')" :disabled="!question.trim() || sending || runtime.connection !== 'online'" @click="send"><LoaderCircle v-if="sending" class="spin" :size="16" /><ArrowUp v-else :size="17" /></button>
+        <button type="button" class="followup-send" :aria-label="t('send')" :title="t('send')" :disabled="!question.trim() || sending || runtime.connection !== 'online'" @click="send"><LoaderCircle v-if="sending" class="spin" :size="16" /><ArrowUp v-else :size="17" /></button>
       </div>
     </div>
   </section>

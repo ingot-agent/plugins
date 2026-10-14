@@ -62,8 +62,8 @@ type Config struct {
 	Temperature *float64 `toml:"temperature"`
 	MaxTokens   *int     `toml:"max_tokens"`
 	MaxRounds   int      `toml:"max_rounds"`
-	// Deprecated: retained for config compatibility and ignored. Use the
-	// Streaming export's Stream method to request incremental output.
+	// Deprecated: retained for config compatibility and ignored. SendMessage
+	// uses model streaming when the injected model runtime supports it.
 	Streaming bool `toml:"streaming"`
 }
 
@@ -75,6 +75,7 @@ type Dependencies struct {
 	Streaming         ingotabi.Optional[model.StreamingRuntime]
 	Tools             tool.Runtime
 	Store             session.Store
+	Sessions          session.Manager
 	Assets            asset.Store
 	Prompt            prompt.Renderer
 	PluginInputs      ingotabi.Optional[agent.PluginInputProjector]
@@ -85,10 +86,10 @@ type Dependencies struct {
 	Control           sessioncontrol.Control
 }
 
-// Exports contains independent turn, output streaming, and history capabilities.
+// Exports provides message submission, runtime control and persisted history.
 type Exports struct {
 	Runtime    agent.Runtime
-	Streaming  agent.StreamingRuntime
+	Control    agent.Control
 	History    agent.History
 	Operations []operation.Operation
 }
@@ -98,6 +99,7 @@ type runtime struct {
 	streaming         ingotabi.Optional[model.StreamingRuntime]
 	tools             tool.Runtime
 	store             session.Store
+	sessions          session.Manager
 	assets            asset.Store
 	prompt            prompt.Renderer
 	pluginInputs      agent.PluginInputProjector
@@ -112,6 +114,25 @@ type runtime struct {
 	dispatchCancel    context.CancelFunc
 	dispatchDone      chan struct{}
 	dispatchWG        sync.WaitGroup
+	queueMu           sync.Mutex
+	queues            map[session.ID]*messageQueue
+	submissions       map[string]*queuedMessage
+	requests          map[string]*queuedMessage
+	completedTurns    map[string]agent.TurnState
+	settled           []string
+	turnOrder         []string
+	changed           chan struct{}
+	updates           [runtimeUpdateRetention]agent.RuntimeUpdate
+	updateStart       int
+	updateCount       int
+	resetPending      bool
+	revision          uint64
+	sequence          uint64
+	identity          string
+	closed            bool
+	runCtx            context.Context
+	runCancel         context.CancelFunc
+	workers           sync.WaitGroup
 }
 
 // New loads this Plugin's own configuration from its state scope, validates
@@ -124,7 +145,7 @@ func New(ctx context.Context, deps Dependencies) (Exports, ingotabi.Cleanup, err
 	if err := ctx.Err(); err != nil {
 		return Exports{}, nil, err
 	}
-	if isNil(deps.Model) || isNil(deps.Tools) || isNil(deps.Store) || isNil(deps.Assets) || isNil(deps.Prompt) || isNil(deps.State) {
+	if isNil(deps.Model) || isNil(deps.Tools) || isNil(deps.Store) || isNil(deps.Sessions) || isNil(deps.Assets) || isNil(deps.Prompt) || isNil(deps.State) {
 		return Exports{}, nil, fmt.Errorf("required dependency is nil: %w", ErrInvalidConfig)
 	}
 	cfg, err := loadConfig(deps.State.Dir())
@@ -166,7 +187,7 @@ func New(ctx context.Context, deps Dependencies) (Exports, ingotabi.Cleanup, err
 		observationConsumer = discardObservation{}
 	}
 	instance := &runtime{
-		model: deps.Model, streaming: deps.Streaming, tools: deps.Tools, store: deps.Store, assets: deps.Assets,
+		model: deps.Model, streaming: deps.Streaming, tools: deps.Tools, store: deps.Store, sessions: deps.Sessions, assets: deps.Assets,
 		prompt: deps.Prompt, compactor: deps.Compactor, interceptors: interceptors,
 		roundInterceptors: roundInterceptors, observation: observationConsumer,
 		gates: newGateManager(), resolver: deps.Resolver,
@@ -175,7 +196,6 @@ func New(ctx context.Context, deps Dependencies) (Exports, ingotabi.Cleanup, err
 	if deps.PluginInputs.Valid {
 		instance.pluginInputs = deps.PluginInputs.Value
 	}
-	var cleanup ingotabi.Cleanup
 	if !isNil(deps.Control) {
 		if err := deps.Control.ValidateTools(deps.Tools.Definitions()); err != nil {
 			return Exports{}, nil, fmt.Errorf("validate child agent tools: %w", err)
@@ -184,9 +204,9 @@ func New(ctx context.Context, deps Dependencies) (Exports, ingotabi.Cleanup, err
 		dispatchCtx, cancel := context.WithCancel(context.Background())
 		instance.dispatchCancel = cancel
 		instance.startDispatcher(dispatchCtx)
-		cleanup = instance.cleanup
 	}
-	return Exports{Runtime: instance, Streaming: instance, History: instance, Operations: []operation.Operation{&setupOperation{scope: deps.State, runtime: instance}}}, cleanup, nil
+	instance.initMessages()
+	return Exports{Runtime: instance, Control: instance, History: instance, Operations: []operation.Operation{&setupOperation{scope: deps.State, runtime: instance}}}, instance.cleanup, nil
 }
 
 // Load returns a validated, caller-owned snapshot of one session's persisted
@@ -212,10 +232,6 @@ func (r *runtime) Load(ctx context.Context, sessionID session.ID) ([]model.Messa
 		return nil, err
 	}
 	return cloneMessages(messages), nil
-}
-
-func (r *runtime) Run(ctx context.Context, turn agent.Turn) (agent.Execution, error) {
-	return r.execute(ctx, turn, nil)
 }
 
 func validateAssistant(message model.Message) error {
@@ -271,7 +287,6 @@ func preDispatchToolResult(err error) string {
 }
 
 var _ agent.Runtime = (*runtime)(nil)
-var _ agent.StreamingRuntime = (*runtime)(nil)
 var _ agent.History = (*runtime)(nil)
 
 func copyFloat(value *float64) *float64 {

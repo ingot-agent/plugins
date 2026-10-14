@@ -3,9 +3,9 @@
 `app.backend` 是 Ingot 的浏览器应用，包含 Vue 3 + Tailwind CSS 前端及 HTTP/SSE 应用边界。插件目录名为 `app-webui`，Go 模块为 `github.com/ingot-agent/plugins/app-webui`，manifest ID 为 `app.backend`，配置命令 Group 为 `app-webui`；这些标识各有用途，不能互换。[manifest](ingot.plugin.toml) 声明兼容 Ingot `>=0.3.0 <0.4.0`。它是一个包含两个组件的复合插件：
 
 - `host`（包 `./host`）依赖 ABI `state.Scope`，持有进程内的 `EventHub`，导出 `appbackend.Runtime`、全局 `interaction.Channel`、显式作用域的 `interaction.ExecutionBinder` 和 `observation.Observer`。该组件不依赖 Agent，因此 Agent 可以使用这些能力而不会在组件图中形成环。
-- `app`（包 `./app`）是没有能力导出的图叶节点，持有 HTTP 服务器、Controller、运行中的 Turn，以及保留的 Operation 结果。它依赖 host 的 `appbackend.Runtime`、`agent.History`、`session.Store`、`session.Manager`、`session.Query`、`workspace.Manager`、`workspace.Resolver`，以及 ABI `invocation.Invocation`、`lifecycle.Controller` 和 `state.Scope`。相互独立且可选的 `agent.Runtime` 与 `agent.StreamingRuntime` 至少需要提供一个。`asset.Store`、`modelselection.Controller` 和 `agent.PluginInputWriter` 是可选依赖；writer 用于在启动 Agent 前写入文件通知。Operation 通过 `[]operation.Operation` 收集；应用自身另外注册 `/app-webui config`。
+- `app`（包 `./app`）是没有能力导出的图叶节点，持有 HTTP 服务器、Controller、Agent 状态的展示投影，以及保留的 Operation 结果。它依赖 host 的 `appbackend.Runtime`、`agent.History`、`session.Store`、`session.Manager`、`session.Query`、`workspace.Manager`、`workspace.Resolver`，以及 ABI `invocation.Invocation`、`lifecycle.Controller` 和 `state.Scope`。必须提供 `agent.Runtime` 和 `agent.Control`。`asset.Store` 与 `modelselection.Controller` 是可选依赖；文件路径和图片作为同一个 Input 提交给 Agent。Operation 通过 `[]operation.Operation` 收集；应用自身另外注册 `/app-webui config`。
 
-模块要求 Go 1.24.2，已发布的直接 SDK/ABI 版本由 [go.mod](go.mod) 固定，当前分别为 SDK `v0.2.16`、ABI `v0.1.0`。本分支的本地文件输入通过 SDK 已发布的通用 writer 接口调用 [context-input](../context-input/README.md)，由它统一校验并使用 `session.Store.Append` 写入，读取时统一格式化；Runtime 需组合该新插件、支持插件输入投影的 Agent 和收集 Contributor 的 Prompt。独立模块验证使用 `GOWORK=off`，不需要本地 SDK 替换。插件没有主程序，应由 Ingot Builder 组合成 Runtime Image。
+模块要求 Go 1.24.2。本分支使用尚未发布的 SendMessage/Control、Turn.Inputs 和原子批量 Append，需要组合当前本地 SDK、agent-default、session-sqlite 与 WebUI。go.mod 的已发布版本号不是本分支接口的发布声明；发布前需要统一升级版本。独立插件消息仍可使用 context.input。插件没有主程序，应由 Ingot Builder 组合成 Runtime Image。
 
 ## 启动 Web UI
 
@@ -47,10 +47,22 @@ ingot start web
 - 会话搜索、新建、重命名、归档/恢复、分叉与确认删除；正在执行时禁用生命周期变更。
 - 对话消息不显示 Ingot 图标/名称；实时执行仍展示状态徽标。工具调用显示开关保存在浏览器本地偏好中，刷新后也会应用到历史消息；隐藏纯工具消息时不影响最终回答。
 - Markdown、代码高亮/复制、折叠推理、工具调用卡片和独立执行详情；Turn、Round、Model、Tool 与 Session 累计用量来自公开 SDK 能力。
-- 流式输出及 Run-only 降级、停止执行、内联审批/自由输入、跨会话待处理请求抽屉。
+- 流式输出及模型 Complete 降级、停止执行、内联审批/自由输入、跨会话待处理请求抽屉。
 - 通过宿主的系统文件选择器多选本地文件。图片按 Asset 能力预览并作为模型图片输入；其他文件以原路径通知模型，不复制文件。文件选择不依赖 Asset 能力。
 - Operation 简单表单与复杂 JSON 输入、服务端 Schema 校验、结果恢复和取消；JSON 模式保留提交的原始文本，不经数值转换。
 - 浅色/深色/跟随系统、中英文、桌面侧栏及移动端抽屉；最小适配宽度 360px。
+
+## 输入队列
+
+同一 Session 的输入由 Agent Runtime 统一调度。Web 只调用 SendMessage、读取权威状态并展示队列，不拥有执行 worker。工具等待审批、回答或子 Agent 结果期间仍保留阻塞；完整 Round 结束后，一次接入该边界已排队的全部输入，进入同一 Turn 的下一次模型请求。后来到达的输入等下一边界，轮数预算耗尽后保留给下一个 Turn。
+
+文件路径和图片随每次 Input 一起提交。接入时重新检查文件与媒体，文件通知和实际用户消息在一次 Store.Append 中相邻提交。有附件准备失败时，成功前缀照常接入，失败输入单独显示错误，后续队列暂停，当前 Turn 继续。显式恢复只消费剩余队列，不重试失败项。模型/存储/Prompt 失败或 Stop 结束当前 Turn 并暂停队列；暂停不会因 Turn 正常结束或队列为空而自动解除。
+
+POST /api/turns 继续接受 requestId，返回完整提交快照；它可能已经是终态。原有 id 表示提交回执，sdkTurnId 表示执行生命周期，多次提交可以共用同一个 sdkTurnId。SDK 保留最近 128 个完整生命周期及其输入、另有有界的独立终态回执；保留窗口内相同 requestId 和内容去重，不同内容返回 409。不承诺进程重启后的队列或无限期去重。
+
+GET /api/state 一次性读取排队、活动和保留终态、turnQueues 及进程 runtimeId。agent.runtime.updated 仅在结构变化时发送受影响的输入/Turn 和队列，带有 revision、顺序 blocks、规范结果、错误和 historyEnd。agent.runtime.progress 发送按 Session 合并的正文、推理和工具增量（50 ms/4 KiB），通过现有提交回执、TurnID 和 RoundIndex 定位；两类事件共用 revision，恢复快照覆盖的旧增量不会重复追加。首次订阅或超出 Agent 更新保留窗口时发送完整状态。刷新或重连按权威快照恢复；执行中的历史接口读取已捕获的完整边界，不等待整个 Turn。通知丢失不影响结算。关闭浏览器或 Web 订阅不取消执行，Agent cleanup 才负责取消并等待其 worker。
+
+PATCH /api/sessions/{id}/turn-queue 接受 {"paused":true|false}。DELETE /api/turns/{id} 移除 pending 或停止整个活动 Turn；?queued=true 仅删除未被认领项，已开始返回 409。划词追问仅在源 Turn 完整结束且没有运行/排队输入时创建。归档暂停队列，删除会话清除运行态。待发送项仅在内存中，不设置条数上限。
 
 ## 配置
 
@@ -88,6 +100,7 @@ Web 命令 `/app-webui config`（Group `app-webui`、Name `config`、输入 `{}`
 | 状态引导与事件 | `GET /api/state`、`GET /api/events` |
 | 模型选择 | `GET/PUT /api/model-selection` |
 | Turn | `POST /api/turns`、`DELETE /api/turns/{id}` |
+| 输入队列 | `PATCH /api/sessions/{id}/turn-queue` |
 | Session | `GET/POST /api/sessions`、`GET/PATCH/DELETE /api/sessions/{id}`、`POST /api/sessions/{id}/workspace` |
 | Session 生命周期 | `POST /api/sessions/{id}/archive`、`/restore`、`/fork` |
 | 原文追问 | `GET/POST /api/sessions/{id}/followups`、`DELETE /api/followups/{id}` |
@@ -119,17 +132,15 @@ Agent 不再保存独立的模型覆盖配置。契约保留在 WebUI 的公开�
 {"sessionId":"session-id","input":"检查报告","attachments":[{"kind":"file","path":"/absolute/path/to/report.pdf"}]}
 ```
 
-附件可省略；前端提交选择接口返回的 Attachment DTO，后端在发送时重新校验原路径并生成文件元数据。Turn 被接受时返回 `202` 与 `{"id":"invocation-id"}`；前端直接使用本次输入与所选文件列表显示临时消息，持久历史仍以 `agent.History` 为准。插件上下文消息保留在历史数据中，但不渲染为聊天气泡。外壳统一为 `<system source="plugin">...</system>`，不包含插件名；历史文件展示通过有序 JSON 文件列表和固定通知正文识别。取消使用该 invocation ID 而非 Session ID。响应 Interaction 使用 `{"values":{"answer":"回答文本"}}`，审批则使用 `{"values":{"decision":"allow"}}`；字段名以 pending request 声明为准，成功响应为 `204`。错误包装统一为 `{"error":{"code":"...","message":"..."}}`。
+附件可省略；前端提交选择接口返回的 Attachment DTO，文件选择时检查原路径并生成元数据，实际接入前由 Agent 复查。Turn 被接受时返回 `202` 与完整 invocation 投影，其中 `id` 是取消所用的 invocation ID。排队时显示在待发送列表中；开始执行后，前端使用输入与所选文件列表显示临时消息，持久历史仍以 `agent.History` 为准。插件上下文消息保留在历史数据中，但不渲染为聊天气泡。外壳统一为 `<system source="plugin">...</system>`，不包含插件名；历史文件展示通过有序 JSON 文件列表和固定通知正文识别。响应 Interaction 使用 `{"values":{"answer":"回答文本"}}`，审批则使用 `{"values":{"decision":"allow"}}`；字段名以 pending request 声明为准，成功响应为 `204`。错误包装统一为 `{"error":{"code":"...","message":"..."}}`。
 
 原文追问在点击追问时 fork 当前 Session 并保存便签，即使尚未发送问题也可收起后重开；后续 Turn 使用返回的便签 Session ID。创建请求包含 `messageIndex`、`partIndex`、`start`、`end` 和 `quote`；返回值还包含 `baseMessageCount`，供界面隐藏 fork 时复制的主对话历史。已保存的选区以橙色标注，直接点击原文即可重开便签；多个便签可同时作为可移动、可缩放的小窗显示，点击窗口会将它置顶。WebUI 将锚点、主会话 ID 和历史边界写入追问 Session 的 `Meta["app-webui"]`，不写入模型上下文，也不使用单独的 `inline-followups.json`；普通 Session 列表不会显示便签。删除主 Session 时会先删除其便签。旧 JSON 不迁移，旧追问 Session 可能作为普通会话显示。
 
 ## Turn 与流式输出
 
-存在流式能力时优先使用流式执行。`Stream` 返回错误后不会通过 `Run` 重试。运行中的 Turn 会在状态快照中暴露 `revision`、`output` 和 `reasoning`。输出和推理增量事件包含 `invocationId`、`revision` 与 `text`；客户端应忽略不大于当前投影 revision 的事件。
+Web 统一提交 SendMessage。模型流式调用由 Agent 选择；部分输出后失败不会重试。输入状态及顺序块由 agent.runtime.updated 校准，agent.runtime.progress 追加合并后的进度，客户端忽略旧 revision。Observation 保留为诊断事件，不再重复修改聊天中的工具进度。保留终态含规范 Result、Outcome、HistoryEnd 与错误，附件准备失败也通过该状态报告。流式文本不等同于规范最终结果或持久历史。
 
-Turn 完成后会从运行中注册表移除，完整历史仍以 `agent.History` 为准。
-
-`agent.invocation.started` 携带运行中 Turn 的快照。`agent.invocation.finished` 携带 `invocationId`、状态、耗时和失败信息，以及规范的 `result.output` 或错误详情。这些 Web 生命周期事件也能表示 SDK Turn 生命周期建立前发生的失败。
+Host 对诊断路径的 model/tool progress 也按 50 ms/4 KiB 合并相邻且 scope、part 或 channel 一致的增量，避免它们挤满同一 SSE 缓冲。开始、结束和 part 边界先刷新此前进度；合并事件使用最后一个源事件的 sequence/time，正文和二进制数据完整保留。诊断记录不再与模型原始 delta 一一对应。
 
 十种 `agent.turn/round/model/tool.*` 事件仅来自 Observation，并保留 SDK correlation、sequence 和物化时间。需要将 `host` 导出的 Observer 接入 Observation Consumer 才会收到这些事件；后端本身不会创建 Consumer，也不会合成执行事实。Web invocation ID 与 SDK turn ID 始终是两个独立标识。
 
@@ -172,11 +183,7 @@ Token 卡片同时显示 `context-compact.session-context/<sessionId>` 的 `inpu
 
 路径由后端解析符号链接并规范为绝对路径，必须是现存的普通文件，大小不超过 `max_asset_bytes`。文件名、MIME 和大小由后端读取，不信任浏览器提交的同名字段。PNG、JPEG、GIF、WebP 在配置 Asset Store 时导入现有 Asset 机制并返回 `assetId`，用于图片预览及模型图片输入；没有 Asset Store 时只提供路径。其他格式（包括文档、音视频、SVG、AVIF）不读取正文或复制到插件目录，也不发送为供应商媒体输入。
 
-发送时，WebUI 为本次选择的所有文件生成一条 `app.backend` 插件输入，正文包含 JSON 文件列表及“以上是紧随其后的用户输入所上传的文件。”。完成文件、会话和工作目录校验后，HTTP app 调用 `agent.PluginInputWriter.Append`，由 `context.input` 校验、编码并通过普通 `session.Store.Append` 写入。通知写入成功后才启动 Agent，由 Agent 正常读取历史、保存用户输入并生成首次模型请求；后续轮次沿用这个上下文。通知写入失败时直接返回错误，不启动 Turn，也不自动重试。
-
-校验、Entry 格式、XML 外壳及来源系统说明均由 `context.input` 提供。WebUI 仅负责文件正文与追加时机，不依赖该插件的实现包。没有 writer 时不向界面声明文件选择可用，提交本地文件返回 `501`，不启动 Turn。通知文本校验在 `Append` 时进行；被拒绝时不启动 Agent，本次用户消息尚未保存。
-
-WebUI 正常流程中文件通知位于对应用户消息之前，两者是独立的 Append，不提供成对原子提交、失败后的自动重试或其他写入者之间的隔离。通知成功后、用户消息保存前中断，可能只留下通知记录；已提交的通知保留在历史中。这个顺序由 WebUI 的调用约束实现，SDK 没有额外的文件关联接口或历史分组格式。
+发送时 WebUI 将文件元数据、路径及图片 Media 放入同一个 Input。Agent 在实际接入前重新准备，生成文件通知和真实 user 消息，一次原子 Store.Append 保存为相邻的 agent.message。没有新增持久字段、消息分组 ID 或供应商私有 files 字段。独立插件写入只能落在这组之前或之后；WebUI 文件输入不再依赖 PluginInputWriter。
 
 发送后的临时消息直接使用文件选择器返回的文件列表；读取历史后，界面从持久通知中提取文件信息。两者均按选择顺序显示在所属用户消息中；纯文件发送显示附件，非图片暂仅显示图标、文件名和类型。上下文保留空用户消息，插件通知在主对话和追问窗口中均不渲染，发送中和刷新后遵循同一显示规则。原始历史和消息索引保持完整，重启及 Fork 保留上下文顺序。
 
@@ -236,9 +243,11 @@ GET /api/events?after=<cursor>
 
 请求的 cursor 已超出有界 replay 窗口时返回 `409`，客户端需要重新获取完整状态快照。
 
-前端每次重连都重新引导，不自动重发 Turn、Operation 或 Interaction 提交。历史加载与 SSE 独立：Agent 正在执行时，History 可能等待该 Turn 收尾，但审批、流式输出和取消仍可使用。输出与推理共享 revision，重叠回放不会重复追加。
+前端每次重连都重新引导，不自动重发输入、Operation 或 Interaction 提交。历史加载与 SSE 独立：运行中优先读取 Agent 缓存的完整历史边界，审批与普通输入使用各自入口；输出、推理和顺序块由 revision 去重。
 
-持久消息以 `agent.History` 为准；Session 累计 Token 从 Session 查询恢复。终态 Turn 执行指标、推理和 Observation 详情仅在当前连接的内存中可见，刷新/重连后不提供历史执行回放。Operation 结果按服务端保留策略恢复。未发送草稿和敏感输入不写入本地存储；只有语言、主题与面板偏好会保存。
+存在 running/queued 输入时，前端每 10 秒读取权威快照核对执行状态；页面恢复可见、获得焦点或网络恢复时也会核对。快照按 revision 合并，不推进 SSE cursor；若服务端 cursor 已领先或 runtimeId 改变，则重新连接并引导。状态查询限时 10 秒，SSE 连续无数据时按 `max(45 秒, 3 × 心跳间隔)` 超时重连；服务端通过 `X-Ingot-Heartbeat-Ms` 声明实际心跳间隔。核对不重新提交消息，空闲页面不定时查询快照。
+
+持久消息以 `agent.History` 为准；Session 累计 Token 从 Session 查询恢复。刷新后聊天区使用权威历史校准正文，并从保留的运行态恢复执行状态；过去的完整 Observation trace 不持久化。Operation 结果按服务端保留策略恢复。未发送草稿和敏感输入不写入本地存储；只有语言、主题与面板偏好会保存。
 
 ## 生命周期
 

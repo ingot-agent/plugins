@@ -23,11 +23,13 @@ type recordingStore struct {
 	err     error
 }
 
-func (s *recordingStore) Append(_ context.Context, id session.ID, entry session.Entry) error {
+func (s *recordingStore) Append(_ context.Context, id session.ID, entries ...session.Entry) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.ids = append(s.ids, id)
-	s.entries = append(s.entries, session.Entry{Kind: entry.Kind, Version: entry.Version, Payload: append([]byte(nil), entry.Payload...)})
+	for _, entry := range entries {
+		s.ids = append(s.ids, id)
+		s.entries = append(s.entries, session.Entry{Kind: entry.Kind, Version: entry.Version, Payload: append([]byte(nil), entry.Payload...)})
+	}
 	return s.err
 }
 

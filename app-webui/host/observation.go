@@ -1,8 +1,6 @@
 package hostcomponent
 
 import (
-	"reflect"
-
 	appbackend "github.com/ingot-agent/plugins/app-webui"
 	"github.com/ingot-agent/plugins/app-webui/internal/projection"
 	"github.com/ingot-agent/sdk/content"
@@ -10,17 +8,8 @@ import (
 	"github.com/ingot-agent/sdk/observation"
 )
 
-type observer struct{ events appbackend.EventSink }
-
-func (o *observer) Observe(event observation.Event) {
+func (o *observer) project(event observation.Event) {
 	detail := event.Detail
-	// SDK detail methods use value receivers, so both values and pointers are valid.
-	if value := reflect.ValueOf(detail); value.IsValid() && value.Kind() == reflect.Pointer {
-		if value.IsNil() {
-			return
-		}
-		detail, _ = value.Elem().Interface().(observation.Detail)
-	}
 	data := map[string]any{"sequence": event.Sequence, "time": event.Time}
 	agentScope := &appbackend.AgentScope{SessionID: string(event.Correlation.SessionID), TurnID: string(event.Correlation.TurnID)}
 	eventType := ""
@@ -34,7 +23,19 @@ func (o *observer) Observe(event observation.Event) {
 	switch d := detail.(type) {
 	case observation.TurnStarted:
 		eventType = "agent.turn.started"
-		data["turn"] = map[string]any{"sessionId": string(d.Turn.SessionID), "input": d.Turn.Input, "attachments": projection.Content(content.FromInput("", d.Turn.Attachments))}
+		inputs := make([]any, 0, len(d.Turn.Inputs))
+		for _, input := range d.Turn.Inputs {
+			attachments := make([]any, 0, len(input.Attachments))
+			for _, a := range input.Attachments {
+				value := map[string]any{"name": a.Name, "mimeType": a.MIMEType, "size": a.Size, "path": a.Path}
+				if a.Media != nil {
+					value["media"] = projection.Content(content.Content{content.AttachmentPart(*a.Media)})
+				}
+				attachments = append(attachments, value)
+			}
+			inputs = append(inputs, map[string]any{"text": input.Text, "attachments": attachments})
+		}
+		data["turn"] = map[string]any{"sessionId": string(d.Turn.SessionID), "inputs": inputs}
 	case observation.TurnFinished:
 		eventType = "agent.turn.finished"
 		terminal(d.Status, d.Error)

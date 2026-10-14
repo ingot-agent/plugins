@@ -63,11 +63,11 @@ func TestTurnRetainsResolvedModelDefaults(t *testing.T) {
 					t.Fatal(err)
 				}
 				for i := 0; i < 2; i++ {
-					turn := agent.Turn{SessionID: "s", Input: "hello"}
+					turn := agent.Turn{SessionID: "s", Inputs: []agent.Input{{Text: "hello"}}}
 					if streaming {
-						_, err = exports.Streaming.Stream(ctx, turn, func(agent.StreamEvent) error { return nil })
+						_, err = exports.Runtime.(*runtime).stream(ctx, turn, func(agent.StreamEvent) error { return nil })
 					} else {
-						_, err = exports.Runtime.Run(ctx, turn)
+						_, err = exports.Runtime.(*runtime).execute(ctx, turn, nil)
 					}
 					if err != nil {
 						t.Fatal(err)
@@ -151,7 +151,7 @@ func TestModelResolverFailureStopsTurn(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := exports.Runtime.Run(context.Background(), agent.Turn{SessionID: "s", Input: "hello"}); !errors.Is(err, want) {
+	if _, err := exports.Runtime.(*runtime).execute(context.Background(), agent.Turn{SessionID: "s", Inputs: []agent.Input{{Text: "hello"}}}, nil); !errors.Is(err, want) {
 		t.Fatalf("error = %v", err)
 	}
 	if len(models.requests) != 0 {

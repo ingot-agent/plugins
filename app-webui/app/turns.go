@@ -2,11 +2,10 @@ package appcomponent
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
-	"sort"
-	"sync"
-	"sync/atomic"
+	"strings"
 
 	appbackend "github.com/ingot-agent/plugins/app-webui"
 	"github.com/ingot-agent/plugins/app-webui/internal/projection"
@@ -15,164 +14,208 @@ import (
 	"github.com/ingot-agent/sdk/session"
 )
 
-type turnInvocation struct {
-	id        string
-	sessionID session.ID
-	cancel    context.CancelFunc
-	revision  uint64
-	reasoning string
-	output    string
-}
-
+// turnRegistry is a Web projection adapter. The Agent owns all queue state,
+// cancellation and scheduling; a disconnected Web watcher never stops execution.
 type turnRegistry struct {
-	mu      sync.Mutex
-	nextID  atomic.Uint64
-	appCtx  context.Context
-	agent   agentController
-	events  appbackend.EventSink
-	running map[string]*turnInvocation
-	closed  bool
-	done    chan struct{}
+	appCtx   context.Context
+	cancel   context.CancelFunc
+	agent    agentController
+	events   appbackend.EventSink
+	done     chan struct{}
+	identity string
 }
 
 func newTurnRegistry(ctx context.Context, controller agentController, events appbackend.EventSink) *turnRegistry {
-	return &turnRegistry{appCtx: ctx, agent: controller, events: events, running: make(map[string]*turnInvocation), done: make(chan struct{})}
+	ctx, cancel := context.WithCancel(ctx)
+	r := &turnRegistry{appCtx: ctx, cancel: cancel, agent: controller, events: events, done: make(chan struct{}), identity: rand.Text()}
+	go r.watch()
+	return r
 }
-
-func (r *turnRegistry) Start(turn agent.Turn) (string, error) {
-	turn.Attachments = content.CloneAttachments(turn.Attachments)
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.closed || r.appCtx.Err() != nil {
-		return "", appbackend.ErrApplicationClosed
-	}
-	id := fmt.Sprintf("turn-inv-%d", r.nextID.Add(1))
-	ctx, cancel := context.WithCancel(r.appCtx)
-	invocation := &turnInvocation{id: id, sessionID: turn.SessionID, cancel: cancel}
-	r.running[id] = invocation
-	if err := r.events.Publish(appbackend.Event{
-		Type:  "agent.invocation.started",
-		Scope: &appbackend.Scope{Agent: &appbackend.AgentScope{SessionID: string(turn.SessionID)}},
-		Data:  appbackend.TurnSnapshot{ID: id, SessionID: string(turn.SessionID)},
-	}); err != nil {
-		delete(r.running, id)
-		cancel()
-		return "", err
-	}
-	go r.run(ctx, invocation, turn)
-	return id, nil
-}
-
-func (r *turnRegistry) stop() {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.closed {
-		return
-	}
-	r.closed = true
-	for _, invocation := range r.running {
-		invocation.cancel()
-	}
-	if len(r.running) == 0 {
-		close(r.done)
-	}
-}
-
-func (r *turnRegistry) Cancel(id string) error {
-	r.mu.Lock()
-	invocation, ok := r.running[id]
-	r.mu.Unlock()
-	if !ok {
-		return appbackend.ErrTurnNotFound
-	}
-	invocation.cancel()
-	return nil
-}
-
-func (r *turnRegistry) Snapshots() []appbackend.TurnSnapshot {
-	r.mu.Lock()
-	result := make([]appbackend.TurnSnapshot, 0, len(r.running))
-	for _, invocation := range r.running {
-		result = append(result, appbackend.TurnSnapshot{
-			ID: invocation.id, SessionID: string(invocation.sessionID), Revision: invocation.revision,
-			Reasoning: invocation.reasoning, Output: invocation.output,
-		})
-	}
-	r.mu.Unlock()
-	sort.Slice(result, func(i, j int) bool { return result[i].ID < result[j].ID })
-	return result
-}
-
-func executionStatus(err error) string {
-	status := "succeeded"
-	if err != nil {
-		status = "failed"
-		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			status = "canceled"
+func (r *turnRegistry) stop() { r.cancel() }
+func (r *turnRegistry) watch() {
+	defer close(r.done)
+	var revision uint64
+	for {
+		update, err := r.agent.Watch(r.appCtx, revision)
+		if err != nil {
+			return
+		}
+		revision = update.Revision
+		// Publication is advisory. State/bootstrap reads still query the Agent.
+		if p := update.Progress; p != nil {
+			tools := make([]any, 0, len(p.Tools))
+			for _, delta := range p.Tools {
+				tools = append(tools, map[string]any{"toolCallId": delta.ToolCallID, "content": projection.Content(delta.Content)})
+			}
+			_ = r.events.Publish(appbackend.Event{Type: "agent.runtime.progress",
+				Scope: &appbackend.Scope{Agent: &appbackend.AgentScope{SessionID: string(p.SessionID), TurnID: p.TurnID, RoundIndex: &p.RoundIndex}},
+				Data:  map[string]any{"id": p.MessageID, "revision": revision, "outputDelta": p.OutputDelta, "reasoningDelta": p.ReasoningDelta, "tools": tools}})
+		} else {
+			_ = r.events.Publish(appbackend.Event{Type: "agent.runtime.updated", Data: map[string]any{"turns": projectSubmissions(update.RuntimeState), "turnQueues": projectQueues(update.RuntimeState)}})
 		}
 	}
-	return status
 }
-
-func (r *turnRegistry) run(ctx context.Context, invocation *turnInvocation, turn agent.Turn) {
-	var result agent.Execution
-	var err error
-	if r.agent.Capabilities().Stream {
-		result, err = r.agent.Stream(ctx, turn, func(event agent.StreamEvent) error { return r.delta(ctx, invocation, event) })
-	} else {
-		result, err = r.agent.Run(ctx, turn)
+func (r *turnRegistry) Submit(ctx context.Context, request agent.MessageRequest) (appbackend.TurnSnapshot, error) {
+	// Legacy clients may omit requestId. Supply the existing request key so the
+	// accepted submission can be located through the asynchronous state API.
+	if request.RequestID == "" {
+		request.RequestID = rand.Text()
 	}
-	status := executionStatus(err)
-	invocation.cancel()
-	data := map[string]any{"invocationId": invocation.id, "status": status, "outcome": projection.Outcome(result.Outcome)}
+	if err := r.agent.SendMessage(ctx, request); err != nil {
+		return appbackend.TurnSnapshot{}, err
+	}
+	state, err := r.agent.State(r.appCtx)
 	if err != nil {
-		_, detail := apiError(err)
-		data["error"] = detail
+		return appbackend.TurnSnapshot{}, err
 	}
-	if err == nil && result.Result != nil {
-		data["result"] = map[string]any{"output": projection.Content(result.Result.Output)}
+	for _, item := range projectSubmissions(state) {
+		if item.RequestID == request.RequestID {
+			return item, nil
+		}
 	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	delete(r.running, invocation.id)
-	_ = r.events.Publish(appbackend.Event{
-		Type:  "agent.invocation.finished",
-		Scope: &appbackend.Scope{Agent: &appbackend.AgentScope{SessionID: string(invocation.sessionID)}},
-		Data:  data,
-	})
-	if r.closed && len(r.running) == 0 {
-		close(r.done)
-	}
+	return appbackend.TurnSnapshot{}, agent.ErrMessageNotFound
 }
+func (r *turnRegistry) Snapshots() []appbackend.TurnSnapshot {
+	state, _ := r.agent.State(r.appCtx)
+	return projectSubmissions(state)
+}
+func (r *turnRegistry) QueueSnapshots() []appbackend.TurnQueueSnapshot {
+	state, _ := r.agent.State(r.appCtx)
+	return projectQueues(state)
+}
+func (r *turnRegistry) SetPaused(id session.ID, paused bool) (appbackend.TurnQueueSnapshot, error) {
+	if err := r.agent.SetPaused(r.appCtx, id, paused); err != nil {
+		return appbackend.TurnQueueSnapshot{}, err
+	}
+	for _, q := range r.QueueSnapshots() {
+		if q.SessionID == string(id) {
+			return q, nil
+		}
+	}
+	return appbackend.TurnQueueSnapshot{SessionID: string(id), Paused: paused}, nil
+}
+func (r *turnRegistry) Cancel(id string) error { return r.agent.CancelMessage(r.appCtx, id, false) }
+func (r *turnRegistry) CancelQueued(id string) error {
+	return r.agent.CancelMessage(r.appCtx, id, true)
+}
+func (r *turnRegistry) CachedHistory(id session.ID) ([]projection.Message, bool) {
+	messages, ok, err := r.agent.CachedHistory(r.appCtx, id)
+	if err != nil || !ok {
+		return nil, false
+	}
+	return projection.Messages(messages), true
+}
+func (r *turnRegistry) PauseForArchive(id session.ID) (bool, bool) {
+	for _, q := range r.QueueSnapshots() {
+		if q.SessionID == string(id) {
+			_, err := r.SetPaused(id, true)
+			return q.Paused, err == nil
+		}
+	}
+	return false, false
+}
+func (r *turnRegistry) PrepareDelete(id session.ID) error {
+	for _, q := range r.QueueSnapshots() {
+		if q.SessionID == string(id) && q.ActiveID != "" {
+			return errSessionRunning
+		}
+	}
+	_, err := r.SetPaused(id, true)
+	return err
+}
+func (r *turnRegistry) ForgetSession(id session.ID) { _ = r.agent.ForgetSession(r.appCtx, id) }
 
-func (r *turnRegistry) delta(ctx context.Context, invocation *turnInvocation, event agent.StreamEvent) error {
-	if err := ctx.Err(); err != nil {
-		return err
+func projectQueues(state agent.RuntimeState) []appbackend.TurnQueueSnapshot {
+	result := make([]appbackend.TurnQueueSnapshot, 0, len(state.Queues))
+	for _, q := range state.Queues {
+		result = append(result, appbackend.TurnQueueSnapshot{SessionID: string(q.SessionID), ActiveID: q.ActiveID, Paused: q.Paused, Revision: q.Revision})
 	}
-	eventType := ""
-	switch event.Kind {
-	case agent.StreamOutputDelta:
-		eventType = "agent.output.delta"
-	case agent.StreamReasoningDelta:
-		eventType = "agent.reasoning.delta"
-	default:
-		return fmt.Errorf("unknown agent stream event kind %d", event.Kind)
+	return result
+}
+func projectSubmissions(state agent.RuntimeState) []appbackend.TurnSnapshot {
+	result := make([]appbackend.TurnSnapshot, len(state.Messages))
+	byTurn := make(map[string][]int)
+	for i, m := range state.Messages {
+		result[i] = appbackend.TurnSnapshot{TurnReceipt: appbackend.TurnReceipt{ID: m.ID, SessionID: string(m.Request.SessionID), RequestID: m.Request.RequestID, Status: m.Status}, Revision: state.Revision, Sequence: m.Sequence, Started: m.Started, Input: m.Request.Input.Text, Attachments: projectInputAttachments(m.Request.Input), SDKTurnID: m.TurnID, Persisted: m.Persisted, Blocks: []any{}}
+		if m.Error != "" {
+			result[i].Error = &appbackend.ErrorDetail{Code: "input_failed", Message: m.Error}
+		}
+		result[i].HistoryEnd = m.HistoryEnd
+		if m.TurnID != "" && m.Persisted {
+			byTurn[m.TurnID] = append(byTurn[m.TurnID], i)
+		}
 	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.running[invocation.id] != invocation {
-		return appbackend.ErrTurnNotFound
+	for _, turn := range state.Turns {
+		indices := byTurn[turn.TurnID]
+		if len(indices) == 0 {
+			continue
+		}
+		current := 0
+		for _, block := range turn.Blocks {
+			if block.Kind == "input" {
+				current = block.InputIndex
+				continue
+			}
+			if current >= len(indices) {
+				continue
+			}
+			target := &result[indices[current]]
+			boundary := block.RoundIndex
+			if block.Reasoning != "" {
+				target.Reasoning += block.Reasoning
+				target.Blocks = append(target.Blocks, map[string]any{"id": fmt.Sprintf("round-%d-reasoning", boundary), "kind": "reasoning", "text": block.Reasoning, "boundary": boundary})
+			}
+			output := block.Output
+			var media []projection.Part
+			if len(block.Messages) > 0 {
+				var text strings.Builder
+				for _, part := range block.Messages[0].Content {
+					if part.Kind == content.KindText {
+						text.WriteString(part.Text)
+					} else {
+						media = projection.Content(block.Messages[0].Content)
+					}
+				}
+				output = text.String()
+			}
+			if output != "" || len(media) > 0 {
+				target.Output += output
+				target.Blocks = append(target.Blocks, map[string]any{"id": fmt.Sprintf("round-%d-output", boundary), "kind": "output", "text": output, "content": media, "boundary": boundary})
+			}
+			for _, item := range block.Tools {
+				target.Blocks = append(target.Blocks, map[string]any{"id": "tool-" + item.Call.ID, "kind": "tool", "call": projection.ToolCall(item.Call), "status": item.Status, "content": projection.Content(item.Content), "error": item.Error})
+			}
+		}
+		for _, index := range indices {
+			result[index].HistoryEnd = turn.HistoryEnd
+			result[index].Outcome = projection.Outcome(turn.Execution.Outcome)
+		}
+		if turn.Execution.Result != nil {
+			result[indices[len(indices)-1]].Result = map[string]any{"output": projection.Content(turn.Execution.Result.Output)}
+		}
 	}
-	revision := invocation.revision + 1
-	if err := r.events.Publish(appbackend.Event{Type: eventType, Scope: &appbackend.Scope{Agent: &appbackend.AgentScope{SessionID: string(invocation.sessionID)}},
-		Data: map[string]any{"invocationId": invocation.id, "revision": revision, "text": event.TextDelta}}); err != nil {
-		return err
+	return result
+}
+func projectInputAttachments(input agent.Input) []appbackend.Attachment {
+	result := make([]appbackend.Attachment, 0, len(input.Attachments))
+	for _, a := range input.Attachments {
+		value := appbackend.Attachment{Kind: "file", Name: a.Name, MIMEType: a.MIMEType, Size: uint64(a.Size), Path: a.Path}
+		if a.Media != nil && a.Media.Kind == content.KindImage {
+			value.Kind = "image"
+			if a.Media.Media.Source.Kind == content.SourceAsset {
+				value.AssetID = a.Media.Media.Source.Asset.ID
+			}
+		}
+		result = append(result, value)
 	}
-	invocation.revision = revision
-	if event.Kind == agent.StreamOutputDelta {
-		invocation.output += event.TextDelta
-	} else {
-		invocation.reasoning += event.TextDelta
+	return result
+}
+func executionStatus(err error) string {
+	if err == nil {
+		return "succeeded"
 	}
-	return nil
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return "canceled"
+	}
+	return "failed"
 }

@@ -4,6 +4,8 @@ All notable changes to this plugin are documented in this file.
 
 ## Unreleased
 
+- Append accepts atomic contiguous entry batches with one activity update and rollback on failure.
+
 ### Added
 
 - Add schema version 4 with an independent `sessions.totaltoken` INTEGER

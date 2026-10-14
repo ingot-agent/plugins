@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Moved scheduling and authoritative results to Agent SendMessage/Control; restored ordered multi-input progress across refresh and reconnect.
+
 ### Added
 
 - Select host-local files through `POST /api/files/select` using the native
@@ -17,8 +19,18 @@
 
 ### Changed
 
+- Consume coalesced `agent.runtime.progress` increments separately from affected
+  Turn/queue snapshots, sharing revision guards with bootstrap/reconciliation.
+  Diagnostic tool observations no longer double-append transcript progress.
+- Coalesce diagnostic model/tool progress too, preserving part/channel boundaries
+  and flushing before terminal events, so bursts do not evict SSE subscribers.
+- Read one Agent snapshot per `/api/state` response for consistent input/queue
+  revisions and to avoid duplicate full-state cloning.
+- Consume the current complete Turn snapshots and `agent.runtime.updated`
+  events directly; remove old invocation/delta event handling, aggregate-text
+  reconstruction and inferred SDK Turn identities from the frontend.
 - Display pending attachments directly from the selected file list and return
-  only the invocation ID when accepting a Turn.
+  the complete submission snapshot when accepting an input.
 - Use native file selection in the composer. Send only PNG/JPEG/GIF/WebP images
   as model media; route all selected file paths through an `app.backend` plugin
   notice. File selection remains available without an Asset Store. Clipboard and
@@ -39,6 +51,13 @@
 
 ### Fixed
 
+- Recover stuck running/queued displays by reconciling active input snapshots
+  every ten seconds and on page resume, using revisions without skipping SSE
+  events or resubmitting commands. Reconnect stalled streams with a heartbeat
+  timeout that follows the server interval.
+- Show lifecycle status, duration and running indicators once per SDK Turn,
+  including when several inputs join at a Round boundary or the page reloads.
+  Keep input content and rejected-input errors in their original order.
 - Display locally selected files as attachment rows on their user message,
   including file-only sends, pending input and refreshed history. Preserve mixed
   image/file order and existing image preview; local file rows show metadata only.

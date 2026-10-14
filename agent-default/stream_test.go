@@ -101,16 +101,16 @@ func TestRunStreamEquivalentAcrossToolRounds(t *testing.T) {
 			Store: store, Assets: newMemoryAssets(), Prompt: passthroughPrompt{},
 			Compactor: ingotabi.Some[contextwindow.Compactor](compactor), Interceptors: []agent.Interceptor{interceptor},
 		}))
-		if err != nil || cleanup != nil || exports.Runtime != exports.Streaming.(agent.Runtime) {
+		if err != nil || cleanup == nil || exports.Runtime != exports.Control.(agent.Runtime) {
 			t.Fatalf("exports=%v cleanup=%v err=%v", exports, cleanup != nil, err)
 		}
-		turn := agent.Turn{SessionID: "s", Input: "hello"}
+		turn := agent.Turn{SessionID: "s", Inputs: []agent.Input{{Text: "hello"}}}
 		var result agent.Execution
 		var events []agent.StreamEvent
 		if stream {
-			result, err = exports.Streaming.Stream(context.Background(), turn, func(event agent.StreamEvent) error { events = append(events, event); return nil })
+			result, err = exports.Runtime.(*runtime).stream(context.Background(), turn, func(event agent.StreamEvent) error { events = append(events, event); return nil })
 		} else {
-			result, err = exports.Runtime.Run(context.Background(), turn)
+			result, err = exports.Runtime.(*runtime).execute(context.Background(), turn, nil)
 		}
 		if err != nil {
 			t.Fatal(err)
@@ -179,7 +179,7 @@ func TestStreamingErrorsStopTurnAndReleaseSession(t *testing.T) {
 				t.Fatal(err)
 			}
 			count := 0
-			_, err = exports.Streaming.Stream(ctx, agent.Turn{SessionID: "s", Input: "hello"}, func(agent.StreamEvent) error {
+			_, err = exports.Runtime.(*runtime).stream(ctx, agent.Turn{SessionID: "s", Inputs: []agent.Input{{Text: "hello"}}}, func(agent.StreamEvent) error {
 				count++
 				if mode == "canceled" {
 					cancel()
@@ -200,7 +200,7 @@ func TestStreamingErrorsStopTurnAndReleaseSession(t *testing.T) {
 			}
 			resumeCtx, stop := context.WithTimeout(context.Background(), time.Second)
 			defer stop()
-			if _, err := exports.Runtime.Run(resumeCtx, agent.Turn{SessionID: "s", Input: "retry"}); err != nil {
+			if _, err := exports.Runtime.(*runtime).execute(resumeCtx, agent.Turn{SessionID: "s", Inputs: []agent.Input{{Text: "retry"}}}, nil); err != nil {
 				t.Fatalf("session gate not released: %v", err)
 			}
 		})
@@ -214,11 +214,11 @@ func TestStreamUsesCompleteWhenStreamingDependencyIsMissing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	turn := agent.Turn{SessionID: "s", Input: "hello"}
-	if _, err := exports.Streaming.Stream(context.Background(), turn, nil); err != agent.ErrNilStreamHandler {
+	turn := agent.Turn{SessionID: "s", Inputs: []agent.Input{{Text: "hello"}}}
+	if _, err := exports.Runtime.(*runtime).stream(context.Background(), turn, nil); err != agent.ErrNilStreamHandler {
 		t.Fatalf("nil handler: %v", err)
 	}
-	result, err := exports.Streaming.Stream(context.Background(), turn, func(agent.StreamEvent) error { return nil })
+	result, err := exports.Runtime.(*runtime).stream(context.Background(), turn, func(agent.StreamEvent) error { return nil })
 	if err != nil || textValue(executionOutput(result)) != "ok" {
 		t.Fatalf("result=%#v error=%v", result, err)
 	}
@@ -247,7 +247,7 @@ func TestStreamSharesSessionGateWithRunAndHistory(t *testing.T) {
 	defer cancel()
 	done := make(chan error, 1)
 	go func() {
-		_, err := exports.Streaming.Stream(ctx, agent.Turn{SessionID: "s", Input: "hello"}, func(agent.StreamEvent) error { return nil })
+		_, err := exports.Runtime.(*runtime).stream(ctx, agent.Turn{SessionID: "s", Inputs: []agent.Input{{Text: "hello"}}}, func(agent.StreamEvent) error { return nil })
 		done <- err
 	}()
 	select {
@@ -258,7 +258,7 @@ func TestStreamSharesSessionGateWithRunAndHistory(t *testing.T) {
 	for _, operation := range []string{"Run", "History"} {
 		waiting, stop := context.WithTimeout(context.Background(), 30*time.Millisecond)
 		if operation == "Run" {
-			_, err = exports.Runtime.Run(waiting, agent.Turn{SessionID: "s", Input: "wait"})
+			_, err = exports.Runtime.(*runtime).execute(waiting, agent.Turn{SessionID: "s", Inputs: []agent.Input{{Text: "wait"}}}, nil)
 		} else {
 			_, err = exports.History.Load(waiting, "s")
 		}
@@ -269,7 +269,7 @@ func TestStreamSharesSessionGateWithRunAndHistory(t *testing.T) {
 	}
 	otherCtx, stop := context.WithTimeout(context.Background(), time.Second)
 	defer stop()
-	if _, err := exports.Runtime.Run(otherCtx, agent.Turn{SessionID: "other", Input: "hello"}); err != nil {
+	if _, err := exports.Runtime.(*runtime).execute(otherCtx, agent.Turn{SessionID: "other", Inputs: []agent.Input{{Text: "hello"}}}, nil); err != nil {
 		t.Fatalf("other session blocked: %v", err)
 	}
 	cancel()
@@ -306,7 +306,7 @@ func TestAgentInterceptorCannotSwallowConsumerFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = exports.Streaming.Stream(context.Background(), agent.Turn{SessionID: "s", Input: "hello"}, func(agent.StreamEvent) error { return consumerErr })
+	_, err = exports.Runtime.(*runtime).stream(context.Background(), agent.Turn{SessionID: "s", Inputs: []agent.Input{{Text: "hello"}}}, func(agent.StreamEvent) error { return consumerErr })
 	if err != consumerErr || streamCalls != 1 || len(store.entries["s"]) != 1 {
 		t.Fatalf("error=%v calls=%d entries=%d", err, streamCalls, len(store.entries["s"]))
 	}

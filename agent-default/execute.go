@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"unicode/utf8"
 
 	"github.com/ingot-agent/sdk/agent"
@@ -12,7 +13,6 @@ import (
 	"github.com/ingot-agent/sdk/model"
 	"github.com/ingot-agent/sdk/observation"
 	"github.com/ingot-agent/sdk/pipeline"
-	"github.com/ingot-agent/sdk/prompt"
 	"github.com/ingot-agent/sdk/session"
 	"github.com/ingot-agent/sdk/tool"
 )
@@ -23,35 +23,44 @@ type turnConfig struct {
 	Config
 	selection     model.Request
 	rootSessionID session.ID
+	active        *activeExecution
 }
 
 func (r *runtime) execute(ctx context.Context, turn agent.Turn, handler agent.StreamHandler) (execution agent.Execution, err error) {
-	return r.executeFrame(ctx, turn, handler, nil)
+	return r.executeFrame(ctx, turn, handler, nil, nil)
 }
 
-func (r *runtime) executeFrame(ctx context.Context, turn agent.Turn, handler agent.StreamHandler, frame *turnFrame) (execution agent.Execution, err error) {
+func (r *runtime) executeFrame(ctx context.Context, turn agent.Turn, handler agent.StreamHandler, frame *turnFrame, run *activeExecution) (execution agent.Execution, err error) {
 	if ctx == nil {
 		return agent.Execution{}, fmt.Errorf("run agent: nil context: %w", ErrInvalidTurn)
 	}
 	if turn.RootSessionID == "" {
 		turn.RootSessionID = turn.SessionID
 	}
-	if turn.SessionID == "" || !utf8.ValidString(string(turn.SessionID)) || !utf8.ValidString(string(turn.RootSessionID)) || !utf8.ValidString(turn.Input) {
+	if turn.SessionID == "" || !utf8.ValidString(string(turn.SessionID)) || !utf8.ValidString(string(turn.RootSessionID)) || len(turn.Inputs) == 0 {
 		return agent.Execution{}, ErrInvalidTurn
 	}
-	if err := content.ValidateAttachments(turn.Attachments); err != nil {
-		return agent.Execution{}, fmt.Errorf("attachments: %w: %w", ErrInvalidTurn, err)
+	for _, input := range turn.Inputs {
+		if err := agent.ValidateInput(input); err != nil {
+			return agent.Execution{}, fmt.Errorf("input: %w: %w", ErrInvalidTurn, err)
+		}
 	}
 	if err := ctx.Err(); err != nil {
 		return agent.Execution{}, err
 	}
-	configuration := turnConfig{Config: *r.config.Load(), rootSessionID: turn.RootSessionID}
+	configuration := turnConfig{Config: *r.config.Load(), rootSessionID: turn.RootSessionID, active: run}
 	turnID, err := newTurnID()
 	if err != nil {
 		return agent.Execution{}, fmt.Errorf("generate turn id: %w", err)
 	}
 	ctx = observation.WithCorrelation(ctx, observation.Correlation{SessionID: turn.SessionID, TurnID: turnID})
+	if run != nil {
+		r.beginMessageTurn(run, string(turnID), turn)
+	}
 	recorder := newExecutionRecorder(r.observation)
+	if run != nil {
+		recorder.progress = func(ctx context.Context, detail observation.Detail) { r.toolProgress(run, ctx, detail) }
+	}
 	ctx = withExecutionRecorder(ctx, recorder)
 	recorder.emit(ctx, observation.TurnStarted{Turn: turn})
 	var result agent.Result
@@ -59,6 +68,9 @@ func (r *runtime) executeFrame(ctx context.Context, turn agent.Turn, handler age
 		if recovered := recover(); recovered != nil {
 			panicErr := fmt.Errorf("%v", recovered)
 			execution = recorder.finalize(nil, panicErr)
+			if run != nil {
+				r.settleMessageTurn(run, execution, panicErr)
+			}
 			recorder.emit(ctx, observation.TurnFinished{
 				Status: observation.StatusFailed, Outcome: cloneOutcome(execution.Outcome), Error: fmt.Sprint(recovered),
 			})
@@ -69,6 +81,9 @@ func (r *runtime) executeFrame(ctx context.Context, turn agent.Turn, handler age
 			canonical = &result
 		}
 		execution = recorder.finalize(canonical, err)
+		if run != nil {
+			r.settleMessageTurn(run, execution, err)
+		}
 		recorder.emit(ctx, observation.TurnFinished{
 			Status: terminalStatus(err), Result: cloneResult(execution.Result), Outcome: cloneOutcome(execution.Outcome), Error: errorText(err),
 		})
@@ -152,8 +167,7 @@ func (r *runtime) executeFrame(ctx context.Context, turn agent.Turn, handler age
 		return r.runTurn(callCtx, selected, handler, frame, configuration)
 	}
 	next := pipeline.Compose[agent.Turn, agent.Result](terminal, r.interceptors...)
-	owned := turn
-	owned.Attachments = content.CloneAttachments(turn.Attachments)
+	owned := agent.CloneTurn(turn)
 	result, err = next(ctx, owned)
 	if handlerErr != nil {
 		recorder.recordFailure(handlerErr, agent.FailureStreamConsumer, nil, "")
@@ -191,38 +205,46 @@ func (r *runtime) runTurn(ctx context.Context, turn agent.Turn, handler agent.St
 		executionRecorderFrom(ctx).recordFailure(err, agent.FailureRecovery, nil, "")
 		return agent.Result{}, err
 	}
-	if !utf8.ValidString(turn.Input) {
-		return agent.Result{}, ErrInvalidTurn
+	if configuration.active != nil {
+		r.cacheHistory(configuration.active.queue, history)
 	}
-	if err := content.ValidateAttachments(turn.Attachments); err != nil {
-		return agent.Result{}, fmt.Errorf("attachments: %w: %w", ErrInvalidTurn, err)
+	var prepared []preparedInput
+	if configuration.active != nil {
+		prepared = configuration.active.prepared
+		// A turn interceptor may rewrite the initial input. Re-prepare that value
+		// before any persistence, preserving the original submission receipt.
+		if len(turn.Inputs) != 1 {
+			return agent.Result{}, ErrInvalidTurn
+		}
+		if !reflect.DeepEqual(turn.Inputs[0], prepared[0].input) {
+			value, prepareErr := r.prepareInput(ctx, turn.Inputs[0])
+			if prepareErr != nil {
+				return agent.Result{}, prepareErr
+			}
+			value.submission = prepared[0].submission
+			prepared = []preparedInput{value}
+		}
+	} else {
+		for _, input := range turn.Inputs {
+			value, prepareErr := r.prepareInput(ctx, input)
+			if prepareErr != nil {
+				executionRecorderFrom(ctx).recordFailure(prepareErr, agent.FailureUserPersistence, nil, "")
+				return agent.Result{}, prepareErr
+			}
+			prepared = append(prepared, value)
+		}
 	}
-	input := content.FromInput(turn.Input, turn.Attachments)
-	user, err := r.appendMessage(ctx, turn.SessionID, model.Message{Role: model.RoleUser, Content: input})
+	messages, err := r.admitInputs(ctx, turn.SessionID, history, prepared, configuration.active)
 	if err != nil {
-		persistErr := fmt.Errorf("append user message: %w", err)
-		executionRecorderFrom(ctx).recordFailure(persistErr, agent.FailureUserPersistence, nil, "")
-		return agent.Result{}, persistErr
-	}
-	if err := ctx.Err(); err != nil {
-		executionRecorderFrom(ctx).recordFailure(err, agent.FailureUserPersistence, nil, "")
 		return agent.Result{}, err
 	}
-	messages, err := r.prompt.Render(ctx, prompt.Request{SessionID: turn.SessionID, Input: content.Clone(user.Content), History: cloneMessages(history)})
-	if err != nil {
-		promptErr := fmt.Errorf("render prompt: %w", err)
-		executionRecorderFrom(ctx).recordFailure(promptErr, agent.FailurePrompt, nil, "")
-		return agent.Result{}, promptErr
-	}
-	if err := ctx.Err(); err != nil {
-		executionRecorderFrom(ctx).recordFailure(err, agent.FailurePrompt, nil, "")
-		return agent.Result{}, err
-	}
-	messages = cloneMessages(messages)
 	definitions := cloneDefinitions(r.tools.Definitions())
 	for roundIndex := 0; roundIndex < configuration.MaxRounds; roundIndex++ {
 		lastAllowed := roundIndex == configuration.MaxRounds-1
 		roundDefinitions := definitionsForFrame(definitions, frame, lastAllowed)
+		if configuration.active != nil {
+			r.roundStarted(configuration.active, roundIndex)
+		}
 		result, err := r.observeRound(ctx, turn.SessionID, roundIndex, messages, roundDefinitions, handler, lastAllowed, frame, configuration)
 		if err != nil {
 			return agent.Result{}, err
@@ -231,6 +253,27 @@ func (r *runtime) runTurn(ctx context.Context, turn agent.Turn, handler agent.St
 		messages = append(messages, cloneMessages(result.ToolMessages)...)
 		if frame != nil && frame.confirmed != nil {
 			return agent.Result{Output: content.FromText(frame.confirmed.Result)}, nil
+		}
+		if configuration.active != nil {
+			r.roundFinished(configuration.active, result)
+			if !lastAllowed {
+				prepared, err := r.takePending(ctx, configuration.active)
+				if err != nil {
+					return agent.Result{}, err
+				}
+				if len(prepared) > 0 {
+					history, err := r.loadHistory(ctx, turn.SessionID)
+					if err != nil {
+						executionRecorderFrom(ctx).recordFailure(err, agent.FailureHistoryLoad, nil, "")
+						return agent.Result{}, err
+					}
+					messages, err = r.admitInputs(ctx, turn.SessionID, history, prepared, configuration.active)
+					if err != nil {
+						return agent.Result{}, err
+					}
+					continue
+				}
+			}
 		}
 		if len(result.Decision.ToolCalls) == 0 {
 			return agent.Result{Output: content.Clone(result.Decision.Content)}, nil
