@@ -32,6 +32,9 @@ All notable changes to this plugin are documented in this file.
 
 ### Fixed
 
+- Accept tool-result images in Complete and Stream requests. Keep text and call
+  IDs in tool messages, and attach labeled images as user messages after each
+  consecutive group of tool results without mutating SDK history.
 - Persist reasoning-effort selections submitted by a host as a MultiChoice
   value so `model-runtime` can expose the configured choices.
 

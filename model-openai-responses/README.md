@@ -85,14 +85,21 @@ publish a candidate. Direct file changes are loaded at reconstruction.
 ## Request and response mapping
 
 - The first system message maps to `instructions`; remaining system, user, and
-  assistant messages map to input messages. Function calls and text tool outputs
+  assistant messages map to input messages. Function calls and tool outputs
   map to `function_call` and `function_call_output` items using the SDK call ID.
 - Tool definitions map to function tools. SDK `MaxTokens` maps to
   `max_output_tokens`; temperature must be in `[0,2]`, and token limits positive.
 - Requests explicitly set `store: false`. Ingot session history supplies the
   conversation; the plugin does not use provider-side mutable conversation state.
-- User images accept HTTP/HTTPS URIs or inline/asset `image/*` content. Remote URIs
-  are passed through, while local bytes become base64 data URLs after size checks.
+- User and tool-result images accept HTTP/HTTPS URIs or inline/asset `image/*`
+  content. Remote URIs are passed through, while local bytes become base64 data
+  URLs after size checks.
+- Tool-result images (Unreleased) use the native
+  [`function_call_output.output` content array](https://developers.openai.com/api/reference/resources/responses/methods/create)
+  with ordered `input_text` and `input_image` parts and the original `call_id`.
+  Text-only and empty outputs remain strings. Complete and Stream use the same
+  mapping, without changing SDK/session history. The upstream model must support
+  images.
 - Completed response text and refusals become assistant text. Function calls are
   accumulated into the final SDK message. Missing usage stays unreported; supplied
   input/output/total counts must all be present and consistent.
@@ -154,7 +161,7 @@ key value is written to these diagnostics.
 
 `model.Message.Name` must be empty. `model.Request.Stop` must be nil: even a
 non-nil empty slice is rejected with `ErrInvalidRequest`. Audio, video, file input,
-images outside user messages, and non-text function output return
+system/assistant images, and tool output other than text/images return
 `content.ErrUnsupportedContent`. Local file URIs are not accepted.
 
 Built-in Responses tools, arbitrary response-format options, and provider-specific

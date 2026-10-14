@@ -45,6 +45,9 @@ Requires published SDK v0.2.18 for `model.Message.Replay`; validate with
 
 ### Fixed
 
+- Accept image-only and mixed text/image tool outputs in Complete and Stream
+  requests as native `function_call_output` content arrays, preserving content
+  order, call IDs, image validation, and the existing text-only wire format.
 - Ignore SSE `keepalive` heartbeats before, during, and after a terminal response
   instead of aborting the stream with a protocol error.
 - Persist reasoning-effort selections submitted by a host as a MultiChoice

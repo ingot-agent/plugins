@@ -296,7 +296,7 @@ func TestCompleteRejectsUnrepresentableSDKFields(t *testing.T) {
 	}{
 		{name: "stop", request: model.Request{Model: "m", Stop: []string{}}, want: openairesponses.ErrInvalidRequest},
 		{name: "message name", request: model.Request{Model: "m", Messages: []model.Message{{Role: model.RoleUser, Name: "named", Content: content.FromText("x")}}}, want: openairesponses.ErrInvalidRequest},
-		{name: "tool media", request: model.Request{Model: "m", Messages: []model.Message{{Role: model.RoleTool, ToolCallID: "call", Content: content.Content{content.Inline(content.KindImage, "image/png", "x", []byte("x"))}}}}, want: content.ErrUnsupportedContent},
+		{name: "tool audio", request: model.Request{Model: "m", Messages: []model.Message{{Role: model.RoleTool, ToolCallID: "call", Content: content.Content{content.Inline(content.KindAudio, "audio/wav", "x", []byte("x"))}}}}, want: content.ErrUnsupportedContent},
 		{name: "assistant image", request: model.Request{Model: "m", Messages: []model.Message{{Role: model.RoleAssistant, Content: content.Content{content.Inline(content.KindImage, "image/png", "x", []byte("x"))}}}}, want: content.ErrUnsupportedContent},
 	}
 	for _, test := range tests {
