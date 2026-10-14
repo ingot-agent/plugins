@@ -108,6 +108,48 @@ response. Heartbeats may use an SSE event name with empty or JSON data, or a JSO
 and conflicting event names/payload types return protocol errors. Reasoning events
 are transient and do not become canonical message content.
 
+## Stateless history replay (Unreleased)
+
+Requests include `reasoning.encrypted_content` with `store:false`. Successful
+Complete and Stream results retain all supported output items in their original
+order in `Message.Replay`: reasoning, message boundaries and phase, function-call
+items, IDs and their original argument strings. Opaque reasoning stays outside
+visible `Content` and streaming text events.
+
+Unchanged messages from the same provider, requested model (including aliases),
+and endpoint replay that sequence. Unknown formats or different scopes use the
+ordinary message fields. If an interceptor edits text or calls, the ordinary
+fields take precedence over stale replay data. Malformed matching replay data
+returns `ErrInvalidRequest` before dispatch. Legacy history without Replay still
+works, but previously discarded reasoning, phases and boundaries cannot be
+reconstructed.
+
+Replay support uses SDK v0.2.18 and requires participating Agent, Prompt, Model
+Runtime and Compactor implementations to preserve the state. Validate this module
+independently with `GOWORK=off`. Replay fidelity does not itself guarantee upstream
+prompt-cache hit rates.
+
+## Session cache affinity (Unreleased)
+
+When the call context carries an observation Session ID, the adapter derives a
+stable 64-character cache key and sends it as `prompt_cache_key`, `session-id`,
+and `thread-id`. The same Session keeps its key across model rounds, retries,
+turns and process restarts; child Sessions have separate keys. The key hashes the
+opaque Session ID and does not include turn IDs, round counters or timestamps.
+Explicit `default_headers` values for either header remain authoritative.
+Unscoped provider calls omit the generated key and headers.
+
+These fields allow compatible gateways to keep related requests on a reusable
+cache route. They do not guarantee an OpenAI cache hit, and modern OpenAI models
+handle cache routing automatically. Request content and tool definitions must
+still preserve their prefixes. This adapter does not impersonate a Codex client.
+
+Request-start diagnostics include `cache_session_key_present`. Successful
+Complete and Stream diagnostics include `input_tokens` and
+`cached_input_tokens` when reported by the provider. A missing cache count stays
+absent, rather than being reported as zero. No prompt text, replay state or cache
+key value is written to these diagnostics.
+
 ## Explicit limitations
 
 `model.Message.Name` must be empty. `model.Request.Stop` must be nil: even a
@@ -115,11 +157,9 @@ non-nil empty slice is rejected with `ErrInvalidRequest`. Audio, video, file inp
 images outside user messages, and non-text function output return
 `content.ErrUnsupportedContent`. Local file URIs are not accepted.
 
-The SDK does not retain opaque Responses reasoning output items for later replay.
-Models requiring those items alongside subsequent function outputs therefore need
-additional typed SDK support. Built-in Responses tools, arbitrary response-format
-options, and provider-specific reasoning controls are not represented by this
-adapter's request mapping.
+Built-in Responses tools, arbitrary response-format options, and provider-specific
+reasoning controls beyond effort and encrypted-state inclusion are not represented
+by this adapter's request mapping.
 
 The current [context compactor](../context-compact/README.md) sends nil `Stop`
 for summary requests, so this specific request-shape incompatibility is resolved.
@@ -131,6 +171,60 @@ redacted in the explicitly sanitized error paths; this is not universal redactio
 of custom-header secrets or provider content. There are no automatic retries or
 plugin-specific overall request deadlines. Cancellation follows the caller
 context and closes open response/asset bodies.
+
+## Request diagnostics
+
+Each validated complete or streaming attempt writes structured `log/slog`
+records at request start, receipt of HTTP response headers, and completion.
+Start/headers/success use INFO; failures use WARN. The default logger writes to
+stderr. A fresh local `call_id` groups the records; available observation
+`session_id`, `turn_id`, and `round` link attempts to the Agent execution.
+
+Diagnostics include provider/model/effort, endpoint **host only**, Go version,
+message/tool counts, encoded request and response byte counts, caller deadline,
+HTTP status/protocol, `X-Request-Id` (falling back to `Request-Id`), `Cf-Ray`,
+and the response ID learned from SSE events. Standard Go transports additionally
+report DNS/connect/TLS/write/first-byte timing, negotiated TLS ALPN, connection
+reuse and its idle age. Custom `httpx.Client` implementations may omit tracing.
+Phase timings are milliseconds since attempt start. Trace callbacks can occur
+more than once during dialing or transport retries; the latest value is retained.
+
+Stream summaries include parsed event/comment/keepalive counts, delivered SDK
+event count, the last SSE event type, first-event timing, last-event gap, and
+time since the last parsed event/body read. These are local observations: body
+buffering and consumer callbacks can affect timing. No per-delta log is emitted.
+
+Failure `failure_origin` distinguishes `provider_response` (a failed response
+object or SSE error), `local_transport_request`, `local_transport_read`,
+`http_status`, `adapter_protocol`, `response_limit`, `consumer`, and `context`.
+Preparation failures after validation are labeled `request_preparation`.
+Typed provider status/code, error-chain types, network errno/timeout, and known
+Go HTTP/2 stream/GOAWAY IDs and protocol codes are recorded when available.
+`adapter_retryable` is only the existing adapter hint, not evidence of an actual
+retry; `stream_reset_required` reports whether any SDK event was delivered and must
+be retracted before replay.
+Neither HTTP negotiation nor retry behavior is changed by diagnostics.
+
+Request/response bodies, prompts, output/tool arguments, arbitrary error messages,
+HTTP headers other than the listed IDs, and GOAWAY debug data are omitted.
+Logged metadata is bounded and has control characters removed; configured API
+keys, organization/project values, and custom-header values are redacted there.
+Metadata still contains operational identifiers, not an anonymized trace.
+
+To retain logs while reproducing a problem in a managed Runtime, rebuild with
+this checkout and start detached (replace `default` with your Runtime name):
+
+```sh
+ingot build default
+ingot start default -d
+ingot logs default -f
+```
+
+Run the build from the project whose recipe references this local plugin.
+If that Runtime is already running, restart it with `ingot restart default`
+after the build instead. Detached logs live under
+`<INGOT_HOME>/runtimes/<runtime>/logs/<process-id>.log`. Keep the records sharing
+the failed `call_id`, along with successful calls from the same reproduction.
 
 ## Source and checks
 
@@ -145,7 +239,21 @@ endpoints. See [CONTRIBUTING](../CONTRIBUTING.md) for workspace instructions.
 
 The adapter marks dispatch/response-read network interruptions and HTTP 408,
 429, 500, 502, 503, and 504 as retryable for callers that support retries.
-It parses `Retry-After` (seconds or HTTP-date) as a bounded delay hint. Invalid
-requests, decoding errors, and cancellation are not marked. In streaming mode,
-the caller must additionally check that no events were delivered before replay.
+It parses `Retry-After` (seconds or HTTP-date) as a delay hint bounded to five
+minutes; ModelRuntime applies its configured wait cap (30 seconds by default). Invalid
+requests, decoding errors, and cancellation are not marked. EOF before the required
+stream terminator is reported as a retryable `io.ErrUnexpectedEOF`. Known Go
+HTTP/2 stream/GOAWAY transport errors are retryable for INTERNAL_ERROR,
+REFUSED_STREAM, CANCEL and ENHANCE_YOUR_CALM (also NO_ERROR for GOAWAY); other
+codes are not marked. Caller cancellation always takes precedence. A caller
+replaying a partial stream must retract the failed attempt's provisional output
+before accepting new progress; these adapters never replay requests themselves.
 A retry may still incur duplicate provider charges.
+
+Responses errors with status `failed` are also retryable for these explicit codes:
+`server_error`, `internal_server_error`, `rate_limit_exceeded`, `too_many_requests`,
+`overloaded`, `overloaded_error`, `service_unavailable`, `temporarily_unavailable`,
+`upstream_http2_stream_error`, `upstream_connect_error`, `upstream_timeout`, and
+`request_timeout`. This applies to complete responses, `response.failed` and SSE
+`error` events. Unknown codes, quota/authentication/validation errors and provider
+cancellation are not retried.

@@ -160,6 +160,10 @@ func projectSubmissions(state agent.RuntimeState) []appbackend.TurnSnapshot {
 				continue
 			}
 			target := &result[indices[current]]
+			target.Retry = nil
+			if block.Retry != nil && turn.Status == "running" {
+				target.Retry = &appbackend.TurnRetry{Attempt: block.Retry.Attempt, DelayMS: block.Retry.DelayMS}
+			}
 			boundary := block.RoundIndex
 			if block.Reasoning != "" {
 				target.Reasoning += block.Reasoning

@@ -14,7 +14,7 @@ func (t *tree) Contribute(ctx context.Context, request prompt.Request) ([]prompt
 	if ctx == nil {
 		return nil, context.Canceled
 	}
-	if !t.config.enabled || request.SessionID == "" {
+	if t.repository == nil || request.SessionID == "" {
 		return nil, nil
 	}
 	record, err := t.repository.GetChildSession(ctx, request.SessionID)
@@ -23,6 +23,9 @@ func (t *tree) Contribute(ctx context.Context, request prompt.Request) ([]prompt
 	}
 	blocks := []prompt.Block{{Name: "Child Agent Management", Content: content.FromText(childManagementPrompt)}}
 	if record.Agent.Kind != agent.ChildSessionKind {
+		if !t.config.Load().enabled {
+			return nil, nil
+		}
 		return blocks, nil
 	}
 	return append(blocks, prompt.Block{Name: "Child Agent", Content: content.FromText(record.Agent.Definition.SystemPrompt)}), nil

@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, ref, useId, watch } from 'vue'
+import { computed, provide, ref, useId, watch } from 'vue'
+import { fileContextKey } from '../filePreview'
 import { Check, CircleCheck, CircleX, LoaderCircle, Square, SlidersHorizontal } from 'lucide-vue-next'
 import { useI18n } from 'vue-i18n'
 import type { Operation } from '../protocol'
@@ -30,6 +31,7 @@ const formState = ref({ busy: false, disabled: true })
 const activeDepth = ref(0)
 const invocationId = computed(() => props.invocationId || localInvocationId.value)
 const invocation = computed(() => invocationId.value ? runtime.operationInvocations[invocationId.value] : undefined)
+provide(fileContextKey, computed(() => ({ sessionId: invocation.value?.sessionId || props.sessionId })))
 const interactions = computed(() => Object.values(runtime.interactions).filter(item => item.scope?.operation?.invocationId === invocationId.value))
 const states = computed(() => Object.values(runtime.interactionStates).filter(item => item.scope?.operation?.invocationId === invocationId.value))
 const command = computed(() => props.operation ? `/${props.operation.group} ${props.operation.name}` : '')

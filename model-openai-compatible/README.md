@@ -139,7 +139,13 @@ See [CONTRIBUTING](../CONTRIBUTING.md) for workspace setup.
 
 The adapter marks dispatch/response-read network interruptions and HTTP 408,
 429, 500, 502, 503, and 504 as retryable for callers that support retries.
-It parses `Retry-After` (seconds or HTTP-date) as a bounded delay hint. Invalid
-requests, decoding errors, and cancellation are not marked. In streaming mode,
-the caller must additionally check that no events were delivered before replay.
+It parses `Retry-After` (seconds or HTTP-date) as a delay hint bounded to five
+minutes; ModelRuntime applies its configured wait cap (30 seconds by default). Invalid
+requests, decoding errors, and cancellation are not marked. EOF before the required
+stream terminator is reported as a retryable `io.ErrUnexpectedEOF`. Known Go
+HTTP/2 stream/GOAWAY transport errors are retryable for INTERNAL_ERROR,
+REFUSED_STREAM, CANCEL and ENHANCE_YOUR_CALM (also NO_ERROR for GOAWAY); other
+codes are not marked. Caller cancellation always takes precedence. A caller
+replaying a partial stream must retract the failed attempt's provisional output
+before accepting new progress; these adapters never replay requests themselves.
 A retry may still incur duplicate provider charges.

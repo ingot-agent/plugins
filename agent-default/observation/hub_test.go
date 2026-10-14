@@ -28,6 +28,7 @@ func TestHubSequencesClonesAndIsolatesObservers(t *testing.T) {
 			started.Turn.Inputs[0].Attachments[0].Media.Media.Source.Data[0] = 9
 		case observation.ModelStarted:
 			detail.Request.Messages[0].Content[0].Text = "mutated"
+			detail.Request.Messages[0].Replay.Data[0] = 'X'
 			detail.Request.Tools[0].InputSchema[0] = '['
 		case observation.ModelProgress:
 			detail.Progress.DataDelta[0] = 9
@@ -37,6 +38,7 @@ func TestHubSequencesClonesAndIsolatesObservers(t *testing.T) {
 			detail.Progress.Content[0].Media.Source.Data[0] = 9
 		case observation.ModelFinished:
 			detail.Response.Message.Content[0].Text = "mutated"
+			detail.Response.Message.Replay.Data[0] = 'X'
 		case observation.ToolFinished:
 			detail.Result.Content[0].Text = "mutated"
 		case observation.RoundFinished:
@@ -66,7 +68,7 @@ func TestHubSequencesClonesAndIsolatesObservers(t *testing.T) {
 	exports.Consumer.Emit(ctx, observation.TurnStarted{Turn: turn})
 	data[0] = 8
 	exports.Consumer.Emit(ctx, observation.ModelStarted{Request: model.Request{
-		Messages: []model.Message{{Role: model.RoleUser, Content: content.FromText("request")}},
+		Messages: []model.Message{{Role: model.RoleUser, Content: content.FromText("request"), Replay: &model.ReplayState{Format: "example.v1", Data: []byte("opaque")}}},
 		Tools:    []tool.Definition{{Name: "echo", InputSchema: json.RawMessage(`{}`)}},
 	}})
 	exports.Consumer.Emit(ctx, observation.ModelProgress{Progress: model.StreamEvent{DataDelta: []byte{1}}})
@@ -74,7 +76,7 @@ func TestHubSequencesClonesAndIsolatesObservers(t *testing.T) {
 	exports.Consumer.Emit(ctx, observation.ToolProgress{Progress: tool.Progress{Content: content.Content{
 		content.Inline(content.KindFile, "application/octet-stream", "progress", []byte{1}),
 	}}})
-	exports.Consumer.Emit(ctx, observation.ModelFinished{Status: observation.StatusSucceeded, Response: &model.Response{Message: model.Message{Content: content.FromText("response")}}})
+	exports.Consumer.Emit(ctx, observation.ModelFinished{Status: observation.StatusSucceeded, Response: &model.Response{Message: model.Message{Content: content.FromText("response"), Replay: &model.ReplayState{Format: "example.v1", Data: []byte("opaque")}}}})
 	exports.Consumer.Emit(ctx, observation.ToolFinished{Status: observation.StatusSucceeded, Result: &tool.Result{Content: content.FromText("result")}})
 	exports.Consumer.Emit(ctx, observation.RoundFinished{Status: observation.StatusSucceeded, Result: &agent.RoundResult{Decision: model.Message{Content: content.FromText("decision")}}})
 	roundIndex := 1
@@ -93,6 +95,9 @@ func TestHubSequencesClonesAndIsolatesObservers(t *testing.T) {
 	defer mu.Unlock()
 	if len(second) != 9 || second[0].Sequence != 1 || second[8].Sequence != 9 {
 		t.Fatalf("events=%#v", second)
+	}
+	if string(second[1].Detail.(observation.ModelStarted).Request.Messages[0].Replay.Data) != "opaque" || string(second[5].Detail.(observation.ModelFinished).Response.Message.Replay.Data) != "opaque" {
+		t.Fatal("observer mutated replay state")
 	}
 	started := second[0].Detail.(observation.TurnStarted)
 	if started.Turn.Inputs[0].Attachments[0].Media.Media.Source.Data[0] != 1 {

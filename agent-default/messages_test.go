@@ -282,12 +282,13 @@ func newMessageRuntime(t *testing.T, cfg Config, models model.Runtime, tools too
 
 func TestSendMessageAdmitsAllPendingAfterCompleteToolRound(t *testing.T) {
 	toolEntered, releaseTool := make(chan struct{}), make(chan struct{})
+	replay := &model.ReplayState{Format: "test.output.v1", Provider: "p", Model: "m", Data: []byte{0, 255, '<', '&'}}
 	requests := make(chan model.Request, 4)
 	var calls, hooks atomic.Int32
 	models := completeModelFunc(func(_ context.Context, request model.Request) (model.Response, error) {
 		requests <- cloneModelRequest(request)
 		if calls.Add(1) == 1 {
-			return model.Response{Message: model.Message{Role: model.RoleAssistant, ToolCalls: []tool.Call{{ID: "a-call", Name: "a", Arguments: json.RawMessage(`{}`)}}}}, nil
+			return model.Response{Message: model.Message{Role: model.RoleAssistant, Replay: replay, ToolCalls: []tool.Call{{ID: "a-call", Name: "a", Arguments: json.RawMessage(`{}`)}}}}, nil
 		}
 		return model.Response{Message: model.Message{Role: model.RoleAssistant, Content: content.FromText("final")}}, nil
 	})
@@ -348,6 +349,18 @@ func TestSendMessageAdmitsAllPendingAfterCompleteToolRound(t *testing.T) {
 	close(releaseTool)
 	state = waitMessageState(t, exports.Control, idleState)
 	second := <-requests
+	if !reflect.DeepEqual(second.Messages[1].Replay, replay) {
+		t.Fatal("provider replay lost while admitting queued inputs")
+	}
+	cached, err := exports.History.Load(context.Background(), "s")
+	if err != nil || len(cached) < 2 || !reflect.DeepEqual(cached[1].Replay, replay) {
+		t.Fatalf("cached replay lost: cached=%+v err=%v", cached, err)
+	}
+	cached[1].Replay.Data[0] = 42
+	owned, _ := exports.History.Load(context.Background(), "s")
+	if owned[1].Replay.Data[0] != 0 {
+		t.Fatal("cached history aliases provider replay")
+	}
 	var roles []model.Role
 	var text []string
 	for _, m := range second.Messages {

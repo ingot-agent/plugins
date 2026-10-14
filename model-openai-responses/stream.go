@@ -58,6 +58,7 @@ type accumulatedFunctionCall struct {
 type streamAccumulator struct {
 	provider string
 	secret   string
+	scope    replayScope
 
 	contentParts  map[streamPartKey]*accumulatedStreamPart
 	contentOrder  []*accumulatedStreamPart
@@ -73,42 +74,55 @@ type streamAccumulator struct {
 	terminal *model.Response
 }
 
-func (p *provider) Stream(ctx context.Context, request model.Request, handler model.StreamHandler) (model.Response, error) {
+func (p *provider) Stream(ctx context.Context, request model.Request, handler model.StreamHandler) (result model.Response, resultErr error) {
 	if err := p.validateRequest(ctx, request); err != nil {
 		return model.Response{}, err
 	}
 	if handler == nil {
 		return model.Response{}, fmt.Errorf("nil stream handler: %w", ErrInvalidRequest)
 	}
+	diagnostic, ctx := p.startDiagnostic(ctx, request, true)
+	defer func() { diagnostic.finish(ctx, resultErr) }()
 	body, err := p.encodeResponseRequest(ctx, request, true)
 	if err != nil {
 		return model.Response{}, err
 	}
+	diagnostic.stage = "dispatch"
+	diagnostic.requestBytes = len(body)
 	response, err := p.do(ctx, body, "text/event-stream")
 	if err != nil {
 		return model.Response{}, err
 	}
 	stopBodyWatch := closeBodyOnCancel(ctx, response.Body)
 	defer stopBodyWatch()
+	diagnostic.receivedHeaders(ctx, response)
+	diagnostic.stage = "http_status"
 	if err := p.checkStatus(ctx, response); err != nil {
 		return model.Response{}, err
 	}
-	return p.decodeStream(ctx, response, handler)
+	diagnostic.stage = "stream"
+	return p.decodeStream(ctx, response, handler, diagnostic, p.replayScope(request.Model))
 }
 
-func (p *provider) decodeStream(ctx context.Context, response *http.Response, handler model.StreamHandler) (model.Response, error) {
+func (p *provider) decodeStream(ctx context.Context, response *http.Response, handler model.StreamHandler, diagnostic *requestDiagnostic, scope replayScope) (model.Response, error) {
 	consumer := handler
 	handler = func(event model.StreamEvent) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		return consumer(event)
+		diagnostic.delivered++
+		err := consumer(event)
+		if err != nil {
+			diagnostic.consumerFailed = true
+		}
+		return err
 	}
 	limited := &io.LimitedReader{R: response.Body, N: int64(p.maxResponseBytes) + 1}
 	reader := bufio.NewReader(limited)
 	dataLines := make([]string, 0, 1)
 	eventName := ""
 	accumulator := newStreamAccumulator(p.name, p.apiKey)
+	accumulator.scope = scope
 
 	dispatch := func() error {
 		defer func() {
@@ -116,11 +130,15 @@ func (p *provider) decodeStream(ctx context.Context, response *http.Response, ha
 			eventName = ""
 		}()
 		if len(dataLines) == 0 {
+			if eventName == "keepalive" {
+				diagnostic.event("keepalive", nil)
+			}
 			return nil
 		}
 		payload := strings.Join(dataLines, "\n")
 		// Compatible endpoints may send named heartbeats with empty data.
 		if eventName == "keepalive" && strings.TrimSpace(payload) == "" {
+			diagnostic.event("keepalive", nil)
 			return nil
 		}
 		if strings.TrimSpace(payload) == "[DONE]" {
@@ -139,6 +157,7 @@ func (p *provider) decodeStream(ctx context.Context, response *http.Response, ha
 		if event.Type == "" {
 			event.Type = eventName
 		}
+		diagnostic.event(event.Type, event.Response)
 		if event.Type == "" || (eventName != "" && eventName != event.Type) {
 			return protocolError("SSE event name and payload type are missing or inconsistent")
 		}
@@ -176,7 +195,9 @@ func (p *provider) decodeStream(ctx context.Context, response *http.Response, ha
 			if dispatchErr := dispatch(); dispatchErr != nil {
 				return model.Response{}, dispatchErr
 			}
-		} else if !strings.HasPrefix(line, ":") {
+		} else if strings.HasPrefix(line, ":") {
+			diagnostic.comments++
+		} else {
 			field, value, found := strings.Cut(line, ":")
 			if !found {
 				field, value = line, ""
@@ -199,7 +220,7 @@ func (p *provider) decodeStream(ctx context.Context, response *http.Response, ha
 		}
 	}
 	if accumulator.terminal == nil {
-		return model.Response{}, protocolError("stream ended before a terminal response event")
+		return model.Response{}, wrapReadError(fmt.Errorf("stream ended before a terminal response event: %w", io.ErrUnexpectedEOF))
 	}
 	if err := accumulator.finish(handler); err != nil {
 		return model.Response{}, err
@@ -282,7 +303,7 @@ func (a *streamAccumulator) add(event responseStreamEvent, handler model.StreamH
 		if event.Response.Status != wantStatus {
 			return protocolError("terminal event %q carries response status %q", event.Type, event.Response.Status)
 		}
-		result, err := decodeResponseObject(*event.Response, a.provider, a.secret)
+		result, err := decodeResponseObject(*event.Response, a.provider, a.secret, a.scope)
 		if err != nil {
 			return err
 		}
@@ -295,7 +316,7 @@ func (a *streamAccumulator) add(event responseStreamEvent, handler model.StreamH
 		if event.Response == nil {
 			return protocolError("terminal event %q is missing response", event.Type)
 		}
-		_, err := decodeResponseObject(*event.Response, a.provider, a.secret)
+		_, err := decodeResponseObject(*event.Response, a.provider, a.secret, a.scope)
 		return err
 	case "error":
 		return providerResponseError("failed", &responseError{Code: event.Code, Message: event.Message}, a.secret)

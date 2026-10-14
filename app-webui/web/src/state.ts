@@ -65,7 +65,7 @@ export function acceptTurn(turns: Record<string, LiveTurn>, snapshot: Turn) {
   for (const block of previous?.blocks || []) {
     if (block.kind === 'interaction' && !blocks.some(item => item.id === block.id)) blocks.push(block)
   }
-  turns[snapshot.id] = { ...previous, ...snapshot, blocks, stopping: previous?.stopping && snapshot.status === 'running' }
+  turns[snapshot.id] = { ...previous, ...snapshot, retry: snapshot.retry, blocks, stopping: previous?.stopping && snapshot.status === 'running' }
 }
 
 export function reduceOperation(items: Record<string, OperationInvocation>, event: WebEvent) {

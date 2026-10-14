@@ -4,19 +4,43 @@ All notable changes to this plugin are documented in this file.
 
 ## Unreleased
 
+- Adapted retry retractions and opaque model replay to Round-boundary inputs;
+  coalesced progress is flushed before authoritative retry replacements.
+
 - Agent now owns SendMessage admission, Round-boundary input batches and lifecycle control; per-input file notices and media share atomic persistence.
 - Coalesce streaming progress into revision-ordered increments (50 ms/4 KiB),
   publish only affected lifecycle state at structural boundaries, and deep-clone
   snapshots outside the queue lock. Lagging watchers recover from full snapshots.
 
+- Write `agent.message` v2 with opaque provider replay state and exact tool
+  argument bytes; continue reading legacy v1 records. Preserve state through
+  history reload and owned runtime/observation snapshots. Older Agents cannot
+  consume new v2 records.
+
+Requires published SDK v0.2.18 for `model.Message.Replay`; validate with
+`GOWORK=off` against that exact dependency.
+
+### Changed
+
+- Forward model retries with attempt-local text retraction and recovery status while preserving earlier rounds and preventing failed attempts from executing tools.
+- Require published SDK v0.2.17 for stream retry and recovery events.
+
 ### Added
 
+- Export `/agent-default subagents` from the session-tree component to configure
+  child types, prompts, tool allowlists, and dispatch permissions independently
+  of the main loop. Support built-in, custom, and disabled modes with startup
+  validation, atomic persistence, stale-write detection, and live publication
+  for subsequent child creation (`restart_required:false`). Existing children
+  retain their frozen definitions and lifecycle support when types are disabled
+  or removed. Recover stale child sessions only at startup, including when
+  child creation is initially disabled.
 - Inject the optional SDK `agent.PluginInputProjector` capability and delegate
   record recognition/projection to its provider. Defer inputs inside tool rounds until
   their results are complete, and rebuild history after interrupted recovery.
   Read plugin entries at Turn start. Subsequent rounds retain that context;
-  later appends are read in a future Turn. Ordinary `agent.message`
-  records remain version 1; plugins own input association through Store Appends.
+  later appends are read in a future Turn. Plugins own their input records and
+  input association through Store Appends.
   Requires SDK v0.2.16 and a provider such as `context.input`; the Agent owns no
   plugin-input wire format.
 - Enable three built-in child types (`coder`, `explorer`, `reviewer`) when no

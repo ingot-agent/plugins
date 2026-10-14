@@ -19,6 +19,14 @@ estimate as Session-scoped state after successful compaction or checkpoint reuse
 Exports are `contextwindow.Compactor` and `[]operation.Operation`. Wiring this
 component into `agent.default` runs it before model requests.
 
+Unchanged messages retain their opaque `Message.Replay` state byte-for-byte,
+including through checkpoint reuse. Checkpoint source digests account for that
+state; histories without Replay retain their existing digest representation.
+Summary prompts omit opaque state, and synthesized summary messages carry none.
+The local text estimator does not measure tokens hidden inside encrypted provider
+state. Replay support uses SDK v0.2.18; validate this module independently with
+`GOWORK=off`.
+
 ## Context Snapshots
 
 `context-compact.session-context/<sessionId>` is an in-memory Interaction Set

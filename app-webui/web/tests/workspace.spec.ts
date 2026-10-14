@@ -9,6 +9,30 @@ async function send(page: Page, input: string) {
   await page.getByRole('button', { name: 'Send message', exact: true }).click()
   await expect(page).toHaveURL(/#\/sessions\//)
 }
+
+test('model retry retracts failed output and survives a browser reconnect', async ({ page }) => {
+  await ready(page)
+  await send(page, 'retry recovery')
+  await expect(page.locator('.retry-status')).toHaveText('Retrying response (attempt 2)…')
+  await expect(page.locator('.turn-content')).not.toContainText('Discard this failed')
+  await page.reload()
+  await expect(page.locator('.retry-status')).toHaveText('Retrying response (attempt 2)…')
+  await expect(page.locator('.turn-content')).not.toContainText('Discard this failed')
+  await expect(page.getByText('Your workspace is ready. We can take the next step together.', { exact: true })).toHaveCount(1)
+  await expect(page.locator('.retry-status')).toHaveCount(0)
+  await expect(page.locator('.transcript')).not.toContainText('Discard this failed')
+})
+
+test('canceling a model retry stops the pending attempt', async ({ page }) => {
+  await ready(page)
+  await send(page, 'retry cancellation')
+  await expect(page.locator('.retry-status')).toBeVisible()
+  await page.getByRole('button', { name: 'Stop execution', exact: true }).click()
+  await expect(page.getByRole('button', { name: /Canceled/ })).toBeVisible()
+  await expect(page.locator('.retry-status')).toHaveCount(0)
+  await expect(page.locator('.transcript')).not.toContainText('Discard this failed')
+  await expect(page.getByText('Your workspace is ready. We can take the next step together.', { exact: true })).toHaveCount(0)
+})
 async function selectAnswerText(page: Page, passage: string) {
   const answer = page.locator('.message-assistant[data-message-index] .markdown').last()
   await expect(answer).toContainText(passage)
@@ -355,6 +379,37 @@ test('multi-round reasoning, commentary, tools and interactions append in order'
   await expect(history).toHaveText(["I'll inspect the workspace first.", 'workspace.inspect', "The first check is complete. I'll verify the result.", 'workspace.verify', 'Your workspace is ready. We can take the next step together.'])
   await page.reload()
   await expect(history).toHaveText(["I'll inspect the workspace first.", 'workspace.inspect', "The first check is complete. I'll verify the result.", 'workspace.verify', 'Your workspace is ready. We can take the next step together.'])
+})
+
+test('tool output preserves whitespace live, in history, and after reload', async ({ page }) => {
+  const output = 'stdout:\n  第一行  with spaces\n\n\tsecond line\n<b>literal</b> \\n\n' + 'x'.repeat(200) + '\n'
+  await ready(page)
+  await send(page, 'timeline multiline')
+  await expect(page.getByText('Continue with verification?', { exact: true })).toBeVisible()
+
+  const card = page.locator('.tool-card').filter({ hasText: 'workspace.inspect' })
+  const result = card.locator('.tool-body > p')
+  const checkOutput = async () => {
+    await card.locator('summary').click()
+    await expect(result).toBeVisible()
+    // toHaveText normalizes whitespace; compare the unmodified DOM text instead.
+    expect(await result.textContent()).toBe(output)
+    await expect(result).toHaveCSS('white-space', 'pre-wrap')
+    await expect(result).toHaveCSS('overflow-wrap', 'anywhere')
+    expect(await result.innerText()).toBe(output)
+    await expect(result.locator('b')).toHaveCount(0)
+  }
+  await checkOutput()
+  await page.getByRole('textbox', { name: 'Answer', exact: true }).fill('Continue')
+  await page.getByRole('button', { name: 'Submit response', exact: true }).click()
+  await expect(page.locator('.message-assistant[data-message-index]').getByText('Your workspace is ready. We can take the next step together.', { exact: true })).toBeVisible()
+  await checkOutput()
+
+  await page.reload()
+  await checkOutput()
+  await page.setViewportSize({ width: 390, height: 740 })
+  expect(await result.evaluate(element => element.scrollWidth)).toBeLessThanOrEqual(await result.evaluate(element => element.clientWidth))
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390)
 })
 
 test('tool call visibility is a persistent conversation preference', async ({ page }) => {
@@ -735,6 +790,52 @@ test('native image selection can be previewed after refreshing', async ({ page }
   await expect(page.locator('.transcript')).not.toContainText('以上是紧随其后的用户输入所上传的文件')
 })
 
+test('clipboard screenshot can be pasted with the keyboard', async ({ page }) => {
+  await page.context().grantPermissions(['clipboard-read', 'clipboard-write'])
+  await ready(page)
+  await page.evaluate(async () => {
+    const canvas = document.createElement('canvas')
+    canvas.width = canvas.height = 2
+    canvas.getContext('2d')!.fillRect(0, 0, 2, 2)
+    const image = await new Promise<Blob>(resolve => canvas.toBlob(blob => resolve(blob!), 'image/png'))
+    await navigator.clipboard.write([new ClipboardItem({ 'image/png': image })])
+  })
+  await page.getByRole('textbox', { name: 'Message your agent…', exact: true }).press('Control+V')
+  await expect(page.locator('.upload-chip img')).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Send message', exact: true })).toBeEnabled()
+  await page.getByRole('button', { name: 'Send message', exact: true }).click()
+  await expect(page.getByText('Attachment received.', { exact: true })).toBeVisible()
+})
+
+test('clipboard images and documents can be sent and previewed after refreshing', async ({ page }) => {
+  await ready(page)
+  await page.getByRole('textbox', { name: 'Message your agent…', exact: true }).evaluate(async element => {
+    const canvas = document.createElement('canvas')
+    canvas.width = canvas.height = 2
+    canvas.getContext('2d')!.fillRect(0, 0, 2, 2)
+    const image = await new Promise<Blob>(resolve => canvas.toBlob(blob => resolve(blob!), 'image/png'))
+    const clipboard = new DataTransfer()
+    clipboard.items.add(new File([image], 'clipboard.png', { type: 'image/png' }))
+    clipboard.items.add(new File(['Clipboard document contents'], 'clipboard.txt', { type: 'text/plain' }))
+    element.dispatchEvent(new ClipboardEvent('paste', { clipboardData: clipboard, bubbles: true, cancelable: true }))
+  })
+  await expect(page.locator('.upload-chip')).toHaveCount(2)
+  await expect(page.locator('.upload-chip img')).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Send message', exact: true })).toBeEnabled()
+  await page.getByRole('button', { name: 'Send message', exact: true }).click()
+  await expect(page.getByText('Attachment received.', { exact: true })).toBeVisible()
+  await page.reload()
+  const files = page.locator('.message-user .file-row')
+  await expect(files).toHaveCount(2)
+  await expect(files.nth(0)).toContainText('clipboard.png')
+  await expect(files.nth(1)).toContainText('clipboard.txt')
+  await files.nth(0).getByRole('button', { name: 'Preview', exact: true }).click()
+  await expect(page.getByRole('img', { name: 'clipboard.png', exact: true })).toBeVisible()
+  await files.nth(1).getByRole('button', { name: 'clipboard.txt', exact: true }).click()
+  await expect(page.locator('.file-preview')).toContainText('Clipboard document contents')
+  await expect(page.locator('.transcript')).not.toContainText('以上是紧随其后的用户输入所上传的文件')
+})
+
 test('local document renders as an attachment while its plugin message stays hidden', async ({ page }) => {
   const errors: string[] = []
   page.on('pageerror', error => errors.push(error.message))
@@ -758,7 +859,7 @@ test('local document renders as an attachment while its plugin message stays hid
   await expect(attachment).toContainText('report.pdf')
   await expect(attachment).toContainText('application/pdf')
   await expect(users.nth(0).locator('.empty-input')).toHaveCount(0)
-  await expect(attachment.getByRole('button')).toHaveCount(0)
+  await expect(attachment.getByRole('button')).toHaveCount(1)
   await expect(page.locator('.transcript')).not.toContainText('<system source="plugin">')
   await expect(page.locator('.transcript')).not.toContainText('以上是紧随其后的用户输入所上传的文件')
   releaseHistory()

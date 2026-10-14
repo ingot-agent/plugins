@@ -84,6 +84,22 @@ func (b *browserAgent) Stream(ctx context.Context, root, id session.ID, request 
 		}
 		return handler(model.StreamEvent{Kind: model.StreamPartDelta, Semantic: semantic, TextDelta: text})
 	}
+	if strings.Contains(input, "retry") && handler != nil {
+		for _, event := range []model.StreamEvent{
+			{Kind: model.StreamPartDelta, TextDelta: "Discard this failed response."},
+			{Kind: model.StreamPartDelta, Semantic: model.StreamSemanticReasoning, TextDelta: "Discard this failed reasoning."},
+			{Kind: model.StreamRetry, Attempt: 2, RetryDelay: 5 * time.Second},
+		} {
+			if err := handler(event); err != nil {
+				return model.Response{}, err
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return model.Response{}, ctx.Err()
+		case <-time.After(5 * time.Second):
+		}
+	}
 	reasoning := "Checking the request."
 	timeline := strings.Contains(input, "timeline")
 	if timeline && rounds == 1 {
@@ -103,6 +119,9 @@ func (b *browserAgent) Stream(ctx context.Context, root, id session.ID, request 
 	}
 	if strings.Contains(input, "tool-only") {
 		toolRounds = 3
+	}
+	if strings.Contains(input, "multiline") && toolRounds == 0 {
+		toolRounds = 1
 	}
 	if rounds < toolRounds {
 		names := []string{"workspace.inspect"}
@@ -224,6 +243,9 @@ func (b browserTools) Call(ctx context.Context, invocation tool.Invocation) (too
 		}
 	}
 	text := "Workspace is ready."
+	if strings.Contains(args.Input, "multiline") {
+		text = "stdout:\n  第一行  with spaces\n\n\tsecond line\n" + `<b>literal</b> \n` + "\n" + strings.Repeat("x", 200) + "\n"
+	}
 	if invocation.Call.Name == "workspace.verify" {
 		text = "Verification complete."
 	}

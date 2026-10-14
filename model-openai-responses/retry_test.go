@@ -3,6 +3,7 @@ package openairesponses_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"syscall"
@@ -29,6 +30,36 @@ func checkRetry(t *testing.T, err error, want bool) time.Duration {
 		t.Fatalf("error %v retry=%v want=%v", err, ok, want)
 	}
 	return delay
+}
+
+func TestTransientResponseErrors(t *testing.T) {
+	for _, tc := range []struct {
+		code  string
+		retry bool
+	}{
+		{"server_error", true}, {"upstream_http2_stream_error", true}, {"rate_limit_exceeded", true}, {"overloaded_error", true},
+		{"insufficient_quota", false}, {"invalid_api_key", false}, {"invalid_request_error", false}, {"unknown", false}, {"", false},
+	} {
+		for _, stream := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/stream=%v", tc.code, stream), func(t *testing.T) {
+				body := fmt.Sprintf(`{"id":"resp","object":"response","status":"failed","model":"m","error":{"code":%q,"message":"failure"}}`, tc.code)
+				if stream {
+					body = "data: {\"type\":\"response.failed\",\"response\":" + body + "}\n\n"
+				}
+				p := newProvider(t, openairesponses.ProviderConfig{Name: "p", BaseURL: "https://example.test"}, staticClient(body), assetResolver{})
+				var err error
+				if stream {
+					_, err = p.Stream(context.Background(), model.Request{Model: "m"}, func(model.StreamEvent) error { return nil })
+				} else {
+					_, err = p.Complete(context.Background(), model.Request{Model: "m"})
+				}
+				checkRetry(t, err, tc.retry)
+			})
+		}
+	}
+	checkRetry(t, &openairesponses.ProviderResponseError{Status: "cancelled", Code: "server_error"}, false)
+	var nilError *openairesponses.ProviderResponseError
+	checkRetry(t, nilError, false)
 }
 func TestRetryHintsFromHTTPAndNetwork(t *testing.T) {
 	for _, tc := range []struct {

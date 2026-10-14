@@ -2,10 +2,34 @@
 
 ## Unreleased
 
+- Integrated clipboard uploads, file previews and retry status with SendMessage
+  scheduling and revision-ordered runtime projections.
+
 - Moved scheduling and authoritative results to Agent SendMessage/Control; restored ordered multi-input progress across refresh and reconnect.
+
+### Changed
+
+- Retract failed model attempts, display retry status and retain retry state across reconnects without removing earlier output or tool activity.
+- Require published SDK v0.2.17 for retry events; standalone Go and browser checks no longer need a local SDK workspace.
 
 ### Added
 
+- Paste clipboard files and screenshots into the composer. Upload bytes through
+  `POST /api/files/upload`, retain durable file-notice paths when a writer is
+  available, and support image-only Assets without one. Track upload status,
+  enforce size limits, cancel removed uploads and preserve per-session drafts.
+- Preview local file links and file attachments in a resizable, read-only pane,
+  with syntax highlighting, line references, Markdown/source modes and a mobile
+  full-screen view. Resolve relative paths against the originating Session or
+  previewed document. Add host text-application opening and path copying.
+- Add `POST /api/files/preview` and `POST /api/files/open` independently of Asset
+  Store and file-input capabilities. Preview UTF-8 and BOM-marked UTF-16 text up
+  to 1 MiB and 20,000 lines; read the current file on demand.
+- Configure the host text editor through `backend.text_editor_command` and
+  `/app-webui config`, with editor suggestions and a `${file_path}` command
+  template. Preserve quoted executable paths and file argument boundaries;
+  reject malformed templates before saving. Changes apply on the next open
+  without restarting the server; an empty template uses the system text app.
 - Select host-local files through `POST /api/files/select` using the native
   multi-file picker on Windows, macOS and Linux. Return original absolute paths
   and server-derived metadata; keep non-image files in place without copying.
@@ -33,8 +57,8 @@
   the complete submission snapshot when accepting an input.
 - Use native file selection in the composer. Send only PNG/JPEG/GIF/WebP images
   as model media; route all selected file paths through an `app.backend` plugin
-  notice. File selection remains available without an Asset Store. Clipboard and
-  drag-and-drop file input are not supported by this workflow.
+  notice. File selection remains available without an Asset Store. Drag-and-drop
+  file input is not supported by this workflow.
 - Recognize source-only plugin envelopes and associate uploaded files using the
   notification body rather than a plugin-name attribute.
 - Require SDK v0.2.16 for the published plugin-input and Session accounting
@@ -58,6 +82,16 @@
 - Show lifecycle status, duration and running indicators once per SDK Turn,
   including when several inputs join at a Round boundary or the page reloads.
   Keep input content and rejected-input errors in their original order.
+
+- Preserve line breaks, blank lines and indentation in plain-text tool results,
+  including live output and reloaded history; wrap long lines without rendering
+  output as HTML or Markdown.
+- Keep image selection and sending available with an Asset Store when
+  `agent.PluginInputWriter` is absent. Omit file notices for these image-only
+  turns and reject unsupported local files during selection and submission.
+- Keep the selected slash-command group or operation visible when navigating
+  with the arrow keys, including wrapping between the first and last options.
+  Scroll only the option list and preserve focus in the composer.
 - Display locally selected files as attachment rows on their user message,
   including file-only sends, pending input and refreshed history. Preserve mixed
   image/file order and existing image preview; local file rows show metadata only.

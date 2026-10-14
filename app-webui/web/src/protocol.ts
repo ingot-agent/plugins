@@ -67,6 +67,7 @@ export interface Turn {
   attachments?: Attachment[]
   blocks: TurnBlock[]
   persisted: boolean
+  retry?: { attempt: number; delayMs: number }
   sdkTurnId?: string
   historyEnd?: number
   outcome?: Outcome

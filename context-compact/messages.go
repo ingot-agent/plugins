@@ -205,11 +205,12 @@ type requestProjection struct {
 }
 
 type messageProjection struct {
-	Role       string           `json:"role"`
-	Content    content.Content  `json:"content"`
-	Name       string           `json:"name"`
-	ToolCallID string           `json:"tool_call_id"`
-	ToolCalls  []callProjection `json:"tool_calls"`
+	Role       string             `json:"role"`
+	Content    content.Content    `json:"content"`
+	Name       string             `json:"name"`
+	ToolCallID string             `json:"tool_call_id"`
+	ToolCalls  []callProjection   `json:"tool_calls"`
+	Replay     *model.ReplayState `json:"replay,omitempty"`
 }
 
 type callProjection struct {
@@ -253,7 +254,12 @@ func projectMessages(messages []model.Message) []messageProjection {
 }
 
 func messageDigest(messages []model.Message) (string, error) {
-	raw, err := json.Marshal(projectMessages(messages))
+	projection := projectMessages(messages)
+	for i, message := range messages {
+		// Checkpoint identity includes opaque state, but summary prompts never do.
+		projection[i].Replay = message.Replay.Clone()
+	}
+	raw, err := json.Marshal(projection)
 	if err != nil {
 		return "", err
 	}
@@ -276,6 +282,7 @@ func cloneMessages(messages []model.Message) []model.Message {
 	}
 	result := make([]model.Message, len(messages))
 	for i, message := range messages {
+		message.Replay = message.Replay.Clone()
 		message.Content = content.Clone(message.Content)
 		message.ToolCalls = cloneCalls(message.ToolCalls)
 		result[i] = message

@@ -48,7 +48,7 @@ ingot start web
 - 对话消息不显示 Ingot 图标/名称；实时执行仍展示状态徽标。工具调用显示开关保存在浏览器本地偏好中，刷新后也会应用到历史消息；隐藏纯工具消息时不影响最终回答。
 - Markdown、代码高亮/复制、折叠推理、工具调用卡片和独立执行详情；Turn、Round、Model、Tool 与 Session 累计用量来自公开 SDK 能力。
 - 流式输出及模型 Complete 降级、停止执行、内联审批/自由输入、跨会话待处理请求抽屉。
-- 通过宿主的系统文件选择器多选本地文件。图片按 Asset 能力预览并作为模型图片输入；其他文件以原路径通知模型，不复制文件。文件选择不依赖 Asset 能力。
+- 通过宿主的系统文件选择器多选本地文件。图片按 Asset 能力预览并作为模型图片输入；其他文件以原路径通知模型，不复制文件。文件选择不依赖 Asset 能力。支持粘贴图片和文档：上传内容保存到插件状态目录，图片同时存为媒体，随 Input 交由 Agent 原子写入文件通知。
 - Operation 简单表单与复杂 JSON 输入、服务端 Schema 校验、结果恢复和取消；JSON 模式保留提交的原始文本，不经数值转换。
 - 浅色/深色/跟随系统、中英文、桌面侧栏及移动端抽屉；最小适配宽度 360px。
 
@@ -76,6 +76,7 @@ subscriber_buffer = 64
 heartbeat_interval_seconds = 15
 operation_retention = 128
 max_asset_bytes = 67108864
+text_editor_command = ""
 ```
 
 | 字段 | 默认值 | 作用 |
@@ -86,10 +87,11 @@ max_asset_bytes = 67108864
 | `heartbeat_interval_seconds` | 15 | SSE 心跳秒数 |
 | `operation_retention` | 128 | 保留的终态 Operation invocation 数量，运行中调用另行保留 |
 | `max_asset_bytes` | 67,108,864（64 MiB） | 单个所选文件及单次 Asset 上传上限 |
+| `text_editor_command` | 空字符串 | 外部文本编辑器命令模板；留空使用系统文本应用，保存后下次打开即生效 |
 
 数值字段 `0` 选择默认值；负数无效，heartbeat 还检查 duration 溢出。`address` 空字符串选择默认值。`max_asset_bytes` 不是 JSON 请求上限，普通 JSON 请求另有固定的 1 MiB 上限。
 
-Web 命令 `/app-webui config`（Group `app-webui`、Name `config`、输入 `{}`）通过结构化交互修改上述六项，并原子写入插件配置。配置交互期间文件发生变化时拒绝覆盖。返回六个规范化字段和 `restart_required`：保存后的有效配置与当前启动配置不同时为 `true`。**本插件不热更新监听地址、缓冲或其他服务器设置**；执行 `ingot restart web` 后才使用新配置。仅保存与当前有效值相同的配置时返回 `false`。结果反映已保存的目标配置，重启前 `/api/state` 仍反映当前实例的有效状态。
+Web 命令 `/app-webui config`（Group `app-webui`、Name `config`、输入 `{}`）通过结构化交互修改上述七项，并原子写入插件配置。配置交互期间文件发生变化时拒绝覆盖。返回七个规范化字段和 `restart_required`：保存后的服务器设置与当前启动配置不同时为 `true`。**监听地址、缓冲及其他服务器设置需要执行 `ingot restart web` 后生效**；文本编辑器命令在每次打开文件时读取最新保存值，单独修改该项不要求重启。结果反映已保存的目标配置，重启前 `/api/state` 仍反映当前实例的有效状态。
 
 ## HTTP 接口
 
@@ -106,6 +108,8 @@ Web 命令 `/app-webui config`（Group `app-webui`、Name `config`、输入 `{}`
 | 原文追问 | `GET/POST /api/sessions/{id}/followups`、`DELETE /api/followups/{id}` |
 | Workspace 目录选择 | `POST /api/workspace/select` |
 | 本地文件选择 | `POST /api/files/select` |
+| 剪贴板文件上传 | `POST /api/files/upload?name=<文件名>` |
+| 本地文本预览与打开 | `POST /api/files/preview`、`POST /api/files/open` |
 | 历史消息 | `GET /api/sessions/{id}/history` |
 | Asset | `POST /api/assets`、`GET /api/assets/{id}` |
 | Operation | `GET /api/operations`、`POST /api/operations/{internal-id}`、`DELETE /api/operation-invocations/{id}` |
@@ -138,7 +142,7 @@ Agent 不再保存独立的模型覆盖配置。契约保留在 WebUI 的公开�
 
 ## Turn 与流式输出
 
-Web 统一提交 SendMessage。模型流式调用由 Agent 选择；部分输出后失败不会重试。输入状态及顺序块由 agent.runtime.updated 校准，agent.runtime.progress 追加合并后的进度，客户端忽略旧 revision。Observation 保留为诊断事件，不再重复修改聊天中的工具进度。保留终态含规范 Result、Outcome、HistoryEnd 与错误，附件准备失败也通过该状态报告。流式文本不等同于规范最终结果或持久历史。
+Web 统一提交 SendMessage。模型流式调用由 Agent 选择；模型重试由 ModelRuntime 控制，失败尝试的临时输出会被撤回；Web 不重新提交用户输入。输入状态及顺序块由 agent.runtime.updated 校准，agent.runtime.progress 追加合并后的进度，客户端忽略旧 revision。Observation 保留为诊断事件，不再重复修改聊天中的工具进度。保留终态含规范 Result、Outcome、HistoryEnd 与错误，附件准备失败也通过该状态报告。流式文本不等同于规范最终结果或持久历史。
 
 Host 对诊断路径的 model/tool progress 也按 50 ms/4 KiB 合并相邻且 scope、part 或 channel 一致的增量，避免它们挤满同一 SSE 缓冲。开始、结束和 part 边界先刷新此前进度；合并事件使用最后一个源事件的 sequence/time，正文和二进制数据完整保留。诊断记录不再与模型原始 delta 一一对应。
 
@@ -161,7 +165,7 @@ Token 卡片同时显示 `context-compact.session-context/<sessionId>` 的 `inpu
 
 普通会话与普通 Fork 的 root/current 均为自身，Fork 初值为 0。追问的 root 由服务端读取其 `Meta["app-webui"].sourceSessionId` 并校验，current 为便签自身；浏览器只提交 current。根会话累计包含所属子任务、压缩和追问，不能把全部 Session 的累计值相加作为全局消耗。删除成功后 Clear 对应状态，前端忽略已删除 Session 的晚到快照。
 
-此合同使用 SDK v0.2.15 发布的 Runtime 双 Session 参数及 `session.Metadata.TotalToken`，应组合相容版本的 Agent、ModelRuntime、Compactor 和 Session 插件。本分支新增的文件输入使用 SDK v0.2.16 已发布的通用接口；使用 `go.mod` 固定的依赖进行 `GOWORK=off` 独立验证，无需本地 SDK workspace。
+此合同使用 SDK v0.2.15 发布的 Runtime 双 Session 参数及 `session.Metadata.TotalToken`，应组合相容版本的 Agent、ModelRuntime、Compactor 和 Session 插件。本分支的 SendMessage、Control 与批量 Store.Append 需要匹配的本地 SDK workspace；发布依赖尚未包含这些契约。
 
 ## 本地文件输入（未发布）
 
@@ -181,11 +185,15 @@ Token 卡片同时显示 `context-compact.session-context/<sessionId>` 的 `inpu
 }
 ```
 
-路径由后端解析符号链接并规范为绝对路径，必须是现存的普通文件，大小不超过 `max_asset_bytes`。文件名、MIME 和大小由后端读取，不信任浏览器提交的同名字段。PNG、JPEG、GIF、WebP 在配置 Asset Store 时导入现有 Asset 机制并返回 `assetId`，用于图片预览及模型图片输入；没有 Asset Store 时只提供路径。其他格式（包括文档、音视频、SVG、AVIF）不读取正文或复制到插件目录，也不发送为供应商媒体输入。
+路径由后端解析符号链接并规范为绝对路径，必须是现存的普通文件，大小不超过 `max_asset_bytes`。文件名、MIME 和大小由后端读取，不信任浏览器提交的同名字段。PNG、JPEG、GIF、WebP 在配置 Asset Store 时导入现有 Asset 机制并返回 `assetId`，用于图片预览及模型图片输入；没有 Asset Store 时只提供路径。其他格式（包括文档、音视频、SVG、AVIF）通过 Agent 的 Input 文件通知接入，不读取正文或复制到插件目录，也不发送为供应商媒体输入。
 
 发送时 WebUI 将文件元数据、路径及图片 Media 放入同一个 Input。Agent 在实际接入前重新准备，生成文件通知和真实 user 消息，一次原子 Store.Append 保存为相邻的 agent.message。没有新增持久字段、消息分组 ID 或供应商私有 files 字段。独立插件写入只能落在这组之前或之后；WebUI 文件输入不再依赖 PluginInputWriter。
 
-发送后的临时消息直接使用文件选择器返回的文件列表；读取历史后，界面从持久通知中提取文件信息。两者均按选择顺序显示在所属用户消息中；纯文件发送显示附件，非图片暂仅显示图标、文件名和类型。上下文保留空用户消息，插件通知在主对话和追问窗口中均不渲染，发送中和刷新后遵循同一显示规则。原始历史和消息索引保持完整，重启及 Fork 保留上下文顺序。
+输入框支持通过粘贴事件接收剪贴板文件和截图。浏览器提供文件内容，不提供可信的宿主原路径；前端逐文件调用 `POST /api/files/upload?name=<URL 编码的文件名>`，请求体为原始文件字节，`Content-Type` 为 `application/octet-stream`，要求 `Content-Length`，单文件仍受 `max_asset_bytes` 限制。成功返回 `201` 和一个 `Attachment`。文件名不得包含目录成分，MIME 根据扩展名识别。
+
+上传文件保存在插件 state 下的 `uploads/file-<随机标识>/<原文件名>`，保持文件通知和混合附件顺序；支持的图片另行导入 Asset 供预览及模型使用。同名文件互不覆盖，成功上传的文件保留供发送、历史及 Fork 引用，不随草稿移除自动删除；失败或中断上传会清理不完整文件。文件通知由 Agent 和实际用户消息原子写入，不要求独立的 context.input writer。上传中的附件可移除以取消请求，完成前不能发送当前草稿；上传结果始终归属粘贴时的会话。纯文本粘贴保持浏览器默认行为。
+
+发送后的临时消息直接使用文件选择器返回的文件列表；读取历史后，界面从持久通知中提取文件信息，仅含媒体的输入则直接显示用户消息中的图片。两者均按选择顺序显示在所属用户消息中；纯文件发送显示附件，非图片暂仅显示图标、文件名和类型。上下文保留空用户消息，插件通知在主对话和追问窗口中均不渲染，发送中和刷新后遵循同一显示规则。原始历史和消息索引保持完整，重启及 Fork 保留上下文顺序。
 
 选择器打开在 Runtime 所在主机：Windows 使用 COM `IFileOpenDialog`，macOS 使用 `NSOpenPanel`，Linux 使用 Zenity 或 KDialog，Linux 仍需要桌面会话。不可用时返回 `file_picker_unavailable`。浏览器原生文件输入不暴露真实绝对路径，因此这里调用宿主选择器；远程浏览器不能用此接口选择远程设备上的文件。当前只支持文件选择，不处理粘贴或拖放文件；原文件后续被移动、删除或修改时，路径通知不会保存一份副本。
 
@@ -210,6 +218,67 @@ Asset 上传直接使用请求体原始字节，并要求提供已知的 `Conten
 
 前端仅对允许的图片、音频和视频格式创建 Blob 预览；HTML、SVG 等文件保留为下载。Markdown 原始 HTML 被禁用，远程图片转换为显式链接，避免后台请求第三方资源。
 
+## 本地文件预览（未发布）
+
+点击回答中的本地文件 Markdown 链接或本地文件附件的文件名，会打开只读预览。
+桌面端在聊天右侧显示，可拖动边界调整宽度或展开；窄屏使用全屏预览，关闭后返回
+原对话。代码显示行号和语法高亮，Markdown 默认展示排版，可切换源码。预览读取
+点击时的当前文件；“重新读取文件”更新内容，历史消息不会保存文件快照。
+
+链接支持工作区相对路径、Runtime 主机的绝对路径和本机 `file:///` URI，例如
+`[说明](./README.md)`、`[源码](/project/main.go#L42)`、`[范围](src/main.go#L10-L20)`
+和 `[位置](src/main.go:42:5)`。空格、中文及 URI 转义会保留；正文与代码块中的普通
+路径文字不自动转换。网页链接仍在新标签打开。相对路径使用链接所属 Session 的
+Workspace（包括追问 Session）；预览中 Markdown 文档的相对链接使用该文档所在
+目录，并支持标题锚点。没有 Session 的全局内容使用默认 Workspace；已存在但没有
+绑定 Workspace 的 Session 不会被悄悄改用默认工作区。
+
+两个接口都接收 `Content-Type: application/json`，请求体为：
+
+```json
+{"path":"src/main.go","sessionId":"session-id","basePath":"/project/README.md"}
+```
+
+`sessionId`、`basePath` 可省略；`basePath` 仅用于文档内部相对链接，必须为绝对
+文件路径。行号和标题锚点由前端解析，不随请求发送。预览返回
+`{path, name, text, size}`，其中 `path` 是解析符号链接后的真实路径，`size` 为原文件
+字节数。只读取普通文件，支持 UTF-8（含 BOM）与带 BOM 的 UTF-16，最多 1 MiB、
+20,000 行；二进制、不可读、不存在和超限情况显示明确提示。此能力不依赖 Asset
+Store 或 `agent.PluginInputWriter`，沿用可信本机单用户环境的文件访问边界，可打开
+工作区外的绝对路径，Workspace 不是文件访问沙箱。
+
+“用编辑器打开”使用 `/app-webui config` 中的 **Text editor command**。该字段提供
+常用编辑器建议，也可直接输入 `command --before ${file_path} --after`。模板必须在
+参数中包含 `${file_path}`，支持单引号、双引号和包含空格的可执行文件路径，例如：
+
+```toml
+[backend]
+text_editor_command = 'code --reuse-window "${file_path}"'
+```
+
+可替换为 `cursor --reuse-window ${file_path}`、`subl ${file_path}` 或
+`editor --file=${file_path} --new-window`。Windows 使用实际安装的 `.exe` 路径，
+例如下面的 TOML 字面量字符串会原样保留反斜杠：
+
+```toml
+[backend]
+text_editor_command = '"C:\Program Files\Microsoft VS Code\Code.exe" --reuse-window "${file_path}"'
+```
+
+程序从 Runtime 的 `PATH` 查找，或使用配置的完整路径。模板先分解为程序与参数，
+再替换文件路径；`${file_path}` 即使未加引号，包含空格、引号或特殊字符的文件名
+仍保留在原参数中，也可嵌入 `--file=${file_path}`。反斜杠保留为路径字符，但可转义
+引号及引号外的空白。这里只解析一个程序调用，不自动展开环境变量、`~`、管道、
+重定向或命令串联。不闭合的引号、未知占位符和缺失 `${file_path}` 会在保存时被拒绝。
+编辑器进程独立于 HTTP 请求，接口成功表示启动请求已提交，不等待编辑器退出。
+
+模板留空或全为空白时使用系统文本应用：macOS 使用默认文本编辑器，Linux 使用
+`text/plain` 的默认桌面应用（需要 `xdg-mime`、`gio` 及桌面会话），Windows 使用
+记事本。默认方式按文本打开文件；自定义模板按用户选择的程序执行。本入口不承诺
+外部应用的行号定位。所有编辑器均在 Runtime 所在机器启动；远程连接不会启动
+浏览器所在机器的应用。启动失败会显示具体原因及配置入口，也可复制路径。
+打开文件接口仅接收文件信息，使用已保存的命令配置；跨站及非 JSON 请求会被拒绝。
+
 ## Operation
 
 Operation 调用请求格式如下：
@@ -226,6 +295,8 @@ Operation Definition 按组件图提供的顺序生成快照，并在服务器�
 每个 Definition 必须声明有效的局部 `Name`；`Group` 是可选的展示提示。Web UI 将有分组的定义投影为 `/<group> <name>` 两级 Slash Command，对空 Group 使用界面回退标签。空 Group 和重复 `(Group, Name)` 均允许，不会因此阻止启动；界面区分重复显示命令，HTTP 调用始终通过各自不同的 internal ID 路由。回退标签不会写回 Operation Group，命令文本不会发送给 Agent 或写入消息历史。
 
 对话 Composer 输入 `/` 时先展示 Group，选中后再展示该 Group 的 Operation。完整命令会立即打开 Operation 弹窗，Interaction 表单、运行状态、结果和显式取消均在弹窗内完成；`//` 用于发送以 `/` 开头的普通消息。主导航不再暴露调试页，原 `/operations` 路由保留在“设置 → 开发者”中。
+
+命令面板支持上下方向键循环切换选项；选中项超出列表可视范围时，列表会自动滚动以显示该项，输入焦点仍保留在 Composer。
 
 Operation 不存在时返回 `404`；输入无效时会在调度前返回 `400`。调用被接受后返回 `202` 和 invocation ID。`operation.started`、`operation.completed`、`operation.failed` 与 `operation.canceled` 事件均携带 invocation 快照，该快照也会出现在 `/api/state` 中。
 
@@ -253,7 +324,7 @@ GET /api/events?after=<cursor>
 
 `app` 组件通过类型化的宿主依赖使用 ABI `invocation.Invocation` 和 `lifecycle.Controller`。`--ingot-check` 会校验依赖、配置和 Operation Schema，但不会监听配置的端口。HTTP 服务器异常退出时会请求关闭进程。
 
-Cleanup 会取消 HTTP/SSE 请求和后台 invocation，等待 Turn 与 Operation 收尾；达到清理 deadline 时会强制关闭连接。单个 HTTP 请求或 SSE 连接关闭不会取消仍在运行的 Turn 或 pending interaction。
+Cleanup 会取消 HTTP/SSE 请求和后台 Operation，停止 Web 状态订阅并等待 Operation 收尾；Turn 的取消和等待由 Agent cleanup 负责；达到清理 deadline 时会强制关闭连接。单个 HTTP 请求或 SSE 连接关闭不会取消仍在运行的 Turn 或 pending interaction。
 
 ## Interaction
 
@@ -278,3 +349,18 @@ GOWORK=off go test -race ./...
 PowerShell 使用 `$env:GOWORK = 'off'` 后执行上述 Go 命令；`-race` 需要当前平台具备相应 Go race/C 工具链。前端 lint、类型检查、单元测试与浏览器回归命令见 [前端开发说明](web/README.md)。后端单元测试使用 SDK 接口替身，跨插件集成可通过 workspace 组合 Agent、Prompt、context.input 和本模块进行验证；浏览器 fixture 只在测试中提供。
 
 返回 [插件文档索引](../docs/README.md)。
+
+## Streaming retries (unreleased)
+
+The Agent owns stream retraction and retry state on each Round. WebUI projects
+ExecutionBlock.Retry into the owning input's snapshot and publishes it through
+agent.runtime.updated. Failed provisional text is replaced by authoritative
+blocks after preceding coalesced progress has been flushed. Earlier rounds,
+completed tools and interactions remain intact. Snapshots preserve retry status
+across reconnects; resumed output, successful recovery or terminal state clears
+it. Frontend revisions reject stale progress and no old invocation/reset event
+compatibility is required.
+
+This branch needs the matching local SDK and Agent workspace for SendMessage,
+Control and atomic Store.Append; published SDK pins alone do not contain these
+contracts. ModelRuntime owns retry policy; WebUI does not replay submissions.

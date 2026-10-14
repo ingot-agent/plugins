@@ -8,12 +8,14 @@ import (
 	"fmt"
 	"reflect"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	ingotabi "github.com/ingot-agent/ingot-abi"
 	"github.com/ingot-agent/ingot-abi/state"
 	"github.com/ingot-agent/plugins/agent-default/sessioncontrol"
 	"github.com/ingot-agent/sdk/agent"
+	"github.com/ingot-agent/sdk/operation"
 	"github.com/ingot-agent/sdk/prompt"
 	"github.com/ingot-agent/sdk/session"
 	"github.com/ingot-agent/sdk/workspace"
@@ -41,13 +43,14 @@ type Exports struct {
 	Children    agent.Children
 	Contributor prompt.Contributor
 	Control     sessioncontrol.Control
+	Operations  []operation.Operation
 }
 
 type tree struct {
 	repository agent.ChildSessionRepository
 	workspace  workspace.Manager
-	config     configuration
-	startupCtx context.Context
+	config     atomic.Pointer[configuration]
+	setup      *setupOperation
 
 	mu           sync.Mutex
 	nextToken    uint64
@@ -114,14 +117,19 @@ func New(ctx context.Context, deps Dependencies) (Exports, ingotabi.Cleanup, err
 	created := &tree{
 		repository:   repository,
 		workspace:    workspaceManager,
-		config:       config,
-		startupCtx:   ctx,
 		active:       make(map[session.ID]*executionState),
 		notify:       make(chan struct{}, 1),
 		rootGates:    make(map[session.ID]*sync.Mutex),
 		blockedRoots: make(map[session.ID]bool),
 	}
-	if config.enabled {
+	created.config.Store(&config)
+	created.setup = &setupOperation{
+		scope: deps.State, tree: created,
+		supportsChildren: repository != nil && workspaceManager != nil,
+	}
+	// Recovery belongs to process startup, even when new child creation is
+	// disabled. Later configuration updates must never interrupt live children.
+	if repository != nil {
 		if err := repository.RecoverChildSessions(ctx, agent.ChildRecoveryRequest{Reason: "runtime_restart"}); err != nil {
 			return Exports{}, nil, fmt.Errorf("recover child sessions: %w", err)
 		}
@@ -129,7 +137,7 @@ func New(ctx context.Context, deps Dependencies) (Exports, ingotabi.Cleanup, err
 	cleanup := ingotabi.Cleanup(func(cleanupCtx context.Context) error {
 		return created.Shutdown(cleanupCtx)
 	})
-	return Exports{Children: created, Contributor: created, Control: created}, cleanup, nil
+	return Exports{Children: created, Contributor: created, Control: created, Operations: []operation.Operation{created.setup}}, cleanup, nil
 }
 
 func (t *tree) signal() {

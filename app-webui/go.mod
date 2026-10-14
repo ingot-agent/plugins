@@ -5,7 +5,7 @@ go 1.24.2
 require (
 	github.com/ingot-agent/ingot-abi v0.1.0
 	github.com/ingot-agent/plugins/agent-default v0.1.0
-	github.com/ingot-agent/sdk v0.2.16
+	github.com/ingot-agent/sdk v0.2.17
 	github.com/pelletier/go-toml/v2 v2.2.4
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
 )

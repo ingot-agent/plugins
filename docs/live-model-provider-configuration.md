@@ -55,7 +55,7 @@ committing. The existing optimistic conflict check and atomic file replacement
 remain in effect. Publication happens only after persistence succeeds;
 validation, cancellation before commit, conflict, and write failures leave the
 active snapshot unchanged. The runtime uses the same ordering to publish its
-default provider and model together.
+default provider, model and retry limits together.
 
 Each `Complete` or `Stream` invocation captures the current directory and
 defaults once, before entering the interceptor chain. Interceptor changes to
@@ -63,6 +63,10 @@ provider or model names resolve within that captured directory. An in-flight
 request completes using its captured entry while later invocations see
 the new snapshot. `ResolveRequest` uses the current directory and defaults for
 its own call; the returned names do not pin callbacks across later calls.
+
+Retry settings are owned by `model-runtime` and apply to subsequent calls after
+its config Operation saves them. In-flight calls keep their policy snapshot;
+model picker changes preserve retry settings. See the [runtime retry policy](../model-runtime/README.md).
 
 Explicit provider and model fields override their respective defaults. An
 empty default provider automatically selects the only available provider. With

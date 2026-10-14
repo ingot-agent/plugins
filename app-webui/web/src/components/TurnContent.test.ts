@@ -27,6 +27,26 @@ describe('chronological turn content', () => {
     expect(wrapper.text()).toContain('report.txt')
     expect(wrapper.findAll('.markdown').map(item => item.text())).toEqual(['final'])
   })
+
+  it('shows retry status and removes failed text while preserving earlier content', async () => {
+    const pinia = createPinia()
+    const turns = reactive<Record<string, LiveTurn>>({ web: { ...turnSnapshot(), id: 'web', sessionId: 's', revision: 1, output: 'Earlier. Failed.', reasoning: '', status: 'running', blocks: [
+      { id: 'old', kind: 'output', text: 'Earlier. ', boundary: 0 },
+      { id: 'failed', kind: 'output', text: 'Failed.', boundary: 1 },
+    ] } })
+    wrapper = mount(TurnContent, { props: { turn: turns.web, interactions: {}, historicalToolIds: new Set<string>(), showToolCalls: true }, global: { plugins: [pinia, i18n] } })
+    reduceTurn(turns, { type: 'agent.runtime.updated', data: { turns: [turnSnapshot({ revision: 2, output: 'Earlier. ', retry: { attempt: 2, delayMs: 1000 }, blocks: [{ id: 'old', kind: 'output', text: 'Earlier. ', boundary: 0 }] })] } })
+    await wrapper.setProps({ turn: turns.web })
+    expect(wrapper.find('.retry-status').exists()).toBe(true)
+    expect(wrapper.get('[role="status"]').text()).toContain('2')
+    expect(wrapper.text()).toContain('Earlier.')
+    expect(wrapper.text()).not.toContain('Failed.')
+    reduceTurn(turns, { type: 'agent.runtime.updated', data: { turns: [turnSnapshot({ revision: 3, output: 'Earlier. Recovered.', blocks: [{ id: 'old', kind: 'output', text: 'Earlier. ', boundary: 0 }, { id: 'new', kind: 'output', text: 'Recovered.', boundary: 1 }] })] } })
+    await wrapper.setProps({ turn: turns.web })
+    expect(wrapper.find('.retry-status').exists()).toBe(false)
+    expect(wrapper.text()).toContain('Recovered.')
+  })
+
   it('keeps disclosure and form state as later blocks arrive, and replaces only the final answer', async () => {
     const pinia = createPinia()
     useRuntime(pinia).connection = 'online'

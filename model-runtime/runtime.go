@@ -44,6 +44,10 @@ type Config struct {
 	DefaultProvider        string                `toml:"default_provider"`
 	DefaultModel           string                `toml:"default_model"`
 	DefaultReasoningEffort model.ReasoningEffort `toml:"default_reasoning_effort"`
+	// Zero retry values select defaults; one attempt disables retries.
+	RetryMaxAttempts    int `toml:"retry_max_attempts,omitempty"`
+	RetryInitialDelayMS int `toml:"retry_initial_delay_ms,omitempty"`
+	RetryMaxDelayMS     int `toml:"retry_max_delay_ms,omitempty"`
 }
 
 // Dependencies contains providers and the independent complete/stream chains.
@@ -195,8 +199,9 @@ func (r *runtime) Complete(ctx context.Context, rootSessionID, currentSessionID 
 		if err := callCtx.Err(); err != nil {
 			return model.Response{}, err
 		}
+		policy, _ := configuredRetry(selection.defaults)
 		var response model.Response
-		for attempt := 1; attempt <= maxProviderAttempts; attempt++ {
+		for attempt := 1; attempt <= policy.maxAttempts; attempt++ {
 			response, err = provider.Complete(callCtx, cloneRequest(selected))
 			if err == nil {
 				break
@@ -204,13 +209,14 @@ func (r *runtime) Complete(ctx context.Context, rootSessionID, currentSessionID 
 			if contextErr := callCtx.Err(); contextErr != nil {
 				return model.Response{}, contextErr
 			}
-			if attempt == maxProviderAttempts {
+			if attempt == policy.maxAttempts {
 				return cloneResponse(response), err
 			}
-			delay, retry := retryDelay(err, attempt)
+			delay, retry := policy.delay(err, attempt)
 			if !retry {
 				return cloneResponse(response), err
 			}
+			logProviderRetry(callCtx, selected, attempt+1, policy.maxAttempts, delay, false)
 			if waitErr := waitRetry(callCtx, delay); waitErr != nil {
 				return model.Response{}, waitErr
 			}
@@ -277,28 +283,43 @@ func (r *runtime) Stream(ctx context.Context, rootSessionID, currentSessionID se
 		if err := callCtx.Err(); err != nil {
 			return model.Response{}, err
 		}
+		policy, _ := configuredRetry(selection.defaults)
 		var response model.Response
-		for attempt := 1; attempt <= maxProviderAttempts; attempt++ {
-			delivered := false
+		for attempt := 1; attempt <= policy.maxAttempts; attempt++ {
+			var consumerErr error
 			response, err = provider.Stream(callCtx, cloneRequest(selected), func(event model.StreamEvent) error {
-				// Count every callback, including one returning an error: events
-				// already delivered to interceptors/consumers cannot be retracted.
-				delivered = true
-				return selectedHandler(event)
+				if consumerErr != nil {
+					return consumerErr
+				}
+				if event.Kind == model.StreamRetry {
+					consumerErr = fmt.Errorf("provider emitted runtime retry event: %w", ErrInvalidResponse)
+				} else {
+					consumerErr = selectedHandler(event)
+				}
+				return consumerErr
 			})
+			// A provider must not turn a callback failure into a retry hint or
+			// swallow it. Retrying cannot repair consumers or validation errors.
+			if consumerErr != nil {
+				return cloneResponse(response), consumerErr
+			}
 			if err == nil {
 				break
 			}
 			if contextErr := callCtx.Err(); contextErr != nil {
 				return model.Response{}, contextErr
 			}
-			if delivered || attempt == maxProviderAttempts {
+			if attempt == policy.maxAttempts {
 				return cloneResponse(response), err
 			}
-			delay, retry := retryDelay(err, attempt)
+			delay, retry := policy.delay(err, attempt)
 			if !retry {
 				return cloneResponse(response), err
 			}
+			if resetErr := selectedHandler(model.StreamEvent{Kind: model.StreamRetry, Attempt: attempt + 1, RetryDelay: delay}); resetErr != nil {
+				return cloneResponse(response), resetErr
+			}
+			logProviderRetry(callCtx, selected, attempt+1, policy.maxAttempts, delay, true)
 			if waitErr := waitRetry(callCtx, delay); waitErr != nil {
 				return model.Response{}, waitErr
 			}
@@ -596,6 +617,7 @@ func cloneMessages(messages []model.Message) []model.Message {
 }
 
 func cloneMessage(message model.Message) model.Message {
+	message.Replay = message.Replay.Clone()
 	message.Content = content.Clone(message.Content)
 	calls := message.ToolCalls
 	if calls == nil {
@@ -655,6 +677,17 @@ func (v *streamValidator) handle(event model.StreamEvent) error {
 }
 
 func (v *streamValidator) validateEvent(event model.StreamEvent) error {
+	if event.Kind == model.StreamRetry {
+		if event.Attempt < 2 || event.RetryDelay < 0 || event.PartIndex != 0 || event.Semantic != 0 || event.PartKind != 0 || event.MIMEType != "" || event.Name != "" || event.TextDelta != "" || len(event.DataDelta) != 0 {
+			return fmt.Errorf("invalid stream retry event: %w", ErrInvalidResponse)
+		}
+		v.content = streamPartValidator{}
+		v.reasoning = streamPartValidator{transient: true}
+		return nil
+	}
+	if event.Attempt != 0 || event.RetryDelay != 0 {
+		return fmt.Errorf("part event contains retry metadata: %w", ErrInvalidResponse)
+	}
 	switch event.Semantic {
 	case model.StreamSemanticContent:
 		return v.content.validateEvent(event)

@@ -70,10 +70,7 @@ func (a *application) handleSelectFiles(w http.ResponseWriter, r *http.Request) 
 	files := make([]appbackend.Attachment, 0, len(paths))
 	if !canceled {
 		for _, path := range paths {
-			file, err := a.inspectLocalFile(path)
-			if err == nil && file.Kind == "image" && a.assets != nil {
-				err = a.importLocalImage(r.Context(), &file)
-			}
+			file, err := a.prepareLocalFile(r.Context(), appbackend.Attachment{Path: path})
 			if err != nil {
 				writeError(w, err)
 				return
@@ -123,6 +120,22 @@ func supportedImage(mimeType string) bool {
 	default:
 		return false
 	}
+}
+
+func (a *application) prepareLocalFile(ctx context.Context, item appbackend.Attachment) (appbackend.Attachment, error) {
+	file, err := a.inspectLocalFile(item.Path)
+	if err != nil {
+		return appbackend.Attachment{}, err
+	}
+	file.AssetID = item.AssetID
+	if file.Kind == "image" && file.AssetID == "" {
+		if a.assets != nil {
+			if err := a.importLocalImage(ctx, &file); err != nil {
+				return appbackend.Attachment{}, err
+			}
+		}
+	}
+	return file, nil
 }
 
 func (a *application) importLocalImage(ctx context.Context, file *appbackend.Attachment) error {

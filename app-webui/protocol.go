@@ -95,6 +95,13 @@ type TurnSnapshot struct {
 	Started     bool         `json:"started"`
 	Input       string       `json:"input"`
 	Attachments []Attachment `json:"attachments,omitempty"`
+	Retry       *TurnRetry   `json:"retry,omitempty"`
+}
+
+// TurnRetry retains the current model retry across reconnects.
+type TurnRetry struct {
+	Attempt int   `json:"attempt"`
+	DelayMS int64 `json:"delayMs"`
 }
 
 // TurnFinished carries completion details in the event stream only.

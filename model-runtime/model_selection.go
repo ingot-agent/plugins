@@ -100,10 +100,9 @@ func (r *runtime) Update(ctx context.Context, choice modelselection.Selection, e
 	if _, declared := findProviderModel(provider.Models, choice.Model); !exists || !declared || choice.ReasoningEffort == "" {
 		return modelselection.Snapshot{}, modelselection.ErrInvalid
 	}
-	updated := Config{
-		DefaultProvider: choice.Provider, DefaultModel: choice.Model,
-		DefaultReasoningEffort: model.ReasoningEffort(choice.ReasoningEffort),
-	}
+	updated := current
+	updated.DefaultProvider, updated.DefaultModel = choice.Provider, choice.Model
+	updated.DefaultReasoningEffort = model.ReasoningEffort(choice.ReasoningEffort)
 	// In runtime configuration, an empty effort already means provider default.
 	// The sentinel is only needed when a request bypasses a runtime default.
 	if updated.DefaultReasoningEffort == model.ReasoningEffortProviderDefault {

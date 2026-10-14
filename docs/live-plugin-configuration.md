@@ -4,14 +4,14 @@ Date: 2026-09-22
 
 Fifteen official plugins apply successful configuration Operation updates to
 the running process and return `restart_required:false`. The catalog contains
-19 modules and 16 configuration Operations: `app-webui` is the exception whose
-changed HTTP listener, buffer and server settings require a restart.
+19 modules and 17 configuration Operations, including the separate live
+`/agent-default subagents` Operation. Only `app-webui` server settings require a
+restart when saved settings differ from the active startup settings.
 `session-sqlite`, `skill-runtime` and `tool-subagent` expose no configuration
 Operation. See the complete [activation matrix](configuration.md#activation-boundaries).
 
-The guarantees below describe the 15 live Operations. They do not apply to
-WebUI's restart-based settings or `agent-default`'s separately loaded
-`subagents.toml` definitions. Read each module's README for that boundary.
+The guarantees below describe the 16 live Operations. They do not apply to
+WebUI's restart-based settings. Read each module's README for that boundary.
 
 The model-provider-specific directory and request-capture behavior remains
 documented in
@@ -48,6 +48,13 @@ configuration Operation completes observe the new state.
   between rounds; pinning a selection does not pin adapter credentials or URLs.
 - Context compaction, prompt rendering, approval, usage counting, and tool
   invocation retain one snapshot for the call.
+- Subagent discovery and creation capture one immutable definition catalog.
+  `/agent-default subagents` updates the catalog after saving; accepted children
+  keep their frozen definitions. Disabling types stops new creation while
+  existing tasks can still run, report results, be inspected, or be canceled.
+  Removed types cannot be dispatched by existing children. Startup recovery
+  runs once when child storage is available, including with initially disabled
+  types, and never runs as part of a live update.
 - HTTP requests finish on the client they started with; the update swaps in a
   prepared transport for later requests and closes the old idle pool.
 - Script interception exports one stable dispatcher for each target. A call

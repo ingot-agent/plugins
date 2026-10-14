@@ -300,6 +300,7 @@ func testApplication(t *testing.T) *application {
 	a := &application{
 		backend: deps.Backend, agent: controller, sessions: sessions,
 		defaultWorkspace: defaultWorkspace,
+		uploadDirectory:  filepath.Join(t.TempDir(), "uploads"),
 		workspacePicker:  &stubWorkspacePicker{canceled: true},
 	}
 	a.turns = newTurnRegistry(ctx, controller, deps.Backend.Events())

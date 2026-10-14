@@ -37,6 +37,8 @@ func (r *runtime) invokeModel(ctx context.Context, rootSessionID, currentSession
 
 	delivered := false
 	var handlerErr error
+	var outputBytes, reasoningBytes int
+	retried := false
 	response, err := r.observeModelInvocation(ctx, invocation, func() (model.Response, error) {
 		response, streamErr := r.streaming.Value.Stream(ctx, rootSessionID, currentSessionID, cloneModelRequest(invocation), func(event model.StreamEvent) error {
 			executionRecorderFrom(ctx).emit(ctx, observation.ModelProgress{Progress: event})
@@ -46,9 +48,23 @@ func (r *runtime) invokeModel(ctx context.Context, rootSessionID, currentSession
 			if handlerErr = ctx.Err(); handlerErr != nil {
 				return handlerErr
 			}
+			if event.Kind == model.StreamRetry {
+				retried = true
+				delivered = true
+				handlerErr = handler(agent.StreamEvent{Kind: agent.StreamRetry,
+					DiscardOutputBytes: outputBytes, DiscardReasoningBytes: reasoningBytes,
+					Attempt: event.Attempt, RetryDelay: event.RetryDelay})
+				outputBytes, reasoningBytes = 0, 0
+				return handlerErr
+			}
 			if mapped, ok := mapModelStreamEvent(event); ok {
 				delivered = true
 				handlerErr = handler(mapped)
+				if mapped.Kind == agent.StreamOutputDelta {
+					outputBytes += len(mapped.TextDelta)
+				} else {
+					reasoningBytes += len(mapped.TextDelta)
+				}
 			}
 			return handlerErr
 		})
@@ -57,6 +73,12 @@ func (r *runtime) invokeModel(ctx context.Context, rootSessionID, currentSession
 		}
 		if streamErr != nil {
 			return model.Response{}, fmt.Errorf("stream model: %w", streamErr)
+		}
+		if retried {
+			if err := handler(agent.StreamEvent{Kind: agent.StreamRecovered}); err != nil {
+				handlerErr = err
+				return model.Response{}, err
+			}
 		}
 		return response, nil
 	})

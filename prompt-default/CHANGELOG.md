@@ -4,6 +4,12 @@ All notable changes to this plugin are documented in this file.
 
 ## Unreleased
 
+- Preserve provider replay state through history rendering and isolate its
+  mutable bytes between contributors and returned messages.
+
+Requires published SDK v0.2.18 for `model.Message.Replay`; validate with
+`GOWORK=off` against that exact dependency.
+
 ### Changed
 
 - Move the plugin-input source explanation to `context.input`'s ordinary prompt

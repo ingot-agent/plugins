@@ -230,6 +230,7 @@ func cloneRequest(request prompt.Request) prompt.Request {
 func cloneMessages(messages []model.Message) []model.Message {
 	result := make([]model.Message, len(messages))
 	for i, message := range messages {
+		message.Replay = message.Replay.Clone()
 		message.Content = content.Clone(message.Content)
 		calls := message.ToolCalls
 		if calls != nil {

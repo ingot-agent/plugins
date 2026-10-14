@@ -4,6 +4,17 @@ All notable changes to this plugin are documented in this file.
 
 ## Unreleased
 
+- Preserve and independently clone provider replay state through request
+  resolution, invocation and returned response snapshots.
+
+Requires published SDK v0.2.18 for `model.Message.Replay`; validate with
+`GOWORK=off` against that exact dependency.
+
+### Changed
+
+- Retry transient streaming failures after partial progress with an explicit reset event; add live retry limits, seconds-scale backoff and retry logs.
+- Require published SDK v0.2.17 for stream retry contracts; validate with `GOWORK=off`.
+
 ### Added
 
 - Implement the public app-webui model selection contract in model-runtime.

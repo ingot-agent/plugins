@@ -186,7 +186,9 @@ func (r *runtime) runMessage(ctx context.Context, run *activeExecution) {
 	run.prepared = []preparedInput{prepared}
 	turn := agent.Turn{RootSessionID: run.first.state.Request.RootSessionID, SessionID: run.first.state.Request.SessionID, Inputs: []agent.Input{prepared.input}}
 	execution, runErr = r.executeFrame(ctx, turn, func(event agent.StreamEvent) error {
-		r.streamProgress(run, event)
+		if err := r.streamProgress(run, event); err != nil {
+			return err
+		}
 		return ctx.Err()
 	}, nil, run)
 }
@@ -284,16 +286,41 @@ func (r *runtime) roundStarted(run *activeExecution, index int) {
 	r.changedLocked(run.queue)
 }
 
-func (r *runtime) streamProgress(run *activeExecution, event agent.StreamEvent) {
+func (r *runtime) streamProgress(run *activeExecution, event agent.StreamEvent) error {
 	r.queueMu.Lock()
 	defer r.queueMu.Unlock()
 	if len(run.state.Blocks) == 0 {
-		return
+		return nil
 	}
 	block := &run.state.Blocks[len(run.state.Blocks)-1]
 	if block.Kind != "round" {
-		return
+		return nil
 	}
+	if event.Kind == agent.StreamRetry {
+		output, outputOK := retractStreamText(run.output.String(), event.DiscardOutputBytes)
+		reasoning, reasoningOK := retractStreamText(run.reasoning.String(), event.DiscardReasoningBytes)
+		if !outputOK || !reasoningOK || event.Attempt < 2 || event.RetryDelay < 0 || event.TextDelta != "" {
+			return errors.New("invalid agent stream retry")
+		}
+		// Publish preceding increments before the authoritative replacement. Reset
+		// the sent offsets too: the next batch must start after the retained prefix.
+		r.flushProgressLocked(run)
+		run.output.Reset()
+		run.output.WriteString(output)
+		run.reasoning.Reset()
+		run.reasoning.WriteString(reasoning)
+		run.sentOutput, run.sentReasoning = len(output), len(reasoning)
+		block.Output, block.Reasoning = output, reasoning
+		block.Retry = &agent.RetryState{Attempt: event.Attempt, DelayMS: event.RetryDelay.Milliseconds()}
+		r.changedLocked(run.queue)
+		return nil
+	}
+	if event.Kind == agent.StreamRecovered {
+		block.Retry = nil
+		r.changedLocked(run.queue)
+		return nil
+	}
+	wasRetrying := block.Retry != nil
 	if event.Kind == agent.StreamReasoningDelta {
 		run.reasoning.WriteString(event.TextDelta)
 		block.Reasoning = run.reasoning.String()
@@ -301,11 +328,24 @@ func (r *runtime) streamProgress(run *activeExecution, event agent.StreamEvent) 
 		run.output.WriteString(event.TextDelta)
 		block.Output = run.output.String()
 	} else {
-		return
+		return fmt.Errorf("unknown agent stream event kind %d", event.Kind)
 	}
 	if event.TextDelta != "" {
 		r.queueProgressLocked(run, len(event.TextDelta))
+		if wasRetrying {
+			block.Retry = nil
+			r.changedLocked(run.queue)
+		}
 	}
+	return nil
+}
+
+func retractStreamText(value string, count int) (string, bool) {
+	if count < 0 || count > len(value) {
+		return "", false
+	}
+	prefix := value[:len(value)-count]
+	return prefix, utf8.ValidString(prefix)
 }
 
 func (r *runtime) roundFinished(run *activeExecution, result agent.RoundResult) {
@@ -391,6 +431,10 @@ func cloneTurnState(value agent.TurnState) agent.TurnState {
 	value.Execution = cloneExecution(value.Execution)
 	value.Blocks = append([]agent.ExecutionBlock(nil), value.Blocks...)
 	for i := range value.Blocks {
+		if retry := value.Blocks[i].Retry; retry != nil {
+			owned := *retry
+			value.Blocks[i].Retry = &owned
+		}
 		value.Blocks[i].Messages = cloneMessages(value.Blocks[i].Messages)
 		value.Blocks[i].Tools = append([]agent.ToolState(nil), value.Blocks[i].Tools...)
 		for j := range value.Blocks[i].Tools {

@@ -3,14 +3,43 @@ package modelruntime
 import (
 	"context"
 	"errors"
+	"fmt"
+	"log/slog"
 	"math/rand"
 	"time"
+
+	"github.com/ingot-agent/sdk/model"
+	"github.com/ingot-agent/sdk/observation"
 )
 
 const (
-	maxProviderAttempts = 3
-	maxRetryDelay       = 30 * time.Second
+	defaultMaxAttempts    = 8
+	defaultInitialDelayMS = 1000
+	defaultMaxDelayMS     = 30000
 )
+
+type retryPolicy struct {
+	maxAttempts  int
+	initialDelay time.Duration
+	maxDelay     time.Duration
+}
+
+func configuredRetry(cfg Config) (retryPolicy, error) {
+	attempts, initial, maximum := cfg.RetryMaxAttempts, cfg.RetryInitialDelayMS, cfg.RetryMaxDelayMS
+	if attempts == 0 {
+		attempts = defaultMaxAttempts
+	}
+	if initial == 0 {
+		initial = defaultInitialDelayMS
+	}
+	if maximum == 0 {
+		maximum = defaultMaxDelayMS
+	}
+	if attempts < 1 || attempts > 20 || initial < 1 || initial > 60000 || maximum < initial || maximum > 300000 {
+		return retryPolicy{}, fmt.Errorf("retry requires 1..20 attempts, 1..60000 ms initial delay and initial..300000 ms maximum delay: %w", ErrInvalidConfig)
+	}
+	return retryPolicy{attempts, time.Duration(initial) * time.Millisecond, time.Duration(maximum) * time.Millisecond}, nil
+}
 
 // retryHint is implemented by provider adapters, not by arbitrary interceptor
 // errors. A true hint means another invocation may recover, not that the
@@ -19,7 +48,7 @@ type retryHint interface {
 	RetryDelay() (time.Duration, bool)
 }
 
-func retryDelay(err error, attempt int) (time.Duration, bool) {
+func (p retryPolicy) delay(err error, attempt int) (time.Duration, bool) {
 	var hint retryHint
 	if !errors.As(err, &hint) {
 		return 0, false
@@ -28,15 +57,18 @@ func retryDelay(err error, attempt int) (time.Duration, bool) {
 	if !ok {
 		return 0, false
 	}
-	// Full jitter with a bounded exponential cap, with the provider's
-	// Retry-After treated as a minimum (also bounded).
-	capDelay := time.Duration(1<<uint(attempt-1)) * 200 * time.Millisecond
-	delay := time.Duration(rand.Int63n(int64(capDelay) + 1))
+	// Equal jitter avoids immediate retry storms while allowing recovery over
+	// seconds. Retry-After is a minimum, bounded by the configured maximum.
+	capDelay := p.initialDelay
+	for i := 1; i < attempt && capDelay < p.maxDelay; i++ {
+		capDelay = min(capDelay*2, p.maxDelay)
+	}
+	delay := capDelay/2 + time.Duration(rand.Int63n(int64(capDelay-capDelay/2)+1))
 	if serverDelay > delay {
 		delay = serverDelay
 	}
-	if delay > maxRetryDelay {
-		delay = maxRetryDelay
+	if delay > p.maxDelay {
+		delay = p.maxDelay
 	}
 	return delay, true
 }
@@ -53,4 +85,13 @@ func waitRetry(ctx context.Context, delay time.Duration) error {
 	case <-timer.C:
 		return ctx.Err()
 	}
+}
+
+func logProviderRetry(ctx context.Context, request model.Request, attempt, limit int, delay time.Duration, stream bool) {
+	attrs := []any{"provider", request.Provider, "model", request.Model,
+		"attempt", attempt, "max_attempts", limit, "delay_ms", delay.Milliseconds(), "stream", stream}
+	if correlation, ok := observation.CorrelationFromContext(ctx); ok {
+		attrs = append(attrs, "session_id", correlation.SessionID, "turn_id", correlation.TurnID, "round", correlation.RoundIndex)
+	}
+	slog.WarnContext(ctx, "retrying model provider request", attrs...)
 }
