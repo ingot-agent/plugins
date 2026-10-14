@@ -60,6 +60,9 @@
 
 ### Fixed
 
+- Preserve line breaks, blank lines and indentation in plain-text tool results,
+  including live output and reloaded history; wrap long lines without rendering
+  output as HTML or Markdown.
 - Keep image selection and sending available with an Asset Store when
   `agent.PluginInputWriter` is absent. Omit file notices for these image-only
   turns and reject unsupported local files during selection and submission.

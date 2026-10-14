@@ -84,6 +84,60 @@ func TestForkMetadataAndFollowupDeletionGuard(t *testing.T) {
 	}
 }
 
+func TestPayloadWhitespaceSurvivesReopen(t *testing.T) {
+	ctx := context.Background()
+	databasePath := filepath.Join(t.TempDir(), "sessions.sqlite3")
+	created, err := openStore(ctx, databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = created.close() })
+	metadata, err := created.Create(ctx, session.CreateRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := "\nstdout:\n  第一行  with spaces\n\n\tsecond line\r\n" + `literal \n` + "\n"
+	encoded, err := json.Marshal(struct {
+		Text string `json:"text"`
+	}{Text: text})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []session.Entry{
+		{Kind: "plain", Version: 1, Payload: []byte(text)},
+		{Kind: "json", Version: 1, Payload: encoded},
+	}
+	for _, entry := range want {
+		if err := created.Append(ctx, metadata.ID, entry); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := created.close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := openStore(ctx, databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = reopened.close() })
+	got, err := reopened.Load(ctx, metadata.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("persisted payload changed: got=%#v want=%#v", got, want)
+	}
+	var decoded struct {
+		Text string `json:"text"`
+	}
+	if err := json.Unmarshal(got[1].Payload, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded.Text != text {
+		t.Fatalf("decoded text=%q want=%q", decoded.Text, text)
+	}
+}
+
 func TestPersistenceLifecycleForkAndDelete(t *testing.T) {
 	ctx := context.Background()
 	databasePath := filepath.Join(t.TempDir(), "sessions.sqlite3")
