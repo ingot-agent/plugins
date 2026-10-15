@@ -36,8 +36,19 @@ func loadConfig(scope string) (Config, error) {
 	}
 	decoder := toml.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&config); err != nil {
+	// Accept the retired upload setting from development configurations without
+	// exposing or persisting it again. Images now always use data URLs.
+	var stored struct {
+		Providers []struct {
+			ProviderConfig
+			ImageFileFormat string `toml:"image_file_format"`
+		} `toml:"providers"`
+	}
+	if err := decoder.Decode(&stored); err != nil {
 		return config, fmt.Errorf("decode plugin config: %w", err)
+	}
+	for _, provider := range stored.Providers {
+		config.Providers = append(config.Providers, provider.ProviderConfig)
 	}
 	return config, nil
 }

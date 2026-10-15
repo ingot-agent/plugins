@@ -94,6 +94,8 @@ publish a candidate. Direct file changes are loaded at reconstruction.
 - User and tool-result images accept HTTP/HTTPS URIs or inline/asset `image/*`
   content. Remote URIs are passed through, while local bytes become base64 data
   URLs after size checks.
+  Local images, including `view_image` results, are sent in the model request;
+  the adapter does not call the Files API or send file IDs.
 - Tool-result images (Unreleased) use the native
   [`function_call_output.output` content array](https://developers.openai.com/api/reference/resources/responses/methods/create)
   with ordered `input_text` and `input_image` parts and the original `call_id`.

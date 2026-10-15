@@ -106,13 +106,19 @@ non-text response content are rejected with `content.ErrUnsupportedContent`.
 
 Tool-result images (Unreleased) are adapted to the
 [Chat Completions message schema](https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create),
-which allows only text in tool messages. Tool text and call IDs remain in tool
+using textual tool messages for compatibility. Tool text and call IDs remain in tool
 messages, with numbered image markers at the original image positions. Images
 are sent in additional user messages labeled with the same call IDs and image
 numbers, after all consecutive tool results and before the next history message.
 This preserves parallel tool-call groups. The conversion applies to Complete and
 Stream requests only; SDK/session history keeps the original tool content.
 The selected upstream model must support image inputs.
+
+Local images, including `view_image` results, use base64 data URLs in the model
+request. No Files API upload or file ID is used. The retired `image_file_format`
+setting is accepted and ignored when reading older development configurations;
+it is absent from the configuration form and removed on the next save.
+
 
 Complete responses must contain exactly one choice at index 0, an assistant
 message, a nonempty model, and a finish reason. Streaming requests set

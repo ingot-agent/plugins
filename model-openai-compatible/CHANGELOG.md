@@ -4,6 +4,10 @@ All notable changes to this plugin are documented in this file.
 
 ## Unreleased
 
+- Send local user and tool images as base64 data URLs in complete and streaming
+  requests, without Files API uploads, file-ID caches, or upload diagnostic files.
+- Accept and discard the retired `image_file_format` configuration setting.
+
 ### Changed
 
 - Mark truncated SSE and explicit transient HTTP/2 transport failures retryable, including after partial progress for callers supporting retraction.

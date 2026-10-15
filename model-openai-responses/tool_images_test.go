@@ -42,6 +42,9 @@ func TestToolOutputsPreserveImagesAndText(t *testing.T) {
 			t.Run(mode+"/"+tt.name, func(t *testing.T) {
 				var body []byte
 				client := clientFunc(func(_ context.Context, request *http.Request) (*http.Response, error) {
+					if request.URL.Path != "/responses" || request.Header.Get("Content-Type") != "application/json" {
+						t.Fatal("tool images must use the model JSON request without a separate upload")
+					}
 					body, _ = io.ReadAll(request.Body)
 					result := `{"id":"resp_1","object":"response","status":"completed","model":"m","output":[]}`
 					if mode == "stream" {
@@ -110,6 +113,7 @@ func TestToolImagesValidateBeforeDispatch(t *testing.T) {
 			want error
 		}{
 			{"local URI", content.URI(content.KindImage, "image/png", "x", "file:///tmp/x.png"), content.ErrUnsupportedContent},
+			{"hostless URI", content.URI(content.KindImage, "image/png", "x", "https:///image.png"), content.ErrUnsupportedContent},
 			{"invalid MIME", content.Inline(content.KindImage, "text/plain", "x", []byte("x")), content.ErrUnsupportedContent},
 			{"oversized inline", content.Inline(content.KindImage, "image/png", "x", []byte("four")), content.ErrUnsupportedContent},
 			{"oversized asset", content.AssetPart(content.KindImage, "image/png", "x", asset.Reference{ID: "large"}), content.ErrUnsupportedContent},

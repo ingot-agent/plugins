@@ -97,7 +97,7 @@ func (p *provider) encodeChatRequest(ctx context.Context, request model.Request,
 	messages := make([]chatMessage, 0, len(request.Messages))
 	var toolImages []chatMessage
 	for i, message := range request.Messages {
-		// Chat Completions only accepts text in tool messages. Defer image
+		// Keep tool results textual for Chat compatibility. Defer image
 		// attachments until all adjacent tool results have been emitted, so a
 		// user message never interrupts a parallel tool-call response group.
 		if message.Role != model.RoleTool {
@@ -276,7 +276,7 @@ func (p *provider) imageURL(ctx context.Context, part content.Part) (string, err
 			return "", &content.UnsupportedError{Reason: "image URI must be valid UTF-8"}
 		}
 		parsed, err := url.Parse(part.Media.Source.URI)
-		if err != nil || !parsed.IsAbs() {
+		if err != nil || !parsed.IsAbs() || parsed.Host == "" {
 			return "", &content.UnsupportedError{Reason: "image URI must be an absolute remote URI"}
 		}
 		switch strings.ToLower(parsed.Scheme) {

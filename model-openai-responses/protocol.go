@@ -289,7 +289,7 @@ func (p *provider) imageURL(ctx context.Context, part content.Part) (string, err
 			return "", &content.UnsupportedError{Reason: "image URI must be valid UTF-8"}
 		}
 		parsed, err := url.Parse(part.Media.Source.URI)
-		if err != nil || !parsed.IsAbs() {
+		if err != nil || !parsed.IsAbs() || parsed.Host == "" {
 			return "", &content.UnsupportedError{Reason: "image URI must be an absolute remote URI"}
 		}
 		switch strings.ToLower(parsed.Scheme) {

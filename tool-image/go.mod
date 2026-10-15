@@ -1,0 +1,9 @@
+module github.com/ingot-agent/plugins/tool-image
+
+go 1.24.0
+
+require (
+	github.com/ingot-agent/ingot-abi v0.1.0
+	github.com/ingot-agent/sdk v0.2.10
+	golang.org/x/image v0.28.0
+)

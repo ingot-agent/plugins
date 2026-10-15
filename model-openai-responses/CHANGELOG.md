@@ -4,6 +4,9 @@ All notable changes to this plugin are documented in this file.
 
 ## Unreleased
 
+- Send local user and tool images as base64 data URLs in complete and streaming
+  requests, without Files API uploads, file-ID caches, or upload diagnostic files.
+
 - Derive a stable Session cache key for `prompt_cache_key` and the Responses
   `session-id` / `thread-id` headers so compatible gateways can route related
   requests consistently across rounds, turns and runtime restarts.
