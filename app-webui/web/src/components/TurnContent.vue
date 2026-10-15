@@ -9,12 +9,12 @@ import MarkdownContent from './MarkdownContent.vue'
 import ToolCard from './ToolCard.vue'
 import InteractionCard from './InteractionCard.vue'
 
-const props = defineProps<{ turn: LiveTurn; interactions: Record<string, Interaction>; historicalToolIds: Set<string>; showToolCalls: boolean }>()
+const props = withDefaults(defineProps<{ turn: LiveTurn; interactions: Record<string, Interaction>; historicalToolIds: Set<string>; showToolCalls: boolean; showActivity?: boolean }>(), { showActivity: true })
 provide(fileContextKey, computed(() => ({ sessionId: props.turn.sessionId })))
 const { t } = useI18n()
 type DisplayBlock = TurnBlock | { id: string; kind: 'content'; parts: Part[] }
 const blocks = computed<DisplayBlock[]>(() => {
-  const items: DisplayBlock[] = [...(props.turn.blocks || [])]
+  const items: DisplayBlock[] = props.turn.blocks.filter(block => block.kind !== 'interaction' || props.interactions[block.interactionId])
   // Canonical output belongs to the final response, not to earlier commentary.
   if (props.turn.result?.output) {
     const last = items.at(-1)
@@ -33,12 +33,13 @@ const blocks = computed<DisplayBlock[]>(() => {
         <summary><ChevronRight :size="14" class="disclosure-chevron" />{{ t('reasoning') }}</summary>
         <MarkdownContent :text="block.text" />
       </details>
+      <ContentParts v-else-if="block.kind === 'output' && block.content?.length" :parts="block.content" />
       <MarkdownContent v-else-if="block.kind === 'output'" :text="block.text" />
       <ContentParts v-else-if="block.kind === 'content'" :parts="block.parts" />
       <ToolCard v-else-if="block.kind === 'tool'" :name="block.call.name" :arguments="block.call.arguments" :content="block.content" :status="block.status" :error="block.error" />
       <InteractionCard v-else-if="block.kind === 'interaction'" :interaction="interactions[block.interactionId]!" />
     </template>
-    <div v-if="turn.status === 'running' && turn.retry" class="retry-status" role="status">{{ t('modelRetry', { attempt: turn.retry.attempt }) }}</div>
-    <div v-else-if="turn.status === 'running'" class="thinking-dots" role="status" :aria-label="t('status.running')"><i /><i /><i /></div>
+    <div v-if="showActivity && turn.status === 'running' && turn.retry" class="retry-status" role="status">{{ t('modelRetry', { attempt: turn.retry.attempt }) }}</div>
+    <div v-else-if="showActivity && turn.status === 'running'" class="thinking-dots" role="status" :aria-label="t('status.running')"><i /><i /><i /></div>
   </div>
 </template>

@@ -6,27 +6,43 @@ import TurnContent from './TurnContent.vue'
 import { useRuntime } from '../stores/runtime'
 import { i18n } from '../i18n'
 import { reduceTurn } from '../state'
+import { turnSnapshot } from '../test/turn'
 import type { Interaction, LiveTurn } from '../protocol'
 
 let wrapper: VueWrapper
 afterEach(() => wrapper?.unmount())
 
 describe('chronological turn content', () => {
+  it('renders earlier media and replaces final text even when a resolved interaction trails the snapshot', () => {
+    const turn: LiveTurn = {
+      ...turnSnapshot(),
+      id: 'receipt', sessionId: 's', revision: 1, status: 'succeeded', output: 'final', reasoning: '',
+      blocks: [
+        { id: 'earlier', kind: 'output', text: '', boundary: 0, content: [{ kind: 'file', name: 'report.txt', source: { kind: 'asset', assetId: 'report' } }] },
+        { id: 'final', kind: 'output', text: 'final', boundary: 1 },
+        { id: 'resolved', kind: 'interaction', interactionId: 'resolved' },
+      ], result: { output: [{ kind: 'text', text: 'final' }] },
+    }
+    wrapper = mount(TurnContent, { props: { turn, interactions: {}, historicalToolIds: new Set<string>(), showToolCalls: true }, global: { plugins: [createPinia(), i18n] } })
+    expect(wrapper.text()).toContain('report.txt')
+    expect(wrapper.findAll('.markdown').map(item => item.text())).toEqual(['final'])
+  })
+
   it('shows retry status and removes failed text while preserving earlier content', async () => {
     const pinia = createPinia()
-    const turns = reactive<Record<string, LiveTurn>>({ web: { id: 'web', sessionId: 's', revision: 1, output: 'Earlier. Failed.', reasoning: '', status: 'running', blocks: [
+    const turns = reactive<Record<string, LiveTurn>>({ web: { ...turnSnapshot(), id: 'web', sessionId: 's', revision: 1, output: 'Earlier. Failed.', reasoning: '', status: 'running', blocks: [
       { id: 'old', kind: 'output', text: 'Earlier. ', boundary: 0 },
       { id: 'failed', kind: 'output', text: 'Failed.', boundary: 1 },
     ] } })
     wrapper = mount(TurnContent, { props: { turn: turns.web, interactions: {}, historicalToolIds: new Set<string>(), showToolCalls: true }, global: { plugins: [pinia, i18n] } })
-    reduceTurn(turns, { type: 'agent.output.reset', data: { invocationId: 'web', revision: 2, output: 'Earlier. ', reasoning: '', retry: { attempt: 2, delayMs: 1000 } } })
-    await nextTick()
+    reduceTurn(turns, { type: 'agent.runtime.updated', data: { turns: [turnSnapshot({ revision: 2, output: 'Earlier. ', retry: { attempt: 2, delayMs: 1000 }, blocks: [{ id: 'old', kind: 'output', text: 'Earlier. ', boundary: 0 }] })] } })
+    await wrapper.setProps({ turn: turns.web })
     expect(wrapper.find('.retry-status').exists()).toBe(true)
     expect(wrapper.get('[role="status"]').text()).toContain('2')
     expect(wrapper.text()).toContain('Earlier.')
     expect(wrapper.text()).not.toContain('Failed.')
-    reduceTurn(turns, { type: 'agent.output.delta', data: { invocationId: 'web', revision: 3, text: 'Recovered.' } })
-    await nextTick()
+    reduceTurn(turns, { type: 'agent.runtime.updated', data: { turns: [turnSnapshot({ revision: 3, output: 'Earlier. Recovered.', blocks: [{ id: 'old', kind: 'output', text: 'Earlier. ', boundary: 0 }, { id: 'new', kind: 'output', text: 'Recovered.', boundary: 1 }] })] } })
+    await wrapper.setProps({ turn: turns.web })
     expect(wrapper.find('.retry-status').exists()).toBe(false)
     expect(wrapper.text()).toContain('Recovered.')
   })
@@ -34,13 +50,19 @@ describe('chronological turn content', () => {
   it('keeps disclosure and form state as later blocks arrive, and replaces only the final answer', async () => {
     const pinia = createPinia()
     useRuntime(pinia).connection = 'online'
-    const turns = reactive<Record<string, LiveTurn>>({ web: { id: 'web', sessionId: 's', revision: 0, output: '', reasoning: '', status: 'running', blocks: [] } })
+    const turns = reactive<Record<string, LiveTurn>>({ web: turnSnapshot() })
     const interactions = reactive<Record<string, Interaction>>({ question: { id: 'question', name: 'ask', fields: [{ name: 'answer', label: 'Answer', kind: 'string', required: true, sensitive: false, hasDefault: false }] } })
     const scope = { agent: { sessionId: 's', turnId: 'sdk', toolCallId: 'call' } }
-    const delta = (kind: 'reasoning' | 'output', text: string) => reduceTurn(turns, { type: `agent.${kind}.delta`, data: { invocationId: 'web', revision: turns.web.revision + 1, text } })
+    const delta = (kind: 'reasoning' | 'output', text: string) => reduceTurn(turns, { type: 'agent.runtime.updated', data: { turns: [{
+      ...turns.web, revision: turns.web.revision + 1, [kind]: turns.web[kind] + text,
+      blocks: [...turns.web.blocks, { id: kind + turns.web.revision, kind, text, boundary: turns.web.revision }],
+    }] } })
     delta('reasoning', 'First thought')
     delta('output', 'Before the tool')
-    reduceTurn(turns, { type: 'agent.tool.started', scope, data: { call: { id: 'call', name: 'inspect', arguments: {} } } })
+    reduceTurn(turns, { type: 'agent.runtime.updated', data: { turns: [{
+      ...turns.web, revision: turns.web.revision + 1,
+      blocks: [...turns.web.blocks, { id: 'tool-call', kind: 'tool', call: { id: 'call', name: 'inspect', arguments: {} }, status: 'running' }],
+    }] } })
     delta('reasoning', 'Second thought')
     reduceTurn(turns, { type: 'interaction.requested', scope, data: interactions.question })
     wrapper = mount(TurnContent, { props: { turn: turns.web, interactions, historicalToolIds: new Set<string>(), showToolCalls: true }, global: { plugins: [pinia, i18n] } })
@@ -49,7 +71,7 @@ describe('chronological turn content', () => {
     await wrapper.get('textarea').setValue('Keep this answer')
     delta('reasoning', 'Third thought')
     delta('output', 'Partial final answer')
-    await nextTick()
+    await wrapper.setProps({ turn: turns.web })
     expect(wrapper.findAll('.turn-content > *').map(item => item.classes()[0])).toEqual(['reasoning-block', 'markdown', 'tool-card', 'reasoning-block', 'interaction-card', 'reasoning-block', 'markdown', 'thinking-dots'])
     expect(wrapper.get('.reasoning-block').element).toBe(firstReasoning)
     expect(firstReasoning.open).toBe(true)
@@ -69,6 +91,7 @@ describe('chronological turn content', () => {
     const pinia = createPinia()
     const interactions = reactive<Record<string, Interaction>>({ question: { id: 'question', name: 'ask', fields: [{ name: 'answer', label: 'Answer', kind: 'string', required: true, sensitive: false, hasDefault: false }] } })
     const turn: LiveTurn = {
+      ...turnSnapshot(),
       id: 'hidden-tool', sessionId: 's', revision: 0, output: 'Visible answer', reasoning: '', status: 'running',
       blocks: [
         { id: 'tool', kind: 'tool', call: { id: 'call', name: 'inspect', arguments: {} }, status: 'running' },

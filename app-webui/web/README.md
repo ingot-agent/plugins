@@ -39,13 +39,13 @@ npm run build
 npm run test:e2e
 ```
 
-Playwright 启动两个真实 Go HTTP/SSE 服务（`17316` 流式、`17317` Run-only），使用仅存在于 Go 测试代码中的确定性 SDK adapters，不访问模型、不需要凭据。覆盖会话生命周期、审批与自由文本、跨标签页同步、运行中历史阻塞、取消后的部分输出、附件历史、Operation、过期 cursor 和中英文/深色/移动布局。失败时保留 trace、截图及 HTML 报告。
+Playwright 启动两个真实 Go HTTP/SSE 服务（`17316` 流式、`17317` 模型 Complete），使用仅存在于 Go 测试代码中的确定性 SDK adapters，不访问模型、不需要凭据。覆盖会话生命周期、审批与自由文本、跨标签页同步、运行中完整历史边界、取消后的部分输出、附件历史、Operation、过期 cursor 和中英文/深色/移动布局。失败时保留 trace、截图及 HTML 报告。
 
-默认 fixture 使用 `GOWORK=off` 验证插件声明的已发布依赖；当前固定 SDK v0.2.17，
-包含流式重试控制事件及本地文件输入所用的通用 `agent.PluginInput` 能力接口。
-WebUI 在启动 Agent 前调用注入的 writer 写入通知。浏览器回归无需本地 SDK workspace。
-开发时可用 `INGOT_WEBUI_FIXTURE_GOWORK=/absolute/path/to/go.work npm run test:e2e`
-指定 workspace；该选项只影响测试子进程，不改变插件的发布依赖。
+浏览器 fixture 使用真实 agent-default 调度与持久化逻辑，模型、工具和存储由测试适配器提供。默认使用 `GOWORK=off`，从 `go.mod` 加载 SDK v0.2.19 和固定提交版本的 Agent，无需本地 SDK 或 ABI checkout。仅在验证跨插件的本地改动时使用工作区覆盖：
+
+`INGOT_WEBUI_FIXTURE_GOWORK=/absolute/path/to/go.work npm run test:e2e`
+
+workspace 应包含需要覆盖的插件；只有同时修改 SDK 或 ABI 时才添加它们的本地替换。该环境变量只影响测试子进程。
 
 PowerShell 对应设置为 `$env:INGOT_WEBUI_FIXTURE_GOWORK = 'D:\absolute\path\go.work'`；测试结束后可用 `Remove-Item Env:INGOT_WEBUI_FIXTURE_GOWORK` 恢复默认。不要将本机路径提交进模块或 package.json。
 
@@ -55,7 +55,7 @@ PowerShell 对应设置为 `$env:INGOT_WEBUI_FIXTURE_GOWORK = 'D:\absolute\path\
 INGOT_WEBUI_FIXTURE_ADDR=127.0.0.1:7316 node scripts/fixture.mjs
 ```
 
-打开 `http://127.0.0.1:7316/`；输入含 `approve`、`ask`、`hold`、`fail` 分别触发审批、自由输入、等待取消和失败。其他输入返回固定文本。这不是生产 Agent，数据只存在于进程内；重新构建嵌入文件后需要重启测试服务。
+打开 `http://127.0.0.1:7316/`；输入含 `approve`、`ask`、`hold`、`fail` 分别触发审批、自由输入、等待取消和失败。其他输入返回固定文本。调度器使用真实 Agent 实现，测试数据只存在于进程内；重新构建嵌入文件后需要重启测试服务。
 
 fixture 通过 `go test -run '^TestBrowserFixture$' -count=1 -timeout 0 -v ./app` 启动；Playwright 自己负责启动两个 fixture，不会复用端口上已有的服务。若端口被占用、Go 依赖不可获得或 Chromium 未安装，先解决对应环境问题；修改 Web 界面后必须先执行 `npm run build`，浏览器测试读取的是 Go 嵌入产物而不是 Vite 开发服务器。
 
@@ -63,7 +63,7 @@ fixture 通过 `go test -run '^TestBrowserFixture$' -count=1 -timeout 0 -v ./app
 
 Composer 的附件按钮调用 `POST /api/files/select` 打开 Runtime 主机的系统文件选择器，返回本地绝对路径。输入框还支持粘贴剪贴板文件和截图，通过 `POST /api/files/upload` 上传文件内容；纯文本粘贴保持浏览器默认行为。文件草稿按会话保存，选择或上传期间切换会话不会把结果放进新会话；未发送的草稿只保留在内存中。上传过程中显示状态，完成前禁止发送，移除附件或卸载组件会取消对应请求。当前不处理拖放。
 
-剪贴板文件没有可信的宿主原路径。有文件通知 writer 时，后端将上传内容保存到插件 state 的附件目录，图片同时使用 Asset 预览；没有 writer 时仍可通过 Asset 上传支持的图片，普通文件会明确报错。粘贴前校验单文件大小，上传失败保留正文及其他附件。成功上传的服务端内容不会随草稿删除自动清理，文件保留规则见后端说明。
+剪贴板文件没有可信的宿主原路径。后端将上传内容保存到插件 state 的附件目录，图片同时使用 Asset 预览；文件通知由 Agent 接入 Input 时原子写入，无需独立的插件 writer。粘贴前校验单文件大小，上传失败保留正文及其他附件。成功上传的服务端内容不会随草稿删除自动清理，文件保留规则见后端说明。
 
 PNG、JPEG、GIF、WebP 可使用返回的 Asset 预览；非图片仅发送原路径，不保存副本。发送被接受后，前端直接用本次输入和选择器返回的文件列表显示临时附件；执行结束后替换为权威历史，再从用户消息前面的持久文件通知恢复附件。文件通知在上下文中位于用户消息之前，但主对话和追问窗口均不渲染带插件标记的上下文消息。附件按选择顺序显示；纯文件发送显示附件，非图片暂仅显示图标、文件名和类型。该投影不修改原始历史或改变消息索引，刷新后文件附件仍可见，插件消息仍然隐藏。
 
@@ -87,4 +87,10 @@ Operation 的 Interaction 表单按层级编辑 Object/List：先显示字段或
 - `forms.ts`：Interaction 字段转换与 Operation 简单 Schema 判断；复杂结构或不安全的大整数保留在 JSON 模式提交，完整校验交给后端。
 - `components/` / `views/`：会话、执行详情、审批、附件和 Operation；用户文本不作为原始 HTML 执行。
 
-Web invocation ID 与 SDK Turn ID 不可互换；仅在会话中能明确关联执行时，将 Observation 放进对应的实时 Turn。Observation 是只读事实，不用它推断 Web 请求是否已成功；终态以 Web invocation 事件、规范结果和 History 协调。执行结束后，正文和工具调用由权威历史替换。刷新/重连会从 Session 元数据和运行时状态快照恢复累计用量及当前上下文；不会恢复过去的推理分段或详细 trace；运行中快照只能展示已有的汇总文本，后续事件继续向下追加，也不做 Checkpoint/Resume。
+Web invocation ID 表示用户提交，SDK TurnID 表示生命周期；多个输入可以共用一个 TurnID。agent.runtime.updated 提供受影响输入的顺序 blocks 和权威终态，agent.runtime.progress 追加合并的正文、推理和工具增量，两者按共同 revision 去重。Observation 用于诊断，Interaction 仍即时展示。刷新和重连恢复保留窗口内的输入、推理、正文及工具顺序；执行完成后正文和工具由持久历史校准。未持久化的附件失败仍独立显示。队列和历史缓存不提供进程重启后的 Checkpoint/Resume。
+
+状态、耗时和运行中指示按 SDK TurnID 只显示一次，位于该生命周期最后一条已接入输入对应的回复处；各条输入和轮次内容仍按原顺序展示。尚未接入的队列项以及附件准备失败的输入不占用该生命周期的状态位置。
+
+前端只接收当前协议的完整 Turn 快照：`blocks`、`status`、`started`、`sequence` 和 `persisted` 为必填字段。正文和推理直接使用快照中的 `blocks`，不从旧的聚合文本重建，也不处理旧版 invocation/delta 事件或仅含 ID 的提交响应。SDK TurnID 由后端提供；输入尚未进入生命周期时可以没有该字段，前端不根据观察事件猜测关联。
+
+模型重试沿用 agent.runtime.updated 的权威快照，替换失败尝试的 blocks 并展示 retry；恢复、取消后清除状态。重试期间仍可提交输入，它在完整 Round 结束后接入。

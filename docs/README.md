@@ -2,7 +2,7 @@
 
 This repository owns official plugin usage, configuration, implementation
 behavior and design history. The [catalog](../README.md#plugin-catalog) links
-the current reference for all **19** plugin modules.
+the current reference for all **20** plugin modules.
 
 具体插件文档已从 Core 迁入本仓库。当前 README 对应本分支源码；使用已发布
 module tag 时，应阅读同一 tag 的文档，不能把分支上的新功能视为已发布。

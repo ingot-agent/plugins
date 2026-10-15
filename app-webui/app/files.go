@@ -2,7 +2,6 @@ package appcomponent
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"mime"
@@ -129,16 +128,11 @@ func (a *application) prepareLocalFile(ctx context.Context, item appbackend.Atta
 		return appbackend.Attachment{}, err
 	}
 	file.AssetID = item.AssetID
-	if file.Kind != "image" && a.pluginInputs == nil {
-		return appbackend.Attachment{}, fmt.Errorf("only PNG, JPEG, GIF, and WebP images can be attached in this composition: %w", appbackend.ErrCapabilityUnavailable)
-	}
 	if file.Kind == "image" && file.AssetID == "" {
 		if a.assets != nil {
 			if err := a.importLocalImage(ctx, &file); err != nil {
 				return appbackend.Attachment{}, err
 			}
-		} else if a.pluginInputs == nil {
-			return appbackend.Attachment{}, fmt.Errorf("image attachments are unavailable in this composition: %w", appbackend.ErrCapabilityUnavailable)
 		}
 	}
 	return file, nil
@@ -161,47 +155,18 @@ func (a *application) importLocalImage(ctx context.Context, file *appbackend.Att
 	return nil
 }
 
-func (a *application) prepareAttachments(ctx context.Context, requested []appbackend.Attachment) ([]content.Attachment, *agent.PluginInput, error) {
-	images := make([]content.Attachment, 0, len(requested))
-	files := make([]appbackend.Attachment, 0, len(requested))
+// attachmentInput carries the whole submission to the Agent. Local paths are
+// checked at consumption time; selecting a file already imports image assets.
+func attachmentInput(text string, requested []appbackend.Attachment) (agent.Input, error) {
+	input := agent.Input{Text: text, Attachments: make([]agent.InputAttachment, 0, len(requested))}
 	for _, item := range requested {
-		if err := ctx.Err(); err != nil {
-			return nil, nil, err
-		}
-		if item.Path != "" {
-			file, err := a.prepareLocalFile(ctx, item)
-			if err != nil {
-				return nil, nil, err
-			}
-			if a.pluginInputs != nil {
-				files = append(files, file)
-			}
-			item = file
-		} else if item.Kind != "image" || !supportedImage(item.MIMEType) {
-			return nil, nil, fmt.Errorf("non-image attachments require a host-local path: %w", errInvalidLocalFile)
-		}
+		a := agent.InputAttachment{Name: item.Name, MIMEType: item.MIMEType, Size: int64(item.Size), Path: item.Path}
 		if item.Kind == "image" && item.AssetID != "" {
-			images = append(images, content.Attachment{Kind: content.KindImage, Media: content.Media{MIMEType: item.MIMEType, Name: item.Name,
-				Source: content.Source{Kind: content.SourceAsset, Asset: asset.Reference{ID: item.AssetID}}}})
+			a.Media = &content.Attachment{Kind: content.KindImage, Media: content.Media{MIMEType: item.MIMEType, Name: item.Name, Source: content.Source{Kind: content.SourceAsset, Asset: asset.Reference{ID: item.AssetID}}}}
 		} else if item.Path == "" {
-			return nil, nil, fmt.Errorf("image attachment requires an asset: %w", content.ErrInvalidContent)
+			return agent.Input{}, fmt.Errorf("attachment needs a path or image asset: %w", agent.ErrInvalidMessage)
 		}
+		input.Attachments = append(input.Attachments, a)
 	}
-	if err := content.ValidateAttachments(images); err != nil {
-		return nil, nil, err
-	}
-	if len(files) == 0 {
-		return images, nil, nil
-	}
-	// The body describes all selected files; only supported images are sent as
-	// model media. Non-image files remain at their original host-local paths.
-	for i := range files {
-		files[i].AssetID = ""
-	}
-	encoded, err := json.MarshalIndent(files, "", "  ")
-	if err != nil {
-		return nil, nil, err
-	}
-	plugin := agent.PluginInput{Plugin: "app.backend", Text: string(encoded) + "\n\n\u4ee5\u4e0a\u662f\u7d27\u968f\u5176\u540e\u7684\u7528\u6237\u8f93\u5165\u6240\u4e0a\u4f20\u7684\u6587\u4ef6\u3002"}
-	return images, &plugin, nil
+	return input, agent.ValidateInput(input)
 }

@@ -66,15 +66,15 @@ Restart, Fork, Archive, and Delete follow the existing Store lifecycle.
 The official Agent orders records during history projection, buffering plugin
 messages inside unfinished tool rounds until completion or recovery. The durable
 Entries reconstruct that buffer after a restart. This plugin does not own those
-Agent rules. WebUI appends file notices before starting the Agent, so they precede
-the corresponding user message; notice/user writes are independent.
+Agent rules. WebUI now submits file references with the actual user Input to
+Agent.SendMessage. The Agent appends the notice/user pair atomically using standard
+agent.message records; this independent writer retains its existing semantics.
 
 ## Validation
 
-The writer and projector interfaces are published in SDK v0.2.16, pinned in
-`go.mod`. Run isolated checks against that release with `GOWORK=off`; no local
-SDK checkout or replacement is required. This plugin remains unreleased until
-its own module tag is published.
+The module pins published SDK v0.2.19 for the writer/projector interfaces and
+variadic Store.Append contract. Validate independently without a local SDK
+workspace:
 
 ```powershell
 $env:GOWORK = 'off'

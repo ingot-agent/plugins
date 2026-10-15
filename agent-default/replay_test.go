@@ -25,7 +25,7 @@ func TestHistoryReplaySurvivesToolRoundAndRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := exports.Runtime.Run(context.Background(), agent.Turn{SessionID: "s", Input: "hello"}); err != nil {
+	if _, err := exports.Runtime.(*runtime).execute(context.Background(), agent.Turn{SessionID: "s", Inputs: []agent.Input{{Text: "hello"}}}, nil); err != nil {
 		t.Fatal(err)
 	}
 	if cleanup != nil {
@@ -49,7 +49,7 @@ func TestHistoryReplaySurvivesToolRoundAndRestart(t *testing.T) {
 	if cleanup != nil {
 		defer cleanup(context.Background())
 	}
-	if _, err := restarted.Runtime.Run(context.Background(), agent.Turn{SessionID: "s", Input: "continue"}); err != nil {
+	if _, err := restarted.Runtime.(*runtime).execute(context.Background(), agent.Turn{SessionID: "s", Inputs: []agent.Input{{Text: "continue"}}}, nil); err != nil {
 		t.Fatal(err)
 	}
 	restored := secondModels.requests[0].Messages[1]

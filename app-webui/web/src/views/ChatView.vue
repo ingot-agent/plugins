@@ -23,7 +23,7 @@ import JsonBlock from '../components/JsonBlock.vue'
 import WorkspaceHeader from '../components/WorkspaceHeader.vue'
 import FollowupNote from '../components/FollowupNote.vue'
 import { readPreference, savePreference } from '../theme'
-import { displayMessage, hasVisibleMessageContent, shouldShowHistoryMessage, shouldShowTurnByline } from './conversationDisplay'
+import { displayMessage, hasVisibleMessageContent, hasVisibleTurnContent, lifecycleStatusInputs, shouldShowHistoryMessage, shouldShowTurnByline } from './conversationDisplay'
 defineEmits<{ navigation: []; pending: []; operation: [operation: Operation, sessionId: string] }>()
 const runtime = useRuntime()
 const route = useRoute()
@@ -48,7 +48,9 @@ const noteRanges = new Map<string, Range>()
 let topWindow = 20
 const openingFollowup = ref(false)
 let windowGesture: { id: string; kind: 'move' | 'resize'; x: number; y: number; original: FollowupWindow } | undefined
-const liveTurns = computed(() => Object.values(runtime.turns).filter(turn => turn.sessionId === sessionId.value))
+const liveTurns = computed(() => Object.values(runtime.turns).filter(turn => turn.sessionId === sessionId.value && turn.status !== 'queued' && turn.started !== false)
+  .sort((left, right) => left.sequence - right.sequence))
+const statusInputs = computed(() => lifecycleStatusInputs(liveTurns.value))
 const requests = computed(() => Object.values(runtime.interactions).filter(item => item.scope?.agent?.sessionId === sessionId.value))
 const hostStates = computed(() => Object.values(runtime.interactionStates).filter(item => item.scope?.agent?.sessionId === sessionId.value || !item.scope))
 const sending = ref(false)
@@ -102,9 +104,14 @@ const following = ref(true)
 type TranscriptEntry = { id: string; kind: 'message'; message: Message; index: number } | { id: string; kind: 'turn'; turn: LiveTurn }
 const transcript = computed(() => {
   const entries: TranscriptEntry[] = []
-  const settled = liveTurns.value.filter(turn => turn.reconciled)
+  const settled = liveTurns.value.filter(turn => turn.reconciled || turn.persisted === false && turn.status !== 'running' && turn.historyEnd !== undefined && turn.historyEnd <= messages.value.length)
+  const appendTurn = (turn: LiveTurn) => {
+    const local = !turn.reconciled && runtime.optimistic[turn.id]
+    if (local && shouldShowHistoryMessage(local.message, showToolCalls.value)) entries.push({ id: 'local-' + turn.id, kind: 'message', message: local.message, index: -1 })
+    if (showTurn(turn) || turn.error || statusInputs.value.has(turn.id)) entries.push({ id: turn.id, kind: 'turn', turn })
+  }
   const appendTurns = (end: number) => {
-    for (const turn of settled.filter(turn => turn.historyEnd === end)) entries.push({ id: turn.id, kind: 'turn', turn })
+    for (const turn of settled.filter(turn => turn.historyEnd === end)) appendTurn(turn)
   }
   appendTurns(0)
   messages.value.forEach((message, index) => {
@@ -112,20 +119,13 @@ const transcript = computed(() => {
     if (displayed.role !== 'tool' && shouldShowHistoryMessage(displayed, showToolCalls.value)) entries.push({ id: 'history-' + index, kind: 'message', message: displayed, index })
     appendTurns(index + 1)
   })
-  for (const turn of liveTurns.value.filter(turn => !turn.reconciled)) {
-    const local = runtime.optimistic[turn.id]
-    if (local) {
-      const message = local.message
-      if (shouldShowHistoryMessage(message, showToolCalls.value)) entries.push({ id: 'local-' + turn.id, kind: 'message', message, index: -1 })
-    }
-    entries.push({ id: turn.id, kind: 'turn', turn })
-  }
+  for (const turn of liveTurns.value.filter(turn => !settled.includes(turn))) appendTurn(turn)
   return entries
 })
 const turnCopies = computed(() => turnCopyTexts(messages.value))
 const toolResults = computed(() => new Map(messages.value.filter(message => message.role === 'tool').map(message => [message.toolCallId, message])))
 const historicalToolIds = computed(() => new Set(messages.value.flatMap(message => (message.toolCalls || []).map(call => call.id))))
-const timelineToolIds = computed(() => new Set(liveTurns.value.flatMap(turn => (turn.blocks || []).flatMap(block => block.kind === 'tool' ? [block.call.id] : []))))
+const timelineToolIds = computed(() => new Set(liveTurns.value.flatMap(turn => turn.blocks.flatMap(block => block.kind === 'tool' ? [block.call.id] : []))))
 const toolCalls = computed(() => {
   const calls = new Map<string, { id: string; name: string; arguments: unknown; content?: Part[]; status: string; error?: string }>()
   for (const event of runtime.traces[sessionId.value] || []) {
@@ -138,8 +138,9 @@ const toolCalls = computed(() => {
   }
   return [...calls.values()].filter(call => !historicalToolIds.value.has(call.id) && !timelineToolIds.value.has(call.id))
 })
-const showTurn = (turn: LiveTurn) => !turn.reconciled || (turn.status !== 'succeeded' && !!turn.output)
-const timelineRequestIds = computed(() => new Set(liveTurns.value.filter(showTurn).flatMap(turn => (turn.blocks || []).flatMap(block => block.kind === 'interaction' ? [block.interactionId] : []))))
+const showTurn = (turn: LiveTurn) => (!turn.reconciled || (turn.status !== 'succeeded' && !!turn.output))
+  && (statusInputs.value.has(turn.id) || hasVisibleTurnContent(turn, showToolCalls.value, runtime.interactions, historicalToolIds.value))
+const timelineRequestIds = computed(() => new Set(liveTurns.value.filter(showTurn).flatMap(turn => turn.blocks.flatMap(block => block.kind === 'interaction' ? [block.interactionId] : []))))
 const looseRequests = computed(() => requests.value.filter(item => !timelineRequestIds.value.has(item.id)))
 const welcome = computed(() => !sessionId.value)
 const media = window.matchMedia('(max-width: 1199px)')
@@ -346,8 +347,8 @@ async function keepFollowingLatest() {
   await nextTick()
   scrollToBottom()
 }
-watch(() => [transcript.value.length, ...liveTurns.value.map(turn => turn.output.length + turn.reasoning.length + (turn.blocks || []).filter(block => block.kind !== 'tool').length), requests.value.length].join('|'), keepFollowingLatest, { flush: 'post' })
-watch(() => liveTurns.value.map(turn => (turn.blocks || []).filter(block => block.kind === 'tool').length).join('|'), () => {
+watch(() => [transcript.value.length, ...liveTurns.value.map(turn => turn.output.length + turn.reasoning.length + turn.blocks.filter(block => block.kind !== 'tool').length), requests.value.length].join('|'), keepFollowingLatest, { flush: 'post' })
+watch(() => liveTurns.value.map(turn => turn.blocks.filter(block => block.kind === 'tool').length).join('|'), () => {
   if (showToolCalls.value) void keepFollowingLatest()
 }, { flush: 'post' })
 watch(() => toolCalls.value.length, () => {
@@ -414,13 +415,13 @@ onBeforeUnmount(() => { media.removeEventListener('change', resize); window.remo
               <button v-if="entry.message.role === 'assistant' && turnCopies.has(entry.index)" class="icon-button message-copy" :aria-label="t('copy')" @click="copy(turnCopies.get(entry.index)!)"><Copy :size="14" /></button>
             </article>
 
-            <article v-else class="message message-assistant live-message">
+            <article v-else class="message live-message" :class="{ 'message-assistant': showTurn(entry.turn) }">
               <template v-if="showTurn(entry.turn)">
-                <div v-if="shouldShowTurnByline(entry.turn, showToolCalls, runtime.interactions)" class="message-byline"><StatusBadge :status="entry.turn.status" /></div>
-                <TurnContent :turn="entry.turn" :interactions="runtime.interactions" :historical-tool-ids="historicalToolIds" :show-tool-calls="showToolCalls" />
+                <div v-if="statusInputs.has(entry.turn.id) && entry.turn.status === 'running' && shouldShowTurnByline(entry.turn, showToolCalls, runtime.interactions)" class="message-byline"><StatusBadge :status="entry.turn.status" /></div>
+                <TurnContent :turn="entry.turn" :interactions="runtime.interactions" :historical-tool-ids="historicalToolIds" :show-tool-calls="showToolCalls" :show-activity="statusInputs.has(entry.turn.id)" />
               </template>
               <p v-if="entry.turn.error" class="error-banner mt-2">{{ entry.turn.error.message }}</p>
-              <button v-if="entry.turn.status !== 'running'" class="execution-link" @click="details = true"><Activity :size="13" /><span>{{ t('status.' + entry.turn.status) }}</span><template v-if="entry.turn.outcome"><span>·</span><span>{{ (entry.turn.outcome.durationNs / 1e9).toFixed(1) }}s</span></template><ChevronRight :size="12" /></button>
+              <button v-if="statusInputs.has(entry.turn.id) && entry.turn.status !== 'running'" class="execution-link" @click="details = true"><Activity :size="13" /><span>{{ t('status.' + entry.turn.status) }}</span><template v-if="entry.turn.outcome"><span>·</span><span>{{ (entry.turn.outcome.durationNs / 1e9).toFixed(1) }}s</span></template><ChevronRight :size="12" /></button>
             </article>
           </template>
           <template v-if="showToolCalls"><ToolCard v-for="call in toolCalls" :key="call.id" :name="call.name" :arguments="call.arguments" :content="call.content" :status="call.status" :error="call.error" /></template>

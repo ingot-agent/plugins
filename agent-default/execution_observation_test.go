@@ -53,12 +53,12 @@ type failingAppendStore struct {
 	err     error
 }
 
-func (s *failingAppendStore) Append(ctx context.Context, id session.ID, entry session.Entry) error {
+func (s *failingAppendStore) Append(ctx context.Context, id session.ID, entries ...session.Entry) error {
 	s.appends++
 	if s.appends == s.failAt {
 		return s.err
 	}
-	return s.memoryStore.Append(ctx, id, entry)
+	return s.memoryStore.Append(ctx, id, entries...)
 }
 
 type panicModel struct{}
@@ -103,7 +103,7 @@ func TestExecutionObservationLifecycleProgressCorrelationAndSequence(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := exports.Streaming.Stream(context.Background(), agent.Turn{SessionID: "s", Input: "hello"}, func(agent.StreamEvent) error { return nil }); err != nil {
+	if _, err := exports.Runtime.(*runtime).stream(context.Background(), agent.Turn{SessionID: "s", Inputs: []agent.Input{{Text: "hello"}}}, func(agent.StreamEvent) error { return nil }); err != nil {
 		t.Fatal(err)
 	}
 	events := consumer.snapshot()
@@ -169,7 +169,7 @@ func TestPostDispatchToolFailureStopsExecutionAndMarksScopesFailed(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := exports.Runtime.Run(context.Background(), agent.Turn{SessionID: "s", Input: "hello"}); err == nil {
+	if _, err := exports.Runtime.(*runtime).execute(context.Background(), agent.Turn{SessionID: "s", Inputs: []agent.Input{{Text: "hello"}}}, nil); err == nil {
 		t.Fatal("tool error did not stop the turn")
 	}
 	var toolFinished observation.ToolFinished
@@ -209,7 +209,7 @@ func TestRoundPolicyRejectsAfterSuccessfulModelObservation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := exports.Runtime.Run(context.Background(), agent.Turn{SessionID: "s", Input: "hello"}); !errors.Is(err, rejected) {
+	if _, err := exports.Runtime.(*runtime).execute(context.Background(), agent.Turn{SessionID: "s", Inputs: []agent.Input{{Text: "hello"}}}, nil); !errors.Is(err, rejected) {
 		t.Fatalf("error=%v", err)
 	}
 	modelSucceeded := false
@@ -250,7 +250,7 @@ func TestPersistenceFailureDoesNotRewriteSuccessfulToolExecution(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := exports.Runtime.Run(context.Background(), agent.Turn{SessionID: "s", Input: "hello"}); !errors.Is(err, persistErr) {
+	if _, err := exports.Runtime.(*runtime).execute(context.Background(), agent.Turn{SessionID: "s", Inputs: []agent.Input{{Text: "hello"}}}, nil); !errors.Is(err, persistErr) {
 		t.Fatalf("error=%v", err)
 	}
 	toolSucceeded := false
@@ -286,7 +286,7 @@ func TestExecutionPanicStillFinishesStartedScopesAndPropagates(t *testing.T) {
 				t.Fatalf("panic=%#v", recovered)
 			}
 		}()
-		_, _ = exports.Runtime.Run(context.Background(), agent.Turn{SessionID: "s", Input: "hello"})
+		_, _ = exports.Runtime.(*runtime).execute(context.Background(), agent.Turn{SessionID: "s", Inputs: []agent.Input{{Text: "hello"}}}, nil)
 	}()
 	events := consumer.snapshot()
 	want := []any{

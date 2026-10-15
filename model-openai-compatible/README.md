@@ -2,7 +2,7 @@
 
 `model.openai-compatible` adapts OpenAI Chat Completions-compatible HTTP endpoints
 to Ingot model capabilities. It sends `POST <base_url>/chat/completions` and
-supports complete responses, SSE streaming, text, user images, and function tools.
+supports complete responses, SSE streaming, text, user/tool images, and function tools.
 See the [plugin documentation index](../docs/README.md).
 
 ## Identity and capabilities
@@ -96,12 +96,29 @@ fields include temperature in `[0,2]`, positive `max_tokens`, and optional stop
 sequences. It does not send unmodeled provider-specific options such as arbitrary
 reasoning controls or tool-choice policy.
 
-User images may be HTTP/HTTPS URIs, inline data, or asset references. Remote URIs
-are passed to the provider; this plugin does not fetch them. Inline/asset images
+User and tool-result images may be HTTP/HTTPS URIs, inline data, or asset
+references. Remote URIs are passed to the provider; this plugin does not fetch
+them. Inline/asset images
 require an `image/*` MIME type and are encoded as data URLs. Asset size is checked
 before opening, then the actual bytes must match the resolver's declared size.
-Local file URIs, audio, video, file parts, images outside user messages, and
+Local file URIs, audio, video, file parts, system/assistant images, and
 non-text response content are rejected with `content.ErrUnsupportedContent`.
+
+Tool-result images (Unreleased) are adapted to the
+[Chat Completions message schema](https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create),
+using textual tool messages for compatibility. Tool text and call IDs remain in tool
+messages, with numbered image markers at the original image positions. Images
+are sent in additional user messages labeled with the same call IDs and image
+numbers, after all consecutive tool results and before the next history message.
+This preserves parallel tool-call groups. The conversion applies to Complete and
+Stream requests only; SDK/session history keeps the original tool content.
+The selected upstream model must support image inputs.
+
+Local images, including `view_image` results, use base64 data URLs in the model
+request. No Files API upload or file ID is used. The retired `image_file_format`
+setting is accepted and ignored when reading older development configurations;
+it is absent from the configuration form and removed on the next save.
+
 
 Complete responses must contain exactly one choice at index 0, an assistant
 message, a nonempty model, and a finish reason. Streaming requests set

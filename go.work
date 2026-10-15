@@ -24,6 +24,7 @@ use (
 	./model-runtime
 	./skill-runtime
 	./tool-edit
+	./tool-image
 	./tool-runtime
 	./tool-shell
 	./tool-subagent

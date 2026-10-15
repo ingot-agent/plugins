@@ -4,13 +4,21 @@ All notable changes to this plugin are documented in this file.
 
 ## Unreleased
 
+- Adapted retry retractions and opaque model replay to Round-boundary inputs;
+  coalesced progress is flushed before authoritative retry replacements.
+
+- Agent now owns SendMessage admission, Round-boundary input batches and lifecycle control; per-input file notices and media share atomic persistence.
+- Coalesce streaming progress into revision-ordered increments (50 ms/4 KiB),
+  publish only affected lifecycle state at structural boundaries, and deep-clone
+  snapshots outside the queue lock. Lagging watchers recover from full snapshots.
+
 - Write `agent.message` v2 with opaque provider replay state and exact tool
   argument bytes; continue reading legacy v1 records. Preserve state through
   history reload and owned runtime/observation snapshots. Older Agents cannot
   consume new v2 records.
 
-Requires published SDK v0.2.18 for `model.Message.Replay`; validate with
-`GOWORK=off` against that exact dependency.
+Requires published SDK v0.2.19 for SendMessage, Turn.Inputs, runtime updates and
+atomic Store.Append; validate with `GOWORK=off` without sibling SDK/ABI checkouts.
 
 ### Changed
 

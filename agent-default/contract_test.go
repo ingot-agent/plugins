@@ -36,8 +36,8 @@ type sessionStore struct{}
 func (sessionStore) Create(_ context.Context, request session.CreateRequest) (session.Metadata, error) {
 	return session.Metadata{ID: "s", Title: request.Title}, nil
 }
-func (sessionStore) Append(context.Context, session.ID, session.Entry) error   { return nil }
-func (sessionStore) Load(context.Context, session.ID) ([]session.Entry, error) { return nil, nil }
+func (sessionStore) Append(context.Context, session.ID, ...session.Entry) error { return nil }
+func (sessionStore) Load(context.Context, session.ID) ([]session.Entry, error)  { return nil, nil }
 
 type assetStore struct{}
 
@@ -76,9 +76,10 @@ func TestComponentContractIncludesOptionalCompactor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cleanup != nil {
-		t.Fatal("cleanup must be nil")
+	if cleanup == nil {
+		t.Fatal("runtime cleanup is required")
 	}
+	t.Cleanup(func() { _ = cleanup(context.Background()) })
 	var runtime agent.Runtime = exports.Runtime
 	if runtime == nil {
 		t.Fatal("runtime is nil")

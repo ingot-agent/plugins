@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"slices"
 	"sync"
 	"testing"
@@ -149,7 +150,7 @@ func TestSubagentSetupPersistsAndAppliesCompleteDefinitions(t *testing.T) {
 		t.Fatalf("loop config modified: %s, %v", got, err)
 	}
 	info, err := os.Stat(filepath.Join(root, configFileName))
-	if err != nil || info.Mode().Perm() != 0o600 {
+	if err != nil || runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
 		t.Fatalf("config permissions: %v, %v", info, err)
 	}
 	if _, exists := exports.Control.(*tree).config.Load().definitions["leader"]; !exists {

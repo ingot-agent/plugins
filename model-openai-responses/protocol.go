@@ -48,9 +48,9 @@ type responseInputItem struct {
 }
 
 type responseInputContent struct {
-	Type     string `json:"type"`
-	Text     string `json:"text,omitempty"`
-	ImageURL string `json:"image_url,omitempty"`
+	Type     string  `json:"type"`
+	Text     *string `json:"text,omitempty"`
+	ImageURL string  `json:"image_url,omitempty"`
 }
 
 type responseTool struct {
@@ -231,22 +231,12 @@ func validateSDKRequest(request model.Request) error {
 }
 
 func (p *provider) encodeInputMessage(ctx context.Context, messageIndex int, message model.Message) ([]responseInputItem, error) {
-	if message.Role == model.RoleTool {
-		output, ok := content.TextOnly(message.Content)
-		if !ok {
-			for partIndex, part := range message.Content {
-				if part.Kind != content.KindText {
-					return nil, unsupported(messageIndex, partIndex, part, "tool output only supports text content")
-				}
-			}
-			return nil, fmt.Errorf("tool output content is invalid: %w", ErrInvalidRequest)
-		}
-		return []responseInputItem{{Type: "function_call_output", CallID: message.ToolCallID, Output: output}}, nil
-	}
-
 	wireContent, err := p.encodeInputContent(ctx, messageIndex, message)
 	if err != nil {
 		return nil, err
+	}
+	if message.Role == model.RoleTool {
+		return []responseInputItem{{Type: "function_call_output", CallID: message.ToolCallID, Output: wireContent}}, nil
 	}
 	items := make([]responseInputItem, 0, 1+len(message.ToolCalls))
 	if len(message.Content) != 0 || len(message.ToolCalls) == 0 {
@@ -268,10 +258,10 @@ func (p *provider) encodeInputContent(ctx context.Context, messageIndex int, mes
 	for partIndex, part := range message.Content {
 		switch part.Kind {
 		case content.KindText:
-			parts = append(parts, responseInputContent{Type: "input_text", Text: part.Text})
+			parts = append(parts, responseInputContent{Type: "input_text", Text: &part.Text})
 		case content.KindImage:
-			if message.Role != model.RoleUser {
-				return nil, unsupported(messageIndex, partIndex, part, "image content is only supported for user messages")
+			if message.Role != model.RoleUser && message.Role != model.RoleTool {
+				return nil, unsupported(messageIndex, partIndex, part, "image content is only supported for user messages and tool outputs")
 			}
 			imageURL, err := p.imageURL(ctx, part)
 			if err != nil {
@@ -299,7 +289,7 @@ func (p *provider) imageURL(ctx context.Context, part content.Part) (string, err
 			return "", &content.UnsupportedError{Reason: "image URI must be valid UTF-8"}
 		}
 		parsed, err := url.Parse(part.Media.Source.URI)
-		if err != nil || !parsed.IsAbs() {
+		if err != nil || !parsed.IsAbs() || parsed.Host == "" {
 			return "", &content.UnsupportedError{Reason: "image URI must be an absolute remote URI"}
 		}
 		switch strings.ToLower(parsed.Scheme) {

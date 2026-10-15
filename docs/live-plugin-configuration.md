@@ -4,10 +4,10 @@ Date: 2026-09-22
 
 Fifteen official plugins apply successful configuration Operation updates to
 the running process and return `restart_required:false`. The catalog contains
-19 modules and 17 configuration Operations, including the separate live
+20 modules and 17 configuration Operations, including the separate live
 `/agent-default subagents` Operation. Only `app-webui` server settings require a
 restart when saved settings differ from the active startup settings.
-`session-sqlite`, `skill-runtime` and `tool-subagent` expose no configuration
+`session-sqlite`, `skill-runtime`, `tool-image` and `tool-subagent` expose no configuration
 Operation. See the complete [activation matrix](configuration.md#activation-boundaries).
 
 The guarantees below describe the 16 live Operations. They do not apply to

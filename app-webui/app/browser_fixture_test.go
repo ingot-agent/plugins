@@ -18,13 +18,13 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
 
 	ingotabi "github.com/ingot-agent/ingot-abi"
-	appbackend "github.com/ingot-agent/plugins/app-webui"
+	agentdefault "github.com/ingot-agent/plugins/agent-default"
+	agentobservation "github.com/ingot-agent/plugins/agent-default/observation"
 	hostcomponent "github.com/ingot-agent/plugins/app-webui/host"
 	"github.com/ingot-agent/plugins/app-webui/modelselection"
 	"github.com/ingot-agent/sdk/agent"
@@ -40,303 +40,216 @@ import (
 )
 
 type browserAgent struct {
-	mu            sync.Mutex
-	history       map[session.ID][]model.Message
-	active        map[session.ID]chan struct{}
-	interaction   interaction.ExecutionBinder
-	tokenUsage    session.TokenUsageStore
-	observer      observation.Observer
-	sequence      atomic.Uint64
-	store         session.Store
-	loadedEntries map[session.ID]int
-	inputs        agent.PluginInputProjector
+	interaction interaction.ExecutionBinder
+	tokenUsage  session.TokenUsageStore
 }
 
-type browserSessionController struct {
-	sessionController
-	agent *browserAgent
+func (b *browserAgent) Complete(ctx context.Context, root, id session.ID, request model.Request) (model.Response, error) {
+	return b.Stream(ctx, root, id, request, nil)
 }
-
-func (c browserSessionController) Fork(ctx context.Context, source session.ID, request session.ForkRequest) (appbackend.Session, error) {
-	target, err := c.sessionController.Fork(ctx, source, request)
-	if err != nil {
-		return target, err
-	}
-	c.agent.mu.Lock()
-	c.agent.history[session.ID(target.ID)] = append([]model.Message(nil), c.agent.history[source]...)
-	c.agent.loadedEntries[session.ID(target.ID)] = c.agent.loadedEntries[source]
-	c.agent.mu.Unlock()
-	return target, nil
-}
-
-func (b *browserAgent) Load(ctx context.Context, id session.ID) ([]model.Message, error) {
-	b.mu.Lock()
-	done := b.active[id]
-	b.mu.Unlock()
-	if done != nil {
-		select {
-		case <-done:
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		}
-	}
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return append([]model.Message(nil), b.history[id]...), nil
-}
-func (b *browserAgent) Run(ctx context.Context, turn agent.Turn) (agent.Execution, error) {
-	return b.Stream(ctx, turn, func(agent.StreamEvent) error { return nil })
-}
-func (b *browserAgent) Stream(ctx context.Context, turn agent.Turn, handler agent.StreamHandler) (result agent.Execution, err error) {
-	start := time.Now()
-	correlation := observation.Correlation{SessionID: turn.SessionID, TurnID: observation.ID(fmt.Sprintf("sdk-%d", b.sequence.Add(1)))}
-	ctx = observation.WithCorrelation(ctx, correlation)
-	interactionChannel, err := b.interaction.Bind(execution.Scope{SessionID: turn.SessionID})
-	if err != nil {
-		return result, err
-	}
-	seq := uint64(0)
-	emit := func(detail observation.Detail) {
-		seq++
-		b.observer.Observe(observation.Event{Sequence: seq, Time: time.Now(), Correlation: correlation, Detail: detail})
-	}
-	entries, err := b.store.Load(ctx, turn.SessionID)
-	if err != nil {
-		return result, err
-	}
-	var inputMessages []model.Message
-	b.mu.Lock()
-	for _, entry := range entries[b.loadedEntries[turn.SessionID]:] {
-		message, recognized, err := b.inputs.Project(entry)
-		if err != nil {
-			b.mu.Unlock()
-			return result, err
-		}
-		if recognized {
-			inputMessages = append(inputMessages, message)
-		}
-	}
-	b.loadedEntries[turn.SessionID] = len(entries)
-	inputMessages = append(inputMessages, model.Message{Role: model.RoleUser, Content: content.FromInput(turn.Input, turn.Attachments)})
-	done := make(chan struct{})
-	b.active[turn.SessionID] = done
-	b.history[turn.SessionID] = append(b.history[turn.SessionID], inputMessages...)
-	b.mu.Unlock()
-	emit(observation.TurnStarted{Turn: turn})
-	emit(observation.RoundStarted{})
-	defer func() {
-		status := observation.StatusSucceeded
-		outcomeStatus := agent.OutcomeSucceeded
-		if err != nil {
-			status, outcomeStatus = observation.StatusFailed, agent.OutcomeFailed
-		}
-		if ctx.Err() != nil {
-			status, outcomeStatus = observation.StatusCanceled, agent.OutcomeCanceled
-		}
-		result.Outcome = agent.Outcome{
-			Status: outcomeStatus, Duration: time.Since(start),
-		}
-		message := ""
-		if err != nil {
-			message = err.Error()
-		}
-		emit(observation.RoundFinished{Status: status, Error: message})
-		emit(observation.TurnFinished{Status: status, Error: message, Outcome: result.Outcome, Result: result.Result})
-		b.mu.Lock()
-		delete(b.active, turn.SessionID)
-		close(done)
-		b.mu.Unlock()
-	}()
-	if strings.Contains(turn.Input, "fail") {
-		return result, fmt.Errorf("fixture execution failed")
-	}
-	if err = handler(agent.StreamEvent{Kind: agent.StreamReasoningDelta, TextDelta: "Checking the request."}); err != nil {
-		return result, err
-	}
-	timeline := strings.Contains(turn.Input, "timeline")
-	commentary := "I'll inspect the workspace first."
-	if timeline {
-		if err = handler(agent.StreamEvent{Kind: agent.StreamOutputDelta, TextDelta: commentary}); err != nil {
-			return result, err
-		}
-	}
-	correlation.ToolCallID = "tool-" + string(correlation.TurnID)
-	call := tool.Call{ID: correlation.ToolCallID, Name: "workspace.inspect", Arguments: json.RawMessage("{\"path\":\".\"}")}
-	emit(observation.ToolStarted{Call: call})
-	ctx = observation.WithCorrelation(ctx, correlation)
-	if strings.Contains(turn.Input, "approve") || strings.Contains(turn.Input, "ask") {
-		field := interaction.Field{Name: "answer", Label: "Answer", Kind: interaction.FieldString, Required: true, Options: []interaction.Option{{Value: "yes", Label: "Yes"}, {Value: "no", Label: "No"}}}
-		description := "How would you like to continue?"
-		if strings.Contains(turn.Input, "approve") {
-			field.Kind = interaction.FieldChoice
-			description = "Allow workspace inspection?"
-		}
-		if _, err = interactionChannel.Request(ctx, interaction.Request{Name: "confirmation", Description: description, Fields: []interaction.Field{field}}); err != nil {
-			return result, err
-		}
-	}
-	toolOutput := "Workspace is ready."
-	if strings.Contains(turn.Input, "multiline") {
-		toolOutput = "stdout:\n  第一行  with spaces\n\n\tsecond line\n" + `<b>literal</b> \n` + "\n" + strings.Repeat("x", 200) + "\n"
-	}
-	emit(observation.ToolFinished{Status: observation.StatusSucceeded, Result: &tool.Result{Content: content.FromText(toolOutput)}})
-	if strings.Contains(turn.Input, "tool-only") {
-		b.mu.Lock()
-		for index, names := range [][]string{{"edit_file", "shell_exec"}, {"edit_file"}, {"shell_exec"}} {
-			calls := make([]tool.Call, 0, len(names))
-			for _, name := range names {
-				calls = append(calls, tool.Call{ID: fmt.Sprintf("fixture-%d-%d", len(b.history[turn.SessionID]), len(calls)), Name: name, Arguments: json.RawMessage(`{}`)})
+func (b *browserAgent) Stream(ctx context.Context, root, id session.ID, request model.Request, handler model.StreamHandler) (model.Response, error) {
+	input, lastUser, attachments := "", -1, false
+	for i := len(request.Messages) - 1; i >= 0; i-- {
+		if request.Messages[i].Role == model.RoleUser {
+			lastUser = i
+			for _, part := range request.Messages[i].Content {
+				if part.Kind == content.KindText {
+					input += part.Text
+				} else {
+					attachments = true
+				}
 			}
-			message := model.Message{Role: model.RoleAssistant, ToolCalls: calls}
-			if index == 0 {
-				message.Content = content.FromText("Checking the workspace before editing.")
-			}
-			b.history[turn.SessionID] = append(b.history[turn.SessionID], message)
-			for _, fixtureCall := range calls {
-				b.history[turn.SessionID] = append(b.history[turn.SessionID], model.Message{Role: model.RoleTool, ToolCallID: fixtureCall.ID, Content: content.FromText("Workspace is ready.")})
+			break
+		}
+	}
+	if lastUser > 0 {
+		for _, part := range request.Messages[lastUser-1].Content {
+			if part.Kind == content.KindText && strings.Contains(part.Text, "所上传的文件") {
+				attachments = true
 			}
 		}
-		b.mu.Unlock()
 	}
-	if timeline {
-		b.mu.Lock()
-		b.history[turn.SessionID] = append(b.history[turn.SessionID],
-			model.Message{Role: model.RoleAssistant, Content: content.FromText(commentary), ToolCalls: []tool.Call{call}},
-			model.Message{Role: model.RoleTool, ToolCallID: call.ID, Content: content.FromText(toolOutput)})
-		b.mu.Unlock()
-		correlation.ToolCallID = ""
-		emit(observation.RoundFinished{Status: observation.StatusSucceeded})
-		correlation.RoundIndex++
-		emit(observation.RoundStarted{})
-		for _, chunk := range []string{"Reviewing the inspection. ", "Planning a verification."} {
-			if err = handler(agent.StreamEvent{Kind: agent.StreamReasoningDelta, TextDelta: chunk}); err != nil {
-				return result, err
-			}
-		}
-		commentary = "The first check is complete. I'll verify the result."
-		if err = handler(agent.StreamEvent{Kind: agent.StreamOutputDelta, TextDelta: commentary}); err != nil {
-			return result, err
-		}
-		correlation.ToolCallID = "verify-" + string(correlation.TurnID)
-		call = tool.Call{ID: correlation.ToolCallID, Name: "workspace.verify", Arguments: json.RawMessage(`{}`)}
-		emit(observation.ToolStarted{Call: call})
-		ctx = observation.WithCorrelation(ctx, correlation)
-		if _, err = interactionChannel.Request(ctx, interaction.Request{
-			Name: "verification", Description: "Continue with verification?",
-			Fields: []interaction.Field{{Name: "answer", Label: "Answer", Kind: interaction.FieldString, Required: true}},
-		}); err != nil {
-			return result, err
-		}
-		emit(observation.ToolProgress{Progress: tool.Progress{Content: content.FromText("Verification in progress.")}})
-		emit(observation.ToolFinished{Status: observation.StatusSucceeded, Result: &tool.Result{Content: content.FromText("Verification complete.")}})
-		b.mu.Lock()
-		b.history[turn.SessionID] = append(b.history[turn.SessionID],
-			model.Message{Role: model.RoleAssistant, Content: content.FromText(commentary), ToolCalls: []tool.Call{call}},
-			model.Message{Role: model.RoleTool, ToolCallID: call.ID, Content: content.FromText("Verification complete.")})
-		b.mu.Unlock()
-		correlation.ToolCallID = ""
-		emit(observation.RoundFinished{Status: observation.StatusSucceeded})
-		correlation.RoundIndex++
-		emit(observation.RoundStarted{})
-		if err = handler(agent.StreamEvent{Kind: agent.StreamReasoningDelta, TextDelta: "Preparing the final response."}); err != nil {
-			return result, err
+	rounds := 0
+	for _, m := range request.Messages[lastUser+1:] {
+		if m.Role == model.RoleAssistant && len(m.ToolCalls) > 0 {
+			rounds++
 		}
 	}
-	correlation.ToolCallID = ""
-	if strings.Contains(turn.Input, "hold") {
-		if err = handler(agent.StreamEvent{Kind: agent.StreamOutputDelta, TextDelta: "Partial response"}); err != nil {
-			return result, err
+	if strings.Contains(input, "fail") {
+		return model.Response{}, fmt.Errorf("fixture execution failed")
+	}
+	emit := func(semantic model.StreamSemantic, text string) error {
+		if handler == nil {
+			return nil
 		}
-		<-ctx.Done()
-		return result, ctx.Err()
+		return handler(model.StreamEvent{Kind: model.StreamPartDelta, Semantic: semantic, TextDelta: text})
 	}
-	output := "Your workspace is ready. We can take the next step together."
-	if len(turn.Attachments) > 0 || len(inputMessages) > 1 {
-		output = "Attachment received."
-	}
-	correlation.ToolCallID = ""
-	ctx = observation.WithCorrelation(ctx, correlation)
-	b.mu.Lock()
-	contextTokens := int64(len(b.history[turn.SessionID]) * 64)
-	b.mu.Unlock()
-	if err = interactionChannel.Set(ctx, interaction.State{
-		Name: "context-compact.session-context/" + string(turn.SessionID),
-		Values: []interaction.Entry{
-			{Name: "sessionId", Value: interaction.StringValue(string(turn.SessionID))},
-			{Name: "inputTokens", Value: interaction.IntegerValue(contextTokens)},
-			{Name: "accuracy", Value: interaction.StringValue("estimate")},
-			{Name: "source", Value: interaction.StringValue("fixture-estimate")},
-			{Name: "provider", Value: interaction.StringValue("fixture")},
-			{Name: "model", Value: interaction.StringValue("chat")},
-			{Name: "turnId", Value: interaction.StringValue(string(correlation.TurnID))},
-			{Name: "roundIndex", Value: interaction.IntegerValue(0)},
-		},
-	}); err != nil {
-		return result, err
-	}
-	emit(observation.ModelStarted{Request: model.Request{Provider: "fixture", Model: "chat"}})
-	if strings.Contains(turn.Input, "retry") {
-		for _, event := range []agent.StreamEvent{
-			{Kind: agent.StreamOutputDelta, TextDelta: "Discard this failed response."},
-			{Kind: agent.StreamReasoningDelta, TextDelta: "Discard this failed reasoning."},
-			{Kind: agent.StreamRetry, Attempt: 2, RetryDelay: 5 * time.Second,
-				DiscardOutputBytes: len("Discard this failed response."), DiscardReasoningBytes: len("Discard this failed reasoning.")},
+	if strings.Contains(input, "retry") && handler != nil {
+		for _, event := range []model.StreamEvent{
+			{Kind: model.StreamPartDelta, TextDelta: "Discard this failed response."},
+			{Kind: model.StreamPartDelta, Semantic: model.StreamSemanticReasoning, TextDelta: "Discard this failed reasoning."},
+			{Kind: model.StreamRetry, Attempt: 2, RetryDelay: 5 * time.Second},
 		} {
-			if err = handler(event); err != nil {
-				return result, err
+			if err := handler(event); err != nil {
+				return model.Response{}, err
 			}
 		}
 		select {
 		case <-ctx.Done():
-			return result, ctx.Err()
+			return model.Response{}, ctx.Err()
 		case <-time.After(5 * time.Second):
 		}
+	}
+	reasoning := "Checking the request."
+	timeline := strings.Contains(input, "timeline")
+	if timeline && rounds == 1 {
+		reasoning = "Reviewing the inspection. Planning a verification."
+	} else if timeline && rounds > 1 {
+		reasoning = "Preparing the final response."
+	}
+	if err := emit(model.StreamSemanticReasoning, reasoning); err != nil {
+		return model.Response{}, err
+	}
+	toolRounds := 0
+	if strings.Contains(input, "ask") || strings.Contains(input, "approve") {
+		toolRounds = 1
+	}
+	if timeline {
+		toolRounds = 2
+	}
+	if strings.Contains(input, "tool-only") {
+		toolRounds = 3
+	}
+	if strings.Contains(input, "multiline") && toolRounds == 0 {
+		toolRounds = 1
+	}
+	if rounds < toolRounds {
+		names := []string{"workspace.inspect"}
+		text := ""
+		if timeline {
+			if rounds == 0 {
+				text = "I'll inspect the workspace first."
+			} else {
+				names = []string{"workspace.verify"}
+				text = "The first check is complete. I'll verify the result."
+			}
+		}
+		if strings.Contains(input, "tool-only") {
+			names = [][]string{{"edit_file", "shell_exec"}, {"edit_file"}, {"shell_exec"}}[rounds]
+			if rounds == 0 {
+				text = "Checking the workspace before editing."
+			}
+		}
+		if err := emit(model.StreamSemanticContent, text); err != nil {
+			return model.Response{}, err
+		}
+		args, _ := json.Marshal(map[string]any{"input": input, "stage": rounds})
+		calls := make([]tool.Call, 0, len(names))
+		for i, name := range names {
+			calls = append(calls, tool.Call{ID: fmt.Sprintf("fixture-%d-%d-%d", lastUser, rounds, i), Name: name, Arguments: args})
+		}
+		return model.Response{Message: model.Message{Role: model.RoleAssistant, Content: content.FromInput(text, nil), ToolCalls: calls}}, nil
+	}
+	if strings.Contains(input, "burst") {
+		for range 500 {
+			if err := emit(model.StreamSemanticContent, "字"); err != nil {
+				return model.Response{}, err
+			}
+		}
+		<-ctx.Done()
+		return model.Response{}, ctx.Err()
+	}
+	if strings.Contains(input, "hold") {
+		if err := emit(model.StreamSemanticContent, "Partial response"); err != nil {
+			return model.Response{}, err
+		}
+		<-ctx.Done()
+		return model.Response{}, ctx.Err()
+	}
+	output := "Your workspace is ready. We can take the next step together."
+	if attachments {
+		output = "Attachment received."
 	}
 	for _, chunk := range strings.SplitAfter(output, " ") {
 		select {
 		case <-ctx.Done():
-			return result, ctx.Err()
+			return model.Response{}, ctx.Err()
 		case <-time.After(20 * time.Millisecond):
 		}
-		if err = handler(agent.StreamEvent{Kind: agent.StreamOutputDelta, TextDelta: chunk}); err != nil {
-			return result, err
+		if err := emit(model.StreamSemanticContent, chunk); err != nil {
+			return model.Response{}, err
 		}
 	}
-	if strings.Contains(turn.Input, "retry") {
-		if err = handler(agent.StreamEvent{Kind: agent.StreamRecovered}); err != nil {
-			return result, err
-		}
-	}
-	settleCtx, settleCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-	defer settleCancel()
-	metadata, err := b.tokenUsage.AddTotalTokens(settleCtx, []session.ID{turn.RootSessionID, turn.SessionID}, 72)
+	channel, err := b.interaction.Bind(execution.Scope{SessionID: id})
 	if err != nil {
-		return result, err
+		return model.Response{}, err
+	}
+	correlation, _ := observation.CorrelationFromContext(ctx)
+	_ = channel.Set(ctx, interaction.State{Name: "context-compact.session-context/" + string(id), Values: []interaction.Entry{
+		{Name: "sessionId", Value: interaction.StringValue(string(id))}, {Name: "inputTokens", Value: interaction.IntegerValue(int64(len(request.Messages) * 64))},
+		{Name: "accuracy", Value: interaction.StringValue("estimate")}, {Name: "source", Value: interaction.StringValue("fixture-estimate")}, {Name: "provider", Value: interaction.StringValue("fixture")}, {Name: "model", Value: interaction.StringValue("chat")},
+		{Name: "turnId", Value: interaction.StringValue(string(correlation.TurnID))}, {Name: "roundIndex", Value: interaction.IntegerValue(int64(rounds))},
+	}})
+	metadata, err := b.tokenUsage.AddTotalTokens(ctx, []session.ID{root, id}, 72)
+	if err != nil {
+		return model.Response{}, err
 	}
 	for _, item := range metadata {
-		channel, bindErr := b.interaction.Bind(execution.Scope{SessionID: item.ID})
-		if bindErr != nil {
-			return result, bindErr
+		ch, err := b.interaction.Bind(execution.Scope{SessionID: item.ID})
+		if err != nil {
+			return model.Response{}, err
 		}
-		if err := channel.Set(settleCtx, interaction.State{
-			Name: "model-runtime.session-usage/" + string(item.ID), Level: interaction.LevelInfo,
-			Values: []interaction.Entry{
-				{Name: "sessionId", Value: interaction.StringValue(string(item.ID))},
-				{Name: "totalToken", Value: interaction.IntegerValue(item.TotalToken)},
-			},
-		}); err != nil {
-			return result, err
+		_ = ch.Set(ctx, interaction.State{Name: "model-runtime.session-usage/" + string(item.ID), Values: []interaction.Entry{{Name: "sessionId", Value: interaction.StringValue(string(item.ID))}, {Name: "totalToken", Value: interaction.IntegerValue(item.TotalToken)}}})
+	}
+	return model.Response{Provider: "fixture", Model: "chat", Message: model.Message{Role: model.RoleAssistant, Content: content.FromText(output)}, Usage: model.Usage{InputTokens: 48, OutputTokens: 24, TotalTokens: 72, Reported: true}}, nil
+}
+
+type browserTools struct{ interaction interaction.ExecutionBinder }
+
+func (browserTools) Definitions() []tool.Definition {
+	var definitions []tool.Definition
+	for _, name := range []string{"workspace.inspect", "workspace.verify", "edit_file", "shell_exec"} {
+		definitions = append(definitions, tool.Definition{Name: name, Description: name, InputSchema: json.RawMessage(`{"type":"object"}`)})
+	}
+	return definitions
+}
+func (b browserTools) Call(ctx context.Context, invocation tool.Invocation) (tool.Result, error) {
+	var args struct {
+		Input string
+		Stage int
+	}
+	if err := json.Unmarshal(invocation.Call.Arguments, &args); err != nil {
+		return tool.Result{}, err
+	}
+	channel, err := b.interaction.Bind(execution.Scope{SessionID: invocation.Scope.SessionID})
+	if err != nil {
+		return tool.Result{}, err
+	}
+	ask := invocation.Call.Name == "workspace.verify" || args.Stage == 0 && (strings.Contains(args.Input, "ask") || strings.Contains(args.Input, "approve"))
+	if ask {
+		field := interaction.Field{Name: "answer", Label: "Answer", Kind: interaction.FieldString, Required: true}
+		description := "How would you like to continue?"
+		name := "confirmation"
+		if invocation.Call.Name == "workspace.verify" {
+			description = "Continue with verification?"
+			name = "verification"
+		} else if strings.Contains(args.Input, "approve") {
+			field.Kind = interaction.FieldChoice
+			field.Options = []interaction.Option{{Value: "yes", Label: "Yes"}, {Value: "no", Label: "No"}}
+			description = "Allow workspace inspection?"
+		}
+		if _, err := channel.Request(ctx, interaction.Request{Name: name, Description: description, Fields: []interaction.Field{field}}); err != nil {
+			return tool.Result{}, err
 		}
 	}
-	result.Result = &agent.Result{Output: content.FromText(output)}
-	emit(observation.ModelFinished{Status: observation.StatusSucceeded, Response: &model.Response{
-		Provider: "fixture", Model: "chat", Message: model.Message{Role: model.RoleAssistant, Content: result.Result.Output},
-		Usage: model.Usage{InputTokens: 48, OutputTokens: 24, TotalTokens: 72, Reported: true},
-	}})
-	b.mu.Lock()
-	b.history[turn.SessionID] = append(b.history[turn.SessionID], model.Message{Role: model.RoleAssistant, Content: result.Result.Output})
-	b.mu.Unlock()
-	return result, nil
+	text := "Workspace is ready."
+	if strings.Contains(args.Input, "multiline") {
+		text = "stdout:\n  第一行  with spaces\n\n\tsecond line\n" + `<b>literal</b> \n` + "\n" + strings.Repeat("x", 200) + "\n"
+	}
+	if invocation.Call.Name == "workspace.verify" {
+		text = "Verification complete."
+	}
+	return tool.Result{Content: content.FromText(text)}, nil
 }
 
 type browserAssets struct {
@@ -391,18 +304,29 @@ func TestBrowserFixture(t *testing.T) {
 		t.Fatal(err)
 	}
 	a.backend = host.Runtime
-	b := &browserAgent{history: make(map[session.ID][]model.Message), active: make(map[session.ID]chan struct{}), interaction: host.ExecutionInteractions, tokenUsage: store, observer: host.Observer, store: store, loadedEntries: make(map[session.ID]int), inputs: inputs}
-	streaming := ingotabi.Some[agent.StreamingRuntime](b)
+	b := &browserAgent{interaction: host.ExecutionInteractions, tokenUsage: store}
+	streaming := ingotabi.Some[model.StreamingRuntime](b)
 	if os.Getenv("INGOT_WEBUI_FIXTURE_RUN_ONLY") == "1" {
-		streaming = ingotabi.None[agent.StreamingRuntime]()
+		streaming = ingotabi.None[model.StreamingRuntime]()
 	}
-	a.agent, err = newAgentController(ingotabi.Some[agent.Runtime](b), streaming, b)
+	observations, closeObservation, err := agentobservation.New(ctx, agentobservation.Dependencies{Observers: []observation.Observer{host.Observer}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	a.sessions = browserSessionController{sessionController: a.sessions, agent: b}
-	a.turns = newTurnRegistry(ctx, a.agent, host.Runtime.Events())
+	t.Cleanup(func() { _ = closeObservation(context.Background()) })
 	a.assets = &browserAssets{items: make(map[string][]byte)}
+	engine, closeAgent, err := agentdefault.New(ctx, agentdefault.Dependencies{State: testStateScope{}, Model: b, Streaming: streaming, Tools: browserTools{host.ExecutionInteractions}, Store: store, Sessions: store, Assets: a.assets, Prompt: webTestPrompt{}, Observation: observations.Consumer, PluginInputs: ingotabi.Some[agent.PluginInputProjector](inputs)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = closeAgent(context.Background()) })
+	a.agent, err = newAgentController(engine.Runtime, engine.Control, engine.History)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.turns.stop()
+	<-a.turns.done
+	a.turns = newTurnRegistry(ctx, a.agent, host.Runtime.Events())
 	a.filePicker = browserFilePicker{}
 	pixel, err := base64.StdEncoding.DecodeString("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aO2sAAAAASUVORK5CYII=")
 	if err != nil {

@@ -196,7 +196,10 @@ func (s *store) Create(ctx context.Context, request session.CreateRequest) (sess
 	return metadata, nil
 }
 
-func (s *store) Append(ctx context.Context, id session.ID, entry session.Entry) error {
+func (s *store) Append(ctx context.Context, id session.ID, entries ...session.Entry) error {
+	if len(entries) == 0 {
+		return nil
+	}
 	tx, err := s.begin(ctx)
 	if err != nil {
 		return err
@@ -215,15 +218,17 @@ func (s *store) Append(ctx context.Context, id session.ID, entry session.Entry) 
 	).Scan(&sequence); err != nil {
 		return fmt.Errorf("determine next entry sequence for session %q: %w", id, err)
 	}
-	payload := entry.Payload
-	if payload == nil {
-		payload = []byte{}
-	}
-	if _, err := tx.ExecContext(ctx,
-		"INSERT INTO entries (session_id, sequence, kind, version, payload) VALUES (?, ?, ?, ?, ?)",
-		string(id), sequence, entry.Kind, entry.Version, payload,
-	); err != nil {
-		return fmt.Errorf("append session %q: %w", id, err)
+	for i, entry := range entries {
+		payload := entry.Payload
+		if payload == nil {
+			payload = []byte{}
+		}
+		if _, err := tx.ExecContext(ctx,
+			"INSERT INTO entries (session_id, sequence, kind, version, payload) VALUES (?, ?, ?, ?, ?)",
+			string(id), sequence+int64(i), entry.Kind, entry.Version, payload,
+		); err != nil {
+			return fmt.Errorf("append session %q: %w", id, err)
+		}
 	}
 	updatedAt := s.nextCommitTime(metadata.UpdatedAt)
 	if _, err := tx.ExecContext(ctx, "UPDATE sessions SET updated_at = ? WHERE id = ?", encodeTime(updatedAt), string(id)); err != nil {

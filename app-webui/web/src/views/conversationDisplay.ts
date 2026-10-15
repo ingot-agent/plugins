@@ -61,8 +61,35 @@ export function shouldShowHistoryMessage(message: Message, showToolCalls: boolea
 
 export function shouldShowTurnByline(turn: LiveTurn, showToolCalls: boolean, interactions: Record<string, Interaction>) {
   if (showToolCalls) return true
-  const blocks = turn.blocks || []
+  const blocks = turn.blocks
   if (!blocks.some(block => block.kind === 'tool')) return true
   if (turn.output || turn.reasoning || turn.result?.output?.length || turn.error) return true
   return blocks.some(block => block.kind !== 'tool' && (block.kind !== 'interaction' || Boolean(interactions[block.interactionId])))
+}
+
+// Content stays with each input; lifecycle status belongs to its latest admitted
+// input. Rejected inputs retain their own error instead of taking over the Turn.
+export function lifecycleStatusInputs(inputs: LiveTurn[]): Set<string> {
+  const standalone = new Set<string>()
+  const sessions = new Map<string, Map<string, LiveTurn>>()
+  for (const input of inputs) {
+    if (input.status === 'queued' || !input.started) continue
+    if (!input.persisted) {
+      standalone.add(input.id)
+      continue
+    }
+    if (!input.sdkTurnId) continue
+    const turns = sessions.get(input.sessionId) || new Map<string, LiveTurn>()
+    sessions.set(input.sessionId, turns)
+    const previous = turns.get(input.sdkTurnId)
+    if (!previous || input.sequence >= previous.sequence) turns.set(input.sdkTurnId, input)
+  }
+  for (const turns of sessions.values()) for (const input of turns.values()) standalone.add(input.id)
+  return standalone
+}
+
+export function hasVisibleTurnContent(turn: LiveTurn, showToolCalls: boolean, interactions: Record<string, Interaction>, historicalToolIds = new Set<string>()) {
+  return Boolean(turn.output || turn.reasoning || turn.result?.output?.length || turn.blocks.some(block =>
+    block.kind === 'tool' ? showToolCalls && !historicalToolIds.has(block.call.id)
+      : block.kind !== 'interaction' || Boolean(interactions[block.interactionId])))
 }

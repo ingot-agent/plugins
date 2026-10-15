@@ -79,6 +79,7 @@ dependencies, operations/tools, state, defaults and limitations.
 | [skill-runtime](skill-runtime/README.md) | `skill.runtime` | Plugin-owned skills, prompting and skill tools |
 | [tool-ask](tool-ask/README.md) | `tool.ask` | Structured questions through Interaction |
 | [tool-edit](tool-edit/README.md) | `tool.edit` | File editing, reading and searching |
+| [tool-image](tool-image/README.md) | `tool.image` | Local image viewing through immutable image assets |
 | [tool-runtime](tool-runtime/README.md) | `tool.runtime` | Lookup, JSON schema validation and interception |
 | [tool-shell](tool-shell/README.md) | `tool.shell` | Session-workspace shell execution |
 | [tool-subagent](tool-subagent/README.md) | `tool.subagent` | Child-agent discovery, creation and control |

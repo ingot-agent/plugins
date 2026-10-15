@@ -4,6 +4,10 @@ All notable changes to this plugin are documented in this file.
 
 ## Unreleased
 
+- Send local user and tool images as base64 data URLs in complete and streaming
+  requests, without Files API uploads, file-ID caches, or upload diagnostic files.
+- Accept and discard the retired `image_file_format` configuration setting.
+
 ### Changed
 
 - Mark truncated SSE and explicit transient HTTP/2 transport failures retryable, including after partial progress for callers supporting retraction.
@@ -32,6 +36,9 @@ All notable changes to this plugin are documented in this file.
 
 ### Fixed
 
+- Accept tool-result images in Complete and Stream requests. Keep text and call
+  IDs in tool messages, and attach labeled images as user messages after each
+  consecutive group of tool results without mutating SDK history.
 - Persist reasoning-effort selections submitted by a host as a MultiChoice
   value so `model-runtime` can expose the configured choices.
 

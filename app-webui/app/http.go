@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	appbackend "github.com/ingot-agent/plugins/app-webui"
 	"github.com/ingot-agent/plugins/app-webui/internal/projection"
@@ -34,6 +35,7 @@ func (a *application) routes() http.Handler {
 	mux.HandleFunc("GET /api/events", a.handleEvents)
 	mux.HandleFunc("POST /api/turns", a.handleCreateTurn)
 	mux.HandleFunc("DELETE /api/turns/{id}", a.handleCancelTurn)
+	mux.HandleFunc("PATCH /api/sessions/{id}/turn-queue", a.handleTurnQueue)
 	mux.HandleFunc("GET /api/sessions", a.handleListSessions)
 	mux.HandleFunc("POST /api/sessions", a.handleCreateSession)
 	mux.HandleFunc("GET /api/sessions/{id}", a.handleGetSession)
@@ -74,15 +76,22 @@ func (a *application) handleState(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
+	state, err := a.agent.State(r.Context())
+	if err != nil {
+		writeError(w, err)
+		return
+	}
 	writeJSON(w, http.StatusOK, appbackend.StateSnapshot{
 		Cursor:               cursor,
+		RuntimeID:            a.turns.identity,
 		Agent:                appbackend.AgentState{Capabilities: a.agent.Capabilities()},
 		Assets:               appbackend.AssetState{Available: a.assets != nil, MaxBytes: a.config.MaxAssetBytes},
-		Files:                appbackend.AssetState{Available: a.filePicker != nil && (a.assets != nil || a.pluginInputs != nil), MaxBytes: a.config.MaxAssetBytes},
+		Files:                appbackend.AssetState{Available: a.filePicker != nil, MaxBytes: a.config.MaxAssetBytes},
 		Workspace:            appbackend.WorkspaceState{DefaultPath: a.defaultWorkspace},
 		Sessions:             sessions,
 		Operations:           a.operations.List(),
-		Turns:                a.turns.Snapshots(),
+		Turns:                projectSubmissions(state),
+		TurnQueues:           projectQueues(state),
 		OperationInvocations: a.operationInvocations.Snapshots(),
 		Interactions:         a.backend.Interactions().Pending(),
 		InteractionStates:    a.backend.Interactions().States(),
@@ -160,6 +169,8 @@ func (a *application) handleEvents(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Ingot-Heartbeat-Ms", strconv.FormatInt(a.config.Heartbeat.Milliseconds(), 10))
+	w.Header().Set("X-Accel-Buffering", "no")
 	w.WriteHeader(http.StatusOK)
 	flusher.Flush()
 	for _, record := range subscription.Replay() {
@@ -195,6 +206,7 @@ func (a *application) handleEvents(w http.ResponseWriter, r *http.Request) {
 }
 
 type createTurnRequest struct {
+	RequestID   string                  `json:"requestId,omitempty"`
 	SessionID   string                  `json:"sessionId"`
 	Input       string                  `json:"input"`
 	Attachments []appbackend.Attachment `json:"attachments,omitempty"`
@@ -209,13 +221,13 @@ func (a *application) handleCreateTurn(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusBadRequest, "session_id_required", "sessionId is required")
 		return
 	}
-	attachments, fileNotice, err := a.prepareAttachments(r.Context(), request.Attachments)
-	if err != nil {
-		writeError(w, err)
+	if !utf8.ValidString(request.Input) || len(request.RequestID) > 128 || !utf8.ValidString(request.RequestID) {
+		writeAPIError(w, http.StatusBadRequest, "invalid_turn", "input and requestId must be valid text; requestId is limited to 128 bytes")
 		return
 	}
-	if fileNotice != nil && a.pluginInputs == nil {
-		writeError(w, fmt.Errorf("file notices require a plugin input writer: %w", appbackend.ErrCapabilityUnavailable))
+	input, err := attachmentInput(request.Input, request.Attachments)
+	if err != nil {
+		writeError(w, err)
 		return
 	}
 	_, err = a.ensureWorkspace(r.Context(), session.ID(request.SessionID))
@@ -230,26 +242,66 @@ func (a *application) handleCreateTurn(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	if fileNotice != nil {
-		if err := a.pluginInputs.Append(r.Context(), session.ID(request.SessionID), *fileNotice); err != nil {
-			a.sessionMu.Unlock()
-			writeError(w, fmt.Errorf("append file notice: %w", err))
-			return
-		}
+	metadata, err := a.sessions.Get(r.Context(), session.ID(request.SessionID))
+	if err == nil && metadata.ArchivedAt != nil {
+		err = session.ErrArchived
 	}
-	id, err := a.turns.Start(agent.Turn{RootSessionID: root, SessionID: session.ID(request.SessionID), Input: request.Input, Attachments: attachments})
+	if err != nil {
+		a.sessionMu.Unlock()
+		writeError(w, err)
+		return
+	}
+	snapshot, err := a.turns.Submit(r.Context(), agent.MessageRequest{RootSessionID: root, SessionID: session.ID(request.SessionID), Input: input, RequestID: request.RequestID})
 	a.sessionMu.Unlock()
 	if err != nil {
 		writeError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusAccepted, struct {
-		ID string `json:"id"`
-	}{ID: id})
+	writeTurnAcceptance(w, snapshot)
+}
+
+func writeTurnAcceptance(w http.ResponseWriter, snapshot appbackend.TurnSnapshot) {
+	writeJSON(w, http.StatusAccepted, snapshot)
+}
+
+func (a *application) handleTurnQueue(w http.ResponseWriter, r *http.Request) {
+	var input struct {
+		Paused *bool `json:"paused"`
+	}
+	if err := decodeJSON(w, r, &input); err != nil {
+		return
+	}
+	if input.Paused == nil {
+		writeAPIError(w, http.StatusBadRequest, "paused_required", "paused is required")
+		return
+	}
+	a.sessionMu.Lock()
+	defer a.sessionMu.Unlock()
+	id := session.ID(r.PathValue("id"))
+	metadata, err := a.sessions.Get(r.Context(), id)
+	if err == nil && metadata.ArchivedAt != nil && !*input.Paused {
+		err = session.ErrArchived
+	}
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	snapshot, err := a.turns.SetPaused(id, *input.Paused)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, snapshot)
 }
 
 func (a *application) handleCancelTurn(w http.ResponseWriter, r *http.Request) {
-	if err := a.turns.Cancel(r.PathValue("id")); err != nil {
+	var err error
+	if r.URL.Query().Get("queued") == "true" {
+		err = a.turns.CancelQueued(r.PathValue("id"))
+	} else {
+		err = a.turns.Cancel(r.PathValue("id"))
+	}
+	if err != nil {
 		writeError(w, err)
 		return
 	}
@@ -351,6 +403,10 @@ func (a *application) handleRenameSession(w http.ResponseWriter, r *http.Request
 }
 
 func (a *application) handleHistory(w http.ResponseWriter, r *http.Request) {
+	if messages, ok := a.turns.CachedHistory(session.ID(r.PathValue("id"))); ok {
+		writeJSON(w, http.StatusOK, messages)
+		return
+	}
 	messages, err := a.agent.History(r.Context(), session.ID(r.PathValue("id")))
 	if err != nil {
 		writeError(w, err)
@@ -471,9 +527,15 @@ func (a *application) handleCancelOperation(w http.ResponseWriter, r *http.Reque
 func (a *application) handleSessionLifecycle(eventType string, mutate func(context.Context, session.ID) (appbackend.Session, error)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		a.sessionMu.Lock()
+		previous, changed := false, false
+		if eventType == "session.archived" {
+			previous, changed = a.turns.PauseForArchive(session.ID(r.PathValue("id")))
+		}
 		item, err := mutate(r.Context(), session.ID(r.PathValue("id")))
 		if err == nil {
 			_ = a.backend.Events().Publish(appbackend.Event{Type: eventType, Data: item})
+		} else if changed {
+			_, _ = a.turns.SetPaused(session.ID(r.PathValue("id")), previous)
 		}
 		a.sessionMu.Unlock()
 		if err != nil {
@@ -487,6 +549,11 @@ func (a *application) handleSessionLifecycle(eventType string, mutate func(conte
 func (a *application) handleDeleteSession(w http.ResponseWriter, r *http.Request) {
 	id := session.ID(r.PathValue("id"))
 	a.sessionMu.Lock()
+	if err := a.turns.PrepareDelete(id); err != nil {
+		a.sessionMu.Unlock()
+		writeError(w, err)
+		return
+	}
 	note, ok, err := a.sessions.GetFollowup(r.Context(), id)
 	if err != nil {
 		a.sessionMu.Unlock()
@@ -518,6 +585,7 @@ func (a *application) handleDeleteSession(w http.ResponseWriter, r *http.Request
 	}
 	err = a.sessions.Delete(r.Context(), id)
 	if err == nil {
+		a.turns.ForgetSession(id)
 		a.clearSessionUsage(r.Context(), id)
 		_ = a.backend.Events().Publish(appbackend.Event{Type: "session.deleted", Data: map[string]string{"id": string(id)}})
 	}
@@ -614,8 +682,14 @@ func writeError(w http.ResponseWriter, err error) {
 func apiError(err error) (int, appbackend.ErrorDetail) {
 	status, code := http.StatusInternalServerError, "internal_error"
 	switch {
-	case errors.Is(err, appbackend.ErrApplicationClosed):
+	case errors.Is(err, appbackend.ErrApplicationClosed), errors.Is(err, agent.ErrClosed):
 		status, code = http.StatusServiceUnavailable, "application_closed"
+	case errors.Is(err, errTurnRequestConflict):
+		status, code = http.StatusConflict, "turn_request_conflict"
+	case errors.Is(err, errSessionRunning):
+		status, code = http.StatusConflict, "session_running"
+	case errors.Is(err, errQueuedTurnStarted):
+		status, code = http.StatusConflict, "queued_turn_started"
 	case errors.Is(err, appbackend.ErrInvalidOperationInput):
 		status, code = http.StatusBadRequest, "operation_invalid_input"
 	case errors.Is(err, appbackend.ErrInvalidOperationOutput):
@@ -626,7 +700,7 @@ func apiError(err error) (int, appbackend.ErrorDetail) {
 		status, code = http.StatusConflict, "operation_unavailable"
 	case errors.Is(err, appbackend.ErrCapabilityUnavailable):
 		status, code = http.StatusNotImplemented, "capability_unavailable"
-	case errors.Is(err, content.ErrInvalidContent):
+	case errors.Is(err, content.ErrInvalidContent), errors.Is(err, agent.ErrInvalidMessage):
 		status, code = http.StatusBadRequest, "invalid_content"
 	case errors.Is(err, content.ErrUnsupportedContent):
 		status, code = http.StatusUnprocessableEntity, "unsupported_content"

@@ -16,6 +16,7 @@ type recorderContextKey struct{}
 type executionRecorder struct {
 	startedAt   time.Time
 	observation observation.Consumer
+	progress    func(context.Context, observation.Detail)
 
 	mu         sync.Mutex
 	failure    *agent.Failure
@@ -36,6 +37,9 @@ func executionRecorderFrom(ctx context.Context) *executionRecorder {
 }
 
 func (r *executionRecorder) emit(ctx context.Context, detail observation.Detail) {
+	if r.progress != nil {
+		r.progress(ctx, detail)
+	}
 	r.observation.Emit(ctx, detail)
 }
 

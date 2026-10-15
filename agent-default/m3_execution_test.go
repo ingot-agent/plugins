@@ -35,9 +35,9 @@ type commitThenFailStore struct {
 	err     error
 }
 
-func (s *commitThenFailStore) Append(ctx context.Context, id session.ID, entry session.Entry) error {
+func (s *commitThenFailStore) Append(ctx context.Context, id session.ID, entries ...session.Entry) error {
 	s.appends++
-	if err := s.memoryStore.Append(ctx, id, entry); err != nil {
+	if err := s.memoryStore.Append(ctx, id, entries...); err != nil {
 		return err
 	}
 	if s.appends == s.failAt {
@@ -145,7 +145,7 @@ func TestStreamFallbackRequiresZeroDeliveredAgentEvents(t *testing.T) {
 				configured := handler
 				handler = func(event agent.StreamEvent) error { events++; return configured(event) }
 			}
-			result, err := exports.Streaming.Stream(context.Background(), agent.Turn{SessionID: "s", Input: "hello"}, handler)
+			result, err := exports.Runtime.(*runtime).stream(context.Background(), agent.Turn{SessionID: "s", Inputs: []agent.Input{{Text: "hello"}}}, handler)
 			if !errors.Is(err, tc.wantErr) {
 				t.Fatalf("error=%v want=%v", err, tc.wantErr)
 			}
@@ -188,7 +188,7 @@ func TestStreamingFallbackObservesBothRealModelAttempts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := exports.Streaming.Stream(context.Background(), agent.Turn{SessionID: "s", Input: "hello"}, func(agent.StreamEvent) error { return nil }); err != nil {
+	if _, err := exports.Runtime.(*runtime).stream(context.Background(), agent.Turn{SessionID: "s", Inputs: []agent.Input{{Text: "hello"}}}, func(agent.StreamEvent) error { return nil }); err != nil {
 		t.Fatal(err)
 	}
 	var started int
@@ -243,7 +243,7 @@ func TestPreDispatchToolRejectionsContinueButOtherErrorsStop(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			result, err := exports.Runtime.Run(context.Background(), agent.Turn{SessionID: "s", Input: "hello"})
+			result, err := exports.Runtime.(*runtime).execute(context.Background(), agent.Turn{SessionID: "s", Inputs: []agent.Input{{Text: "hello"}}}, nil)
 			if !errors.Is(err, tc.wantErr) {
 				t.Fatalf("error=%v want=%v", err, tc.wantErr)
 			}
@@ -288,7 +288,7 @@ func TestCancellationAfterDurableUserStopsBeforeModelDispatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := exports.Runtime.Run(ctx, agent.Turn{SessionID: "s", Input: "hello"})
+	result, err := exports.Runtime.(*runtime).execute(ctx, agent.Turn{SessionID: "s", Inputs: []agent.Input{{Text: "hello"}}}, nil)
 	if !errors.Is(err, context.Canceled) || result.Result != nil || modelCalls != 0 || len(store.entries["s"]) != 1 {
 		t.Fatalf("result=%#v error=%v models=%d entries=%d", result, err, modelCalls, len(store.entries["s"]))
 	}
@@ -308,7 +308,7 @@ func TestCancellationAfterModelSuccessStopsBeforeAssistantPersistence(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := exports.Runtime.Run(ctx, agent.Turn{SessionID: "s", Input: "hello"})
+	result, err := exports.Runtime.(*runtime).execute(ctx, agent.Turn{SessionID: "s", Inputs: []agent.Input{{Text: "hello"}}}, nil)
 	if !errors.Is(err, context.Canceled) || result.Result != nil || len(store.entries["s"]) != 1 {
 		t.Fatalf("result=%#v error=%v entries=%d", result, err, len(store.entries["s"]))
 	}
@@ -343,7 +343,7 @@ func TestCancellationAfterToolSuccessDoesNotPersistVolatileResultOrDispatchNext(
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := exports.Runtime.Run(ctx, agent.Turn{SessionID: "s", Input: "hello"})
+	result, err := exports.Runtime.(*runtime).execute(ctx, agent.Turn{SessionID: "s", Inputs: []agent.Input{{Text: "hello"}}}, nil)
 	if !errors.Is(err, context.Canceled) || result.Result != nil || len(tools.calls) != 1 || len(store.entries["s"]) != 2 {
 		t.Fatalf("result=%#v error=%v tools=%d entries=%d", result, err, len(tools.calls), len(store.entries["s"]))
 	}
@@ -397,7 +397,7 @@ func TestPersistenceErrorsStopAllDependentWork(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			result, err := exports.Runtime.Run(context.Background(), agent.Turn{SessionID: "s", Input: "hello"})
+			result, err := exports.Runtime.(*runtime).execute(context.Background(), agent.Turn{SessionID: "s", Inputs: []agent.Input{{Text: "hello"}}}, nil)
 			if !errors.Is(err, persistErr) || result.Result != nil || len(store.entries["s"]) != tc.wantEntries ||
 				len(models.requests) != tc.wantModels || len(tools.calls) != tc.wantTools || store.appends != tc.failAt {
 				t.Fatalf("result=%#v error=%v entries=%d models=%d tools=%d appends=%d", result, err,
@@ -434,7 +434,7 @@ func TestRecoveryPersistenceErrorStopsBeforeNewTurnWork(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := exports.Runtime.Run(context.Background(), agent.Turn{SessionID: "s", Input: "new input"})
+	result, err := exports.Runtime.(*runtime).execute(context.Background(), agent.Turn{SessionID: "s", Inputs: []agent.Input{{Text: "new input"}}}, nil)
 	if !errors.Is(err, persistErr) || result.Result != nil || store.appends != 1 ||
 		len(store.entries["s"]) != 1 || len(models.requests) != 0 || len(tools.calls) != 0 {
 		t.Fatalf("result=%#v error=%v appends=%d entries=%d models=%d tools=%d", result, err,
@@ -460,11 +460,11 @@ func TestRecoveryUsesCommittedHistoryAfterAppendReturnedError(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := exports.Runtime.Run(context.Background(), agent.Turn{SessionID: "s", Input: "first"})
+	result, err := exports.Runtime.(*runtime).execute(context.Background(), agent.Turn{SessionID: "s", Inputs: []agent.Input{{Text: "first"}}}, nil)
 	if !errors.Is(err, persistErr) || result.Result != nil || len(store.entries["s"]) != 2 || len(tools.calls) != 0 {
 		t.Fatalf("first result=%#v error=%v entries=%d tools=%d", result, err, len(store.entries["s"]), len(tools.calls))
 	}
-	result, err = exports.Runtime.Run(context.Background(), agent.Turn{SessionID: "s", Input: "next"})
+	result, err = exports.Runtime.(*runtime).execute(context.Background(), agent.Turn{SessionID: "s", Inputs: []agent.Input{{Text: "next"}}}, nil)
 	if err != nil || textValue(executionOutput(result)) != "continued safely" || len(store.entries["s"]) != 5 || len(tools.calls) != 0 {
 		t.Fatalf("second result=%#v error=%v entries=%d tools=%d", result, err, len(store.entries["s"]), len(tools.calls))
 	}

@@ -101,9 +101,19 @@ type toolResponseProjection struct {
 	Content []partProjection `json:"content"`
 }
 type agentRequestProjection struct {
-	SessionID   string           `json:"session_id"`
-	Input       string           `json:"input"`
-	Attachments []partProjection `json:"attachments"`
+	SessionID string                 `json:"session_id"`
+	Inputs    []agentInputProjection `json:"inputs"`
+}
+type agentInputProjection struct {
+	Text        string                      `json:"text"`
+	Attachments []agentAttachmentProjection `json:"attachments"`
+}
+type agentAttachmentProjection struct {
+	Name     string          `json:"name,omitempty"`
+	MIMEType string          `json:"mime_type,omitempty"`
+	Size     int64           `json:"size"`
+	Path     string          `json:"path,omitempty"`
+	Media    *partProjection `json:"media,omitempty"`
 }
 type agentResponseProjection struct {
 	Output []partProjection `json:"output"`
@@ -400,21 +410,26 @@ func projectAgentRequest(turn agent.Turn) (agentRequestProjection, error) {
 	if err := validateUTF8("session id", string(turn.SessionID)); err != nil {
 		return agentRequestProjection{}, err
 	}
-	if err := validateUTF8("agent input", turn.Input); err != nil {
-		return agentRequestProjection{}, err
-	}
-	if err := content.ValidateAttachments(turn.Attachments); err != nil {
-		return agentRequestProjection{}, err
-	}
-	attachments := make([]partProjection, len(turn.Attachments))
-	for i, attachment := range turn.Attachments {
-		projected, err := projectContent(content.Content{content.AttachmentPart(attachment)})
-		if err != nil {
-			return agentRequestProjection{}, fmt.Errorf("attachment %d: %w", i, err)
+	result := agentRequestProjection{SessionID: string(turn.SessionID), Inputs: make([]agentInputProjection, len(turn.Inputs))}
+	for i, input := range turn.Inputs {
+		if err := agent.ValidateInput(input); err != nil {
+			return agentRequestProjection{}, err
 		}
-		attachments[i] = projected[0]
+		projected := agentInputProjection{Text: input.Text, Attachments: make([]agentAttachmentProjection, len(input.Attachments))}
+		for j, a := range input.Attachments {
+			attachment := agentAttachmentProjection{Name: a.Name, MIMEType: a.MIMEType, Size: a.Size, Path: a.Path}
+			if a.Media != nil {
+				parts, err := projectContent(content.Content{content.AttachmentPart(*a.Media)})
+				if err != nil {
+					return agentRequestProjection{}, err
+				}
+				attachment.Media = &parts[0]
+			}
+			projected.Attachments[j] = attachment
+		}
+		result.Inputs[i] = projected
 	}
-	return agentRequestProjection{SessionID: string(turn.SessionID), Input: turn.Input, Attachments: attachments}, nil
+	return result, nil
 }
 
 func projectAgentResponse(result agent.Result) (agentResponseProjection, error) {

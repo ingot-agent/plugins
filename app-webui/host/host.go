@@ -57,7 +57,8 @@ func New(ctx context.Context, deps Dependencies) (Exports, ingotabi.Cleanup, err
 	events := newEventHub(normalized.ReplayCapacity, normalized.SubscriberBuffer)
 	interactions := newInteractionHost(events)
 	instance := &runtime{events: events, interactions: interactions}
-	return Exports{Channel: interactions, ExecutionInteractions: interactions, Runtime: instance, Observer: &observer{events: events}}, nil, nil
+	observer := &observer{events: events, pending: make(map[observation.Correlation]*observationBatch)}
+	return Exports{Channel: interactions, ExecutionInteractions: interactions, Runtime: instance, Observer: observer}, observer.cleanup, nil
 }
 
 func (r *runtime) Events() appbackend.EventHub { return r.events }

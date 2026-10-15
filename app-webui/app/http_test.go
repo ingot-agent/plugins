@@ -5,6 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	appbackend "github.com/ingot-agent/plugins/app-webui"
+	hostcomponent "github.com/ingot-agent/plugins/app-webui/host"
+	"github.com/ingot-agent/sdk/agent"
+	"github.com/ingot-agent/sdk/content"
+	"github.com/ingot-agent/sdk/execution"
+	"github.com/ingot-agent/sdk/model"
+	"github.com/ingot-agent/sdk/session"
+	"github.com/ingot-agent/sdk/workspace"
 	"io"
 	"math"
 	"net/http"
@@ -15,19 +23,14 @@ import (
 	"sync"
 	"testing"
 	"time"
-
-	ingotabi "github.com/ingot-agent/ingot-abi"
-	appbackend "github.com/ingot-agent/plugins/app-webui"
-	hostcomponent "github.com/ingot-agent/plugins/app-webui/host"
-	"github.com/ingot-agent/sdk/agent"
-	"github.com/ingot-agent/sdk/content"
-	"github.com/ingot-agent/sdk/execution"
-	"github.com/ingot-agent/sdk/model"
-	"github.com/ingot-agent/sdk/session"
-	"github.com/ingot-agent/sdk/workspace"
 )
 
 type testAgent struct {
+	agent.Runtime
+	agent.Control
+	engineHistory agent.History
+	cleanup       func(context.Context) error
+
 	run      func(context.Context, agent.Turn) (agent.Execution, error)
 	messages []model.Message
 }
@@ -39,8 +42,14 @@ func (a *testAgent) Run(ctx context.Context, turn agent.Turn) (agent.Execution, 
 	return agent.Execution{Result: &agent.Result{Output: content.FromText("answer")}, Outcome: agent.Outcome{Status: agent.OutcomeSucceeded}}, nil
 }
 
-func (a *testAgent) Load(context.Context, session.ID) ([]model.Message, error) {
-	return a.messages, nil
+func (a *testAgent) Load(ctx context.Context, id session.ID) ([]model.Message, error) {
+	if a.messages != nil {
+		return a.messages, nil
+	}
+	if a.engineHistory != nil {
+		return a.engineHistory.Load(ctx, id)
+	}
+	return nil, nil
 }
 
 type testStore struct {
@@ -52,14 +61,16 @@ type testStore struct {
 	nextID     uint64
 }
 
-func (s *testStore) Append(_ context.Context, id session.ID, entry session.Entry) error {
+func (s *testStore) Append(_ context.Context, id session.ID, entries ...session.Entry) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.entries == nil {
 		s.entries = make(map[session.ID][]session.Entry)
 	}
-	entry.Payload = append([]byte(nil), entry.Payload...)
-	s.entries[id] = append(s.entries[id], entry)
+	for _, entry := range entries {
+		entry.Payload = append([]byte(nil), entry.Payload...)
+		s.entries[id] = append(s.entries[id], entry)
+	}
 	return nil
 }
 
@@ -244,6 +255,13 @@ func (s *testStore) Fork(ctx context.Context, id session.ID, request session.For
 		return session.Metadata{}, err
 	}
 	s.mu.Lock()
+	if s.entries == nil {
+		s.entries = make(map[session.ID][]session.Entry)
+	}
+	for _, entry := range s.entries[id] {
+		entry.Payload = append([]byte(nil), entry.Payload...)
+		s.entries[target.ID] = append(s.entries[target.ID], entry)
+	}
 	root, bound := s.workspaces[id]
 	if bound {
 		if s.workspaces == nil {
@@ -261,14 +279,15 @@ func testDependencies(t *testing.T, runtime *testAgent, store *testStore) Depend
 	if err != nil {
 		t.Fatal(err)
 	}
+	initTestAgent(t, runtime, store)
 	process := &testProcess{shutdown: make(chan error, 1)}
-	return Dependencies{Backend: exports.Runtime, Agent: ingotabi.Some[agent.Runtime](runtime), History: runtime, Store: store, Sessions: store, SessionQuery: store, Workspaces: store, WorkspaceResolver: store, Invocation: process, Lifecycle: process}
+	return Dependencies{Backend: exports.Runtime, Agent: runtime, AgentControl: runtime, History: runtime, Store: store, Sessions: store, SessionQuery: store, Workspaces: store, WorkspaceResolver: store, Invocation: process, Lifecycle: process}
 }
 
 func testApplication(t *testing.T) *application {
 	t.Helper()
 	deps := testDependencies(t, &testAgent{}, &testStore{})
-	controller, err := newAgentController(deps.Agent, deps.Streaming, deps.History)
+	controller, err := newAgentController(deps.Agent, deps.AgentControl, deps.History)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -280,7 +299,6 @@ func testApplication(t *testing.T) *application {
 	defaultWorkspace := t.TempDir()
 	a := &application{
 		backend: deps.Backend, agent: controller, sessions: sessions,
-		pluginInputs:     testPluginInputs{store: deps.Store},
 		defaultWorkspace: defaultWorkspace,
 		uploadDirectory:  filepath.Join(t.TempDir(), "uploads"),
 		workspacePicker:  &stubWorkspacePicker{canceled: true},
@@ -364,6 +382,7 @@ func TestHTTPEventCursorValidation(t *testing.T) {
 
 func TestSSEFlushesHeadersBeforeFirstEvent(t *testing.T) {
 	a := testApplication(t)
+	a.config.Heartbeat = 30 * time.Second
 	server := httptest.NewServer(a.routes())
 	defer server.Close()
 	client := &http.Client{Timeout: time.Second}
@@ -380,6 +399,9 @@ func TestSSEFlushesHeadersBeforeFirstEvent(t *testing.T) {
 		response.Body.Close()
 		if response.StatusCode != http.StatusOK || response.Header.Get("Content-Type") != "text/event-stream" {
 			t.Fatalf("SSE response = %d, %v", response.StatusCode, response.Header)
+		}
+		if response.Header.Get("X-Ingot-Heartbeat-Ms") != "30000" || response.Header.Get("X-Accel-Buffering") != "no" {
+			t.Fatalf("SSE liveness headers = %v", response.Header)
 		}
 	}
 }
@@ -468,7 +490,7 @@ func TestSessionHTTPAndBootstrap(t *testing.T) {
 	if w.Header().Get("Cache-Control") != "no-store" || state.Cursor != 2 || state.Workspace.DefaultPath != a.defaultWorkspace || len(state.Sessions) != 1 || state.Sessions[0].Title != "renamed" {
 		t.Fatalf("state = %#v, headers = %v", state, w.Header())
 	}
-	if !state.Agent.Capabilities.Run || state.Agent.Capabilities.Stream || state.Turns == nil || state.Interactions == nil || state.InteractionStates == nil {
+	if !state.Agent.Capabilities.SendMessage || state.Turns == nil || state.Interactions == nil || state.InteractionStates == nil {
 		t.Fatalf("unexpected bootstrap capabilities/collections: %#v", state)
 	}
 }

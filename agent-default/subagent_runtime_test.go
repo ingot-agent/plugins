@@ -104,7 +104,7 @@ func TestChildLastRoundOnlyExposesSubmitAndAcceptsIt(t *testing.T) {
 	runtime := newSubagentTestRuntime(t, Config{MaxRounds: 2}, models, tools, store, control)
 	frame := childTestFrame("c1_child", "echo", childSubmitToolName)
 
-	execution, err := runtime.executeFrame(context.Background(), agent.Turn{SessionID: "c1_child", Input: "task"}, nil, frame)
+	execution, err := runtime.executeFrame(context.Background(), agent.Turn{SessionID: "c1_child", Inputs: []agent.Input{{Text: "task"}}}, nil, frame, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,8 +138,8 @@ func TestChildRejectsMixedSubmissionBeforeToolDispatch(t *testing.T) {
 	control := &subagentRuntimeControl{}
 	runtime := newSubagentTestRuntime(t, Config{MaxRounds: 2}, models, tools, store, control)
 
-	_, err := runtime.executeFrame(context.Background(), agent.Turn{SessionID: "c1_child", Input: "task"}, nil,
-		childTestFrame("c1_child", "echo", childSubmitToolName))
+	_, err := runtime.executeFrame(context.Background(), agent.Turn{SessionID: "c1_child", Inputs: []agent.Input{{Text: "task"}}}, nil,
+		childTestFrame("c1_child", "echo", childSubmitToolName), nil)
 	if !errors.Is(err, ErrInvalidSubmissionRound) {
 		t.Fatalf("error=%v", err)
 	}
@@ -163,8 +163,8 @@ func TestChildRejectsUnconfiguredToolBeforeDispatch(t *testing.T) {
 	control := &subagentRuntimeControl{}
 	runtime := newSubagentTestRuntime(t, Config{MaxRounds: 2}, models, tools, store, control)
 
-	_, err := runtime.executeFrame(context.Background(), agent.Turn{SessionID: "c1_child", Input: "task"}, nil,
-		childTestFrame("c1_child", childSubmitToolName))
+	_, err := runtime.executeFrame(context.Background(), agent.Turn{SessionID: "c1_child", Inputs: []agent.Input{{Text: "task"}}}, nil,
+		childTestFrame("c1_child", childSubmitToolName), nil)
 	if !errors.Is(err, ErrToolNotAllowed) {
 		t.Fatalf("error=%v", err)
 	}
@@ -183,7 +183,7 @@ func TestRootModelViewExcludesChildSubmitTool(t *testing.T) {
 	control := &subagentRuntimeControl{}
 	runtime := newSubagentTestRuntime(t, Config{MaxRounds: 1}, models, tools, store, control)
 
-	if _, err := runtime.Run(context.Background(), agent.Turn{SessionID: "c0_root", Input: "task"}); err != nil {
+	if _, err := runtime.execute(context.Background(), agent.Turn{SessionID: "c0_root", Inputs: []agent.Input{{Text: "task"}}}, nil); err != nil {
 		t.Fatal(err)
 	}
 	models.mu.Lock()
@@ -212,7 +212,7 @@ func TestChildSubmissionConfirmationWaitsForToolResultPersistence(t *testing.T) 
 	runtime := newSubagentTestRuntime(t, Config{MaxRounds: 1}, models, tools, store, control)
 	frame := childTestFrame("c1_child", childSubmitToolName)
 
-	_, err := runtime.executeFrame(context.Background(), agent.Turn{SessionID: "c1_child", Input: "task"}, nil, frame)
+	_, err := runtime.executeFrame(context.Background(), agent.Turn{SessionID: "c1_child", Inputs: []agent.Input{{Text: "task"}}}, nil, frame, nil)
 	if !errors.Is(err, persistErr) {
 		t.Fatalf("error=%v", err)
 	}
@@ -270,3 +270,5 @@ func definitionNames(definitions []tool.Definition) []string {
 	}
 	return result
 }
+
+func (c *subagentRuntimeControl) ValidateRoot(context.Context, session.ID) error { return nil }

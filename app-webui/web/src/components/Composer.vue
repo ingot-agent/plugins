@@ -8,6 +8,7 @@ import { useRuntime } from '../stores/runtime'
 import { filterGroups, filterOperations, operationGroups, parseComposerInput } from '../commands'
 import CommandPalette from './CommandPalette.vue'
 import ModelSelectionPicker from './ModelSelectionPicker.vue'
+import TurnQueue from './TurnQueue.vue'
 const props = defineProps<{ sessionKey: string; running: LiveTurn[]; archived?: boolean; disabled?: boolean; sending?: boolean }>()
 const emit = defineEmits<{
   send: [input: string, attachments: Attachment[], done: () => void]
@@ -32,7 +33,7 @@ const operationCandidates = computed(() => parsed.value.kind === 'operation-sear
 const paletteOpen = computed(() => !paletteDismissed.value && (parsed.value.kind === 'group-search' || parsed.value.kind === 'operation-search'))
 const commandReady = computed(() => parsed.value.kind === 'command' && uploads.value.length === 0)
 const canSend = computed(() => runtime.connection === 'online' && !props.sending && !selecting.value && !props.archived && !props.disabled &&
-  !props.running.length && !uploads.value.some(item => item.pending) && parsed.value.kind === 'message' && (!!parsed.value.text.trim() || uploads.value.length > 0))
+  !uploads.value.some(item => item.pending) && parsed.value.kind === 'message' && (!!parsed.value.text.trim() || uploads.value.length > 0))
 const canSubmit = computed(() => canSend.value || (runtime.connection === 'online' && !props.sending && !props.archived && commandReady.value))
 function fit() { if (input.value) { input.value.style.height = 'auto'; input.value.style.height = Math.min(input.value.scrollHeight, 200) + 'px' } }
 watch(() => props.sessionKey, (key, previous) => {
@@ -119,11 +120,16 @@ function send() {
   if (parsed.value.kind === 'command') { executeCommand(parsed.value.operation); return }
   if (parsed.value.kind !== 'message' || !canSend.value) return
   const sentList = uploads.value
+  const sentText = text.value
   const sentUploads = [...uploads.value]
   emit('send', parsed.value.text, sentUploads.map(item => item.attachment), () => {
     for (const item of sentUploads) release(item)
-    for (const [key, draft] of drafts) if (draft.uploads === sentList) drafts.delete(key)
-    if (uploads.value === sentList) { text.value = ''; uploads.value = [] }
+    for (const [key, draft] of drafts) if (draft.uploads === sentList) {
+      draft.uploads = []
+      if (draft.text === sentText) draft.text = ''
+      if (!draft.text) drafts.delete(key)
+    }
+    if (uploads.value === sentList) { if (text.value === sentText) text.value = ''; uploads.value = [] }
   })
 }
 function chooseGroup(group = groupCandidates.value[selectedCommand.value]) {
@@ -186,6 +192,7 @@ onBeforeUnmount(() => {
   <div class="composer-wrap">
     <CommandPalette v-if="paletteOpen && parsed.kind === 'group-search'" phase="group" :groups="groupCandidates" :selected="selectedCommand" @group="chooseGroup" />
     <CommandPalette v-if="paletteOpen && parsed.kind === 'operation-search'" phase="operation" :group="parsed.group.name" :operations="operationCandidates" :selected="selectedCommand" @operation="executeCommand" />
+    <TurnQueue :session-id="sessionKey" :archived="archived" />
     <form class="composer" @submit.prevent="send">
       <div v-if="uploads.length" class="upload-list">
         <div v-for="item in uploads" :key="item.id" class="upload-chip" :title="item.attachment.path">
@@ -194,12 +201,12 @@ onBeforeUnmount(() => {
           <button type="button" class="icon-button" :aria-label="t('remove') + ': ' + item.attachment.name" :disabled="sending" @click="remove(item.id)"><X :size="13" /></button>
         </div>
       </div>
-      <textarea ref="input" v-model="text" class="composer-input" :placeholder="t('composer')" :aria-label="t('composer')" rows="2" :disabled="archived || sending" @keydown="keydown" @paste="paste" />
+      <textarea ref="input" v-model="text" class="composer-input" :placeholder="t('composer')" :aria-label="t('composer')" rows="2" :disabled="archived" @keydown="keydown" @paste="paste" />
       <div class="composer-toolbar">
         <button type="button" class="icon-button" :disabled="!runtime.files.available || selecting || archived || disabled || sending" :aria-label="t('attach')" :title="runtime.files.available ? t('uploadLimit', { size: size(runtime.files.maxBytes) }) : t('assetUnavailable')" @click="selectFiles"><LoaderCircle v-if="selecting" class="spin" :size="19" /><Paperclip v-else :size="19" /></button>
         <ModelSelectionPicker />
         <button v-if="running.length" type="button" class="send-button stopping-button ml-auto" :disabled="running.every(turn => turn.stopping) || runtime.connection !== 'online'" :aria-label="t(running.some(turn => turn.stopping) ? 'stopping' : 'stop')" @click="stop"><LoaderCircle v-if="running.some(turn => turn.stopping)" class="spin" :size="18" /><Square v-else :size="14" fill="currentColor" /></button>
-        <button v-else class="send-button ml-auto" type="submit" :disabled="!canSubmit" :aria-label="t(parsed.kind === 'command' ? 'runOperation' : 'send')"><LoaderCircle v-if="sending" class="spin" :size="18" /><ArrowUp v-else :size="20" /></button>
+        <button class="send-button" :class="{ 'ml-auto': !running.length }" type="submit" :disabled="!canSubmit" :aria-label="t(parsed.kind === 'command' ? 'runOperation' : 'send')"><LoaderCircle v-if="sending" class="spin" :size="18" /><ArrowUp v-else :size="20" /></button>
       </div>
     </form>
     <div class="composer-hint">{{ t('shortcut') }}</div>

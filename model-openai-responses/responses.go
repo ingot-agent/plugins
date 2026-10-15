@@ -493,7 +493,7 @@ func (p *provider) validateRequest(ctx context.Context, request model.Request) e
 }
 
 func (p *provider) do(ctx context.Context, body []byte, accept string) (*http.Response, error) {
-	request, err := http.NewRequest(http.MethodPost, p.endpoint, bytes.NewReader(body))
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, p.endpoint, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("create model request: %w", err)
 	}

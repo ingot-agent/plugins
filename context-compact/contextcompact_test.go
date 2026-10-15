@@ -28,14 +28,16 @@ func (s *memoryStore) Create(context.Context, session.CreateRequest) (session.Me
 	return session.Metadata{}, errors.New("not implemented")
 }
 
-func (s *memoryStore) Append(_ context.Context, id session.ID, entry session.Entry) error {
+func (s *memoryStore) Append(_ context.Context, id session.ID, entries ...session.Entry) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.appendErr != nil {
 		return s.appendErr
 	}
-	entry.Payload = cloneRaw(entry.Payload)
-	s.entries[id] = append(s.entries[id], entry)
+	for _, entry := range entries {
+		entry.Payload = cloneRaw(entry.Payload)
+		s.entries[id] = append(s.entries[id], entry)
+	}
 	return nil
 }
 

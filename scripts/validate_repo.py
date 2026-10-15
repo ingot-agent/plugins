@@ -20,6 +20,10 @@ CORE_MODULE = "github.com/ingot-agent/ingot"
 INFRASTRUCTURE_TOP_LEVEL_DIRS = {".github", "docs", "scripts", "tools"}
 LOCAL_METADATA_DIRS = {".git", ".idea", ".vscode"}
 PLUGIN_MARKER_FILES = ("go.mod", "ingot.plugin.toml")
+LOCAL_CONTRACT_REPLACEMENTS = {
+    "github.com/ingot-agent/sdk": "../sdk",
+    "github.com/ingot-agent/ingot-abi": "../ingot-abi",
+}
 
 REQUIRED_ROOT_FILES = (
     ".github/workflows/ci.yml",
@@ -133,6 +137,7 @@ def validate_workspace(
     go_versions: list[tuple[int, str]] = []
     use_paths: list[tuple[int, str]] = []
     in_use_block = False
+    replaced_modules: set[str] = set()
 
     for line_number, raw_line in enumerate(
         go_work.read_text(encoding="utf-8").splitlines(), start=1
@@ -161,6 +166,15 @@ def validate_workspace(
         if use_match:
             use_paths.append((line_number, use_match.group(1)))
             continue
+
+        replace_match = re.fullmatch(r"replace\s+(\S+)\s+=>\s+(\S+)", line)
+        if replace_match:
+            module, target = replace_match.groups()
+            if LOCAL_CONTRACT_REPLACEMENTS.get(module) == target:
+                if module in replaced_modules:
+                    errors.append(f"go.work:{line_number}: duplicate replace module: {module}")
+                replaced_modules.add(module)
+                continue
 
         errors.append(f"go.work:{line_number}: unsupported directive or syntax: {line}")
 

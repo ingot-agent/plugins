@@ -45,27 +45,46 @@ export class SSEDecoder {
 }
 
 export async function subscribe(cursor: number, signal: AbortSignal, receive: (id: number, event: WebEvent) => void, ready: () => void) {
-  const response = await fetch('/api/events?after=' + cursor, { signal, cache: 'no-store' })
-  if (!response.ok) {
-    const body = await response.json().catch(() => null)
-    throw new APIError(response.status, body?.error || { code: 'event_stream_error', message: response.statusText })
+  const stalled = new AbortController()
+  const streamSignal = AbortSignal.any([signal, stalled.signal])
+  let timeoutMs = 45000
+  let timer: ReturnType<typeof setTimeout>
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined
+  const touch = () => {
+    clearTimeout(timer)
+    timer = setTimeout(() => stalled.abort(new Error('Event stream timed out')), timeoutMs)
   }
-  if (!response.body || !response.headers.get('content-type')?.includes('text/event-stream')) {
-    throw new Error('Invalid event stream response')
-  }
-  const reader = response.body.getReader()
-  const decoder = new TextDecoder()
-  const sse = new SSEDecoder(receive)
-  ready()
+  touch()
   try {
-    while (!signal.aborted) {
+    const response = await fetch('/api/events?after=' + cursor, { signal: streamSignal, cache: 'no-store' })
+    if (!response.ok) {
+      const body = await response.json().catch(() => null)
+      throw new APIError(response.status, body?.error || { code: 'event_stream_error', message: response.statusText })
+    }
+    if (!response.body || !response.headers.get('content-type')?.includes('text/event-stream')) {
+      throw new Error('Invalid event stream response')
+    }
+    const heartbeatMs = Number(response.headers.get('X-Ingot-Heartbeat-Ms'))
+    if (Number.isFinite(heartbeatMs) && heartbeatMs > 0) timeoutMs = Math.min(2147483647, Math.max(timeoutMs, heartbeatMs * 3))
+    touch()
+    reader = response.body.getReader()
+    const decoder = new TextDecoder()
+    const sse = new SSEDecoder(receive)
+    ready()
+    while (!streamSignal.aborted) {
       const chunk = await reader.read()
       if (chunk.done) break
+      touch() // Comments/heartbeats count even when there are no model events.
       sse.push(decoder.decode(chunk.value, { stream: true }))
     }
     sse.push(decoder.decode())
+  } catch (error) {
+    if (stalled.signal.aborted) throw stalled.signal.reason
+    throw error
   } finally {
-    await reader.cancel().catch(() => undefined)
-    reader.releaseLock()
+    clearTimeout(timer!)
+    stalled.abort()
+    await reader?.cancel().catch(() => undefined)
+    reader?.releaseLock()
   }
 }

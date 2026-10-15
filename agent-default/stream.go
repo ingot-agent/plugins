@@ -12,7 +12,7 @@ import (
 	"github.com/ingot-agent/sdk/session"
 )
 
-func (r *runtime) Stream(ctx context.Context, turn agent.Turn, handler agent.StreamHandler) (agent.Execution, error) {
+func (r *runtime) stream(ctx context.Context, turn agent.Turn, handler agent.StreamHandler) (agent.Execution, error) {
 	if handler == nil {
 		return agent.Execution{}, agent.ErrNilStreamHandler
 	}
