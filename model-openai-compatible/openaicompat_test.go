@@ -147,6 +147,26 @@ func TestCompleteMapsRequestHeadersAndResponse(t *testing.T) {
 	}
 }
 
+func TestReasoningEffortMaxAndUltraAccepted(t *testing.T) {
+	exports, _, err := openaicompat.New(context.Background(), withState(t, openaicompat.Config{Providers: []openaicompat.ProviderConfig{{
+		Name: "primary", BaseURL: "https://example.test/v1", Models: []string{"requested-model"}, ReasoningEfforts: []string{"max", "ultra"},
+	}}}, dependencies(httpx.Client(clientFunc(func(context.Context, *http.Request) (*http.Response, error) {
+		t.Fatal("unexpected request")
+		return nil, nil
+	})))))
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries := providerEntries(t, exports)
+	if len(entries) != 1 || len(entries[0].Models) != 1 {
+		t.Fatalf("entries = %#v", entries)
+	}
+	want := []model.ReasoningEffort{model.ReasoningEffortMax, model.ReasoningEffortUltra}
+	if !reflect.DeepEqual(entries[0].Models[0].ReasoningEfforts, want) {
+		t.Fatalf("reasoning efforts = %#v, want %#v", entries[0].Models[0].ReasoningEfforts, want)
+	}
+}
+
 func TestReasoningEffortOverridesApplyPerModel(t *testing.T) {
 	client := clientFunc(func(context.Context, *http.Request) (*http.Response, error) {
 		return response(http.StatusOK, `{"model":"actual-model","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`), nil

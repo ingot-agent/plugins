@@ -342,7 +342,7 @@ func normalizeReasoningEffortsField(values []string, field string) ([]model.Reas
 	for i, value := range values {
 		effort := model.ReasoningEffort(value)
 		if !effort.Valid() {
-			return nil, configError(fmt.Sprintf("%s[%d]", field, i), "must be one of none, minimal, low, medium, high, or xhigh")
+			return nil, configError(fmt.Sprintf("%s[%d]", field, i), "must be one of none, minimal, low, medium, high, xhigh, max, or ultra")
 		}
 		if _, exists := seen[effort]; exists {
 			return nil, configError(fmt.Sprintf("%s[%d]", field, i), "duplicates an earlier effort")

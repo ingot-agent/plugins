@@ -169,6 +169,22 @@ func TestCompleteMapsResponsesRequestAndResponse(t *testing.T) {
 	}
 }
 
+func TestReasoningEffortMaxAndUltraAccepted(t *testing.T) {
+	provider := newProvider(t, openairesponses.ProviderConfig{
+		Name: "primary", BaseURL: "https://example.test/v1", Models: []string{"requested-model"}, ReasoningEfforts: []string{"max", "ultra"},
+	}, httpx.Client(clientFunc(func(context.Context, *http.Request) (*http.Response, error) {
+		t.Fatal("unexpected request")
+		return nil, nil
+	})), assetResolver{data: map[string][]byte{}})
+	if len(provider.Models) != 1 {
+		t.Fatalf("models = %#v", provider.Models)
+	}
+	want := []model.ReasoningEffort{model.ReasoningEffortMax, model.ReasoningEffortUltra}
+	if !reflect.DeepEqual(provider.Models[0].ReasoningEfforts, want) {
+		t.Fatalf("reasoning efforts = %#v, want %#v", provider.Models[0].ReasoningEfforts, want)
+	}
+}
+
 func TestReasoningEffortOverridesApplyPerModel(t *testing.T) {
 	provider := newProvider(t, openairesponses.ProviderConfig{
 		Name: "p", BaseURL: "https://example.test",

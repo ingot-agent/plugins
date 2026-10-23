@@ -14,11 +14,17 @@ All notable changes to this plugin are documented in this file.
 
 ### Added
 
+- Accept `max` and `ultra` as explicit reasoning efforts in provider defaults
+  and per-model overrides, and offer both in the configuration form.
 - Publish configured models and their supported reasoning-effort values through
   `model.ProviderEntry`, and map the request-selected value to
   `reasoning_effort` on Chat Completions requests.
 - Allow individual models to override the provider-level reasoning efforts;
   an empty override disables explicit reasoning effort for that model.
+
+Requires published SDK v0.2.20 for `model.ReasoningEffortMax` and
+`model.ReasoningEffortUltra`; validate with `GOWORK=off` against that exact
+dependency.
 
 ### Changed
 
