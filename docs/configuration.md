@@ -44,6 +44,15 @@ Use the composer's slash-command menu:
 4. Create/select a Session with the intended workspace and send a message.
    A workspace binding does not sandbox local tools.
 
+Local image inputs, including `view_image` results, use base64 data URLs in the
+model request. Both model adapters preserve remote HTTP/HTTPS image URLs and
+require an upstream model and endpoint that support image inputs. Files API
+support and image-upload configuration are not required. The retired Chat
+`image_file_format` setting is ignored when loading older development
+configurations and removed on the next save. Upload diagnostics are no longer
+generated; previously saved diagnostic files are left on disk.
+
+
 These Operations have local name `config` and a Group matching the hyphenated
 module directory. `app.backend` is a manifest name; its displayed command is
 `/app-webui config`. That command configures the HTTP host, not model providers.
@@ -76,6 +85,7 @@ Additional or distinct state includes:
 | [agent-default](../agent-default/README.md) | `/agent-default subagents` manages `subagents.toml`, overriding the built-in `coder`/`explorer`/`reviewer` child types available when `tool-subagent` and child storage/workspace capabilities are installed; scheduler limits are implementation constants |
 | [session-sqlite](../session-sqlite/README.md) | SQLite sessions/workspaces/metadata; no `config` Operation |
 | [skill-runtime](../skill-runtime/README.md) | Skills in the plugin scope, plus the embedded built-in skill; no `config` Operation |
+| [tool-image](../tool-image/README.md) | Images in the injected asset store; fixed limits, no private configuration or state files |
 | [tool-subagent](../tool-subagent/README.md) | Injected child-management capability; no private configuration Operation |
 
 Use Operations for validated, coherent configuration updates. Direct edits to
@@ -88,12 +98,13 @@ it does not restore state or undo external tool effects.
 
 ## Activation boundaries
 
-The current catalog has **19 modules, 16 with configuration Operations**:
+The current catalog has **20 modules, 16 with configuration Operations**:
 
 | Activation | Modules / settings |
 |---|---|
 | Saved changes apply to later calls without restart | `agent-default`, `asset-local`, `context-compact`, `http-default`, `interceptor-approval`, `interceptor-script`, `model-openai-compatible`, `model-openai-responses`, `model-runtime`, `prompt-default`, `tool-ask`, `tool-edit`, `tool-runtime`, `tool-shell` |
 | Changed settings require restart | `app-webui`: listener, replay/subscriber buffers, heartbeat, Operation retention and asset-upload limit |
+| No configuration Operation | `session-sqlite`, `skill-runtime`, `tool-image`, `tool-subagent` |
 | Saved changes apply to later calls without restart | `agent-default` child definitions in `subagents.toml`, managed by `/agent-default subagents` independently of `/agent-default config` |
 
 The 16 live Operations return `restart_required:false` after persistence and

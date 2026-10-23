@@ -259,8 +259,7 @@ func cloneDetail(detail observation.Detail) observation.Detail {
 }
 
 func cloneTurn(value agent.Turn) agent.Turn {
-	value.Attachments = content.CloneAttachments(value.Attachments)
-	return value
+	return agent.CloneTurn(value)
 }
 
 func cloneAgentResult(value *agent.Result) *agent.Result {

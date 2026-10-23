@@ -48,7 +48,7 @@ func TestStreamRetryKeepsEarlierRoundsAndExecutesToolsOnce(t *testing.T) {
 	}
 	output, reasoning := "", ""
 	resets, recovered := 0, 0
-	result, err := exports.Streaming.Stream(context.Background(), agent.Turn{SessionID: "s", Input: "go"}, func(e agent.StreamEvent) error {
+	result, err := exports.Runtime.(*runtime).stream(context.Background(), agent.Turn{SessionID: "s", Inputs: []agent.Input{{Text: "go"}}}, func(e agent.StreamEvent) error {
 		switch e.Kind {
 		case agent.StreamOutputDelta:
 			output += e.TextDelta
@@ -100,7 +100,7 @@ func TestStreamRetryConsumerFailureStopsTools(t *testing.T) {
 			t.Fatal(err)
 		}
 		consumer := errors.New("consumer unavailable")
-		_, err = exports.Streaming.Stream(context.Background(), agent.Turn{SessionID: "s", Input: "go"}, func(e agent.StreamEvent) error {
+		_, err = exports.Runtime.(*runtime).stream(context.Background(), agent.Turn{SessionID: "s", Inputs: []agent.Input{{Text: "go"}}}, func(e agent.StreamEvent) error {
 			if e.Kind == failKind {
 				return consumer
 			}

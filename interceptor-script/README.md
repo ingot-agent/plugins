@@ -59,7 +59,7 @@ after 额外包含 `outcome`：成功为 `{"response": <目标响应>, "error": 
 | --- | --- | --- |
 | `tool` | `id`、`name`、原始对象 `arguments`；不包含 execution Scope | 有序 `content` |
 | `model` / `model-stream` | `provider`、`model`、`messages`、`tools`、`temperature`、`max_tokens`、`stop` | `message`、`finish_reason`、`usage`、`provider`、`model` |
-| `agent` | `session_id`、`input`、`attachments` | `output` |
+| `agent` | `session_id`、`inputs`（每项含 `text`、`attachments`） | `output` |
 
 内容 part 使用字符串 kind（`text`、`image`、`audio`、`video`、`file`）。媒体 source 使用 `inline`/`uri`/`asset`，内联 data 在 JSON 中为 base64，asset 投影为 ID；插件不自动读取 URI 或 Asset 内容。`model-stream` hook 包围整次 Stream 调用，原 handler 原样转发；不逐 delta 运行脚本。
 
@@ -76,3 +76,5 @@ Web 命令 `/interceptor-script config` 对应 Group `interceptor-script`、Name
 在本模块目录执行 `go test ./...`；发布依赖验证设置 `GOWORK=off`。测试覆盖四种目标的投影、严格 JSON 协议、环境隔离、超时/输出/stderr/退出码、before 拒绝、after 完成未知和配置实时增加 hook。
 
 返回 [插件文档索引](../docs/README.md)。
+
+Agent hook 仍包围整个 Turn，只在生命周期入口执行一次。`inputs` 是入口快照，Round 间新增输入由 Agent 队列接入，不重新触发 Turn hook。输入附件包含 `name`、`mime_type`、`size`、`path` 和可选 `media`；媒体仍沿用现有 content 投影。本模块固定依赖已发布的 SDK v0.2.19，支持 `GOWORK=off` 独立验证；旧脚本需迁移原单条 input/attachments 字段。

@@ -5,6 +5,8 @@ import Composer from './Composer.vue'
 import { useRuntime } from '../stores/runtime'
 import { i18n } from '../i18n'
 import type { Operation } from '../protocol'
+import { turnSnapshot } from '../test/turn'
+
 import { command, request } from '../api'
 
 vi.mock('../api', async importOriginal => ({ ...await importOriginal<typeof import('../api')>(), command: vi.fn(), request: vi.fn() }))
@@ -142,6 +144,44 @@ describe('clipboard attachments', () => {
 })
 
 describe('composer drafts', () => {
+  it('submits messages during a turn and exposes independent stop and send controls', async () => {
+    const view = composer()
+    await view.setProps({ sessionKey: 's', running: [turnSnapshot({ id: 'active' })] })
+    await view.get('textarea').setValue('next request')
+    expect(view.find('button[aria-label="' + i18n.global.t('stop') + '"]').exists()).toBe(true)
+    expect(view.get('button[type=submit]').attributes('disabled')).toBeUndefined()
+    await view.get('textarea').trigger('keydown', { key: 'Enter' })
+    expect(view.emitted('send')?.[0][0]).toBe('next request')
+  })
+
+  it('keeps text entered while a submission is being acknowledged', async () => {
+    const view = composer()
+    await view.get('textarea').setValue('submitted')
+    await view.get('form').trigger('submit')
+    await view.setProps({ sending: true })
+    expect(view.get('textarea').attributes('disabled')).toBeUndefined()
+    await view.get('textarea').setValue('new draft')
+    const accepted = view.emitted('send')![0][2] as () => void
+    accepted()
+    await view.vm.$nextTick()
+    expect(view.get('textarea').element.value).toBe('new draft')
+  })
+
+  it('shows only queued inputs in the queue and supports removing them', async () => {
+    const view = composer()
+    const runtime = useRuntime()
+    await view.setProps({ sessionKey: 's' })
+    runtime.turns.queued = turnSnapshot({ id: 'q', sequence: 2, input: 'queued request', status: 'queued', started: false, persisted: false, sdkTurnId: undefined })
+    runtime.turns.done = turnSnapshot({ id: 'done', input: 'done request', revision: 2, status: 'succeeded' })
+    await view.vm.$nextTick()
+    expect(view.get('.turn-queue-list').text()).toContain('queued request')
+    expect(view.get('.turn-queue-list').text()).not.toContain('done request')
+    vi.mocked(command).mockResolvedValueOnce(undefined)
+    await view.get('.turn-queue-item .icon-button').trigger('click')
+    await flushPromises()
+    expect(command).toHaveBeenCalledWith('/turns/q?queued=true', 'DELETE')
+  })
+
   it('selects a local file and sends it without creating a browser upload', async () => {
     const view = composer()
     const runtime = useRuntime()

@@ -44,6 +44,9 @@ type FinishIntent struct {
 // Control coordinates root Turn registration, child dispatch, result
 // submission confirmation, and final settlement.
 type Control interface {
+	// ValidateRoot rejects public submissions to child sessions without waiting
+	// for their execution gate or registering another executor.
+	ValidateRoot(context.Context, session.ID) error
 	BeginRoot(context.Context, session.ID, session.ID) (Handle, error)
 	EndRoot(context.Context, Handle, bool) error
 	Next(context.Context) (Task, error)

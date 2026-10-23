@@ -29,8 +29,8 @@ type contractStore struct{}
 func (contractStore) Create(context.Context, session.CreateRequest) (session.Metadata, error) {
 	return session.Metadata{}, nil
 }
-func (contractStore) Append(context.Context, session.ID, session.Entry) error   { return nil }
-func (contractStore) Load(context.Context, session.ID) ([]session.Entry, error) { return nil, nil }
+func (contractStore) Append(context.Context, session.ID, ...session.Entry) error { return nil }
+func (contractStore) Load(context.Context, session.ID) ([]session.Entry, error)  { return nil, nil }
 
 func TestPublicComponentContract(t *testing.T) {
 	t.Parallel()

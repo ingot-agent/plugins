@@ -20,25 +20,24 @@ func uploadFileRequest(name, body string) *http.Request {
 	return request
 }
 
-func TestClipboardImagesUseAssetsWithoutFileNotices(t *testing.T) {
+func TestClipboardImagesUseAssetsAndAgentFileNotices(t *testing.T) {
 	for _, name := range []string{"screenshot.png", "photo.JPG", "animation.gif", "image.webp"} {
 		t.Run(name, func(t *testing.T) {
 			a := testApplication(t)
-			a.pluginInputs = nil
 			assets := &uploadStore{}
 			a.assets = assets
 			w := httptest.NewRecorder()
 			a.routes().ServeHTTP(w, uploadFileRequest(name, "image"))
 			var file appbackend.Attachment
-			if w.Code != http.StatusCreated || json.Unmarshal(w.Body.Bytes(), &file) != nil || file.Kind != "image" || file.Name != name || file.AssetID != "asset-one" || file.Path != "" || file.Size != 5 {
+			if w.Code != http.StatusCreated || json.Unmarshal(w.Body.Bytes(), &file) != nil || file.Kind != "image" || file.Name != name || file.AssetID != "asset-one" || file.Path == "" || file.Size != 5 {
 				t.Fatalf("image upload=%d %s", w.Code, w.Body.String())
 			}
-			images, notice, err := a.prepareAttachments(context.Background(), []appbackend.Attachment{file})
-			if err != nil || len(images) != 1 || notice != nil || assets.calls != 1 || assets.body != "image" {
-				t.Fatalf("image input=%#v notice=%#v writes=%d err=%v", images, notice, assets.calls, err)
+			input, err := attachmentInput("", []appbackend.Attachment{file})
+			if err != nil || len(input.Attachments) != 1 || input.Attachments[0].Media == nil || input.Attachments[0].Path != file.Path || assets.calls != 1 || assets.body != "image" {
+				t.Fatalf("image input=%#v notice=%#v writes=%d err=%v", input, nil, assets.calls, err)
 			}
-			if _, err := os.Stat(a.uploadDirectory); !os.IsNotExist(err) {
-				t.Fatalf("image upload created a file copy: %v", err)
+			if saved, err := os.ReadFile(file.Path); err != nil || string(saved) != "image" {
+				t.Fatalf("image file=%q err=%v", saved, err)
 			}
 		})
 	}
@@ -61,9 +60,9 @@ func TestClipboardDocumentsHaveDurableDistinctPaths(t *testing.T) {
 		if err != nil || string(data) != body {
 			t.Fatalf("saved file=%q err=%v", data, err)
 		}
-		images, notice, err := a.prepareAttachments(context.Background(), []appbackend.Attachment{file})
-		if err != nil || len(images) != 0 || notice == nil || !strings.Contains(notice.Text, "报告.txt") {
-			t.Fatalf("file notice=%#v images=%#v err=%v", notice, images, err)
+		input, err := attachmentInput("", []appbackend.Attachment{file})
+		if err != nil || len(input.Attachments) != 1 || input.Attachments[0].Media != nil || input.Attachments[0].Path != file.Path {
+			t.Fatalf("file notice=%#v images=%#v err=%v", nil, input, err)
 		}
 		previous = file.Path
 	}
@@ -77,26 +76,25 @@ func TestClipboardImageWithoutAssetsUsesFileNotice(t *testing.T) {
 	if w.Code != http.StatusCreated || json.Unmarshal(w.Body.Bytes(), &file) != nil || file.Path == "" || file.AssetID != "" {
 		t.Fatalf("image path upload=%d %s", w.Code, w.Body.String())
 	}
-	images, notice, err := a.prepareAttachments(context.Background(), []appbackend.Attachment{file})
-	if err != nil || len(images) != 0 || notice == nil {
-		t.Fatalf("image path notice=%#v images=%#v err=%v", notice, images, err)
+	input, err := attachmentInput("", []appbackend.Attachment{file})
+	if err != nil || len(input.Attachments) != 1 || input.Attachments[0].Media != nil || input.Attachments[0].Path == "" {
+		t.Fatalf("image path notice=%#v images=%#v err=%v", nil, input, err)
 	}
 }
 
-func TestClipboardUploadRejectsUnsupportedFilesWithoutWriter(t *testing.T) {
+func TestClipboardNonImageUploadsUseAgentFileNotices(t *testing.T) {
 	a := testApplication(t)
-	a.pluginInputs = nil
 	assets := &uploadStore{}
 	a.assets = assets
 	for _, name := range []string{"report.pdf", "image.svg", "image.avif"} {
 		w := httptest.NewRecorder()
 		a.routes().ServeHTTP(w, uploadFileRequest(name, "data"))
-		if w.Code != http.StatusNotImplemented || assets.calls != 0 {
+		if w.Code != http.StatusCreated || assets.calls != 0 {
 			t.Fatalf("unsupported upload=%d %s writes=%d", w.Code, w.Body.String(), assets.calls)
 		}
 	}
-	if _, err := os.Stat(a.uploadDirectory); !os.IsNotExist(err) {
-		t.Fatalf("unsupported upload created a directory: %v", err)
+	if files, err := os.ReadDir(a.uploadDirectory); err != nil || len(files) != 3 {
+		t.Fatalf("uploaded files=%v err=%v", files, err)
 	}
 }
 

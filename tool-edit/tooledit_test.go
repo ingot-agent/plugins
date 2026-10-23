@@ -222,14 +222,18 @@ func TestEditPreservesPermissions(t *testing.T) {
 	if err := os.WriteFile(path, []byte("echo hi\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	before, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
 	edit := testTool(t, root, Config{})
 	invoke(t, edit, `{"path":"a.sh","old":"hi","new":"bye"}`)
 	info, err := os.Stat(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm() != 0o755 {
-		t.Fatalf("mode = %o, want 755", info.Mode().Perm())
+	if info.Mode().Perm() != before.Mode().Perm() {
+		t.Fatalf("mode = %o, want %o", info.Mode().Perm(), before.Mode().Perm())
 	}
 }
 

@@ -1,4 +1,5 @@
 export type Status = 'running' | 'succeeded' | 'failed' | 'canceled'
+export type TurnStatus = Status | 'queued'
 export interface Session {
   id: string
   title: string
@@ -58,23 +59,34 @@ export interface Turn {
   revision: number
   reasoning: string
   output: string
+  status: TurnStatus
+  started: boolean
+  sequence: number
+  requestId?: string
+  input: string
+  attachments?: Attachment[]
+  blocks: TurnBlock[]
+  persisted: boolean
   retry?: { attempt: number; delayMs: number }
-}
-export type TurnBlock =
-  | { id: string; kind: 'output' | 'reasoning'; text: string; boundary: number }
-  | { id: string; kind: 'tool'; call: ToolCall; status: string; content?: Part[]; error?: string }
-  | { id: string; kind: 'interaction'; interactionId: string }
-export interface LiveTurn extends Turn {
-  status: Status
-  blocks?: TurnBlock[]
-  streamBoundary?: number
   sdkTurnId?: string
   historyEnd?: number
-  stopping?: boolean
-  reconciled?: boolean
   outcome?: Outcome
   result?: { output: Part[] }
   error?: ErrorDetail
+}
+export interface TurnQueue {
+  sessionId: string
+  activeId?: string
+  paused: boolean
+  revision: number
+}
+export type TurnBlock =
+  | { id: string; kind: 'output' | 'reasoning'; text: string; boundary: number; content?: Part[] }
+  | { id: string; kind: 'tool'; call: ToolCall; status: string; content?: Part[]; error?: string }
+  | { id: string; kind: 'interaction'; interactionId: string }
+export interface LiveTurn extends Turn {
+  stopping?: boolean
+  reconciled?: boolean
 }
 export interface InteractionField {
   name: string
@@ -136,12 +148,14 @@ export interface OperationInvocation {
 }
 export interface Snapshot {
   cursor: number
-  agent: { capabilities: { run: boolean; stream: boolean } }
+  runtimeId?: string
+  agent: { capabilities: { sendMessage: boolean } }
   assets?: { available: boolean; maxBytes: number }
   files?: { available: boolean; maxBytes: number }
   workspace?: { defaultPath: string }
   sessions: Session[]
   turns: Turn[]
+  turnQueues?: TurnQueue[]
   interactions: Interaction[]
   interactionStates: InteractionState[]
   operations: Operation[]

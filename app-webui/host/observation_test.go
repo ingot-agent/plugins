@@ -26,7 +26,7 @@ func TestObservationProjectsEveryDetailAndPreservesCorrelation(t *testing.T) {
 		detail      observation.Detail
 		round, tool bool
 	}{
-		{"agent.turn.started", observation.TurnStarted{Turn: agent.Turn{SessionID: "session", Input: "hi"}}, false, false},
+		{"agent.turn.started", observation.TurnStarted{Turn: agent.Turn{SessionID: "session", Inputs: []agent.Input{{Text: "hi"}}}}, false, false},
 		{"agent.round.started", &observation.RoundStarted{}, true, false},
 		{"agent.model.started", observation.ModelStarted{Request: model.Request{Messages: []model.Message{{Role: model.RoleUser, Content: content.FromText("hi")}}, Tools: []tool.Definition{{Name: "echo", InputSchema: json.RawMessage(`{"type":"object"}`)}}}}, true, false},
 		{"agent.model.progress", observation.ModelProgress{Progress: model.StreamEvent{Kind: model.StreamPartStart, Semantic: model.StreamSemanticReasoning, PartKind: content.KindText}}, true, false},

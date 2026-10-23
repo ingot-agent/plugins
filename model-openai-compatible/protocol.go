@@ -94,14 +94,31 @@ type chatUsage struct {
 }
 
 func (p *provider) encodeChatRequest(ctx context.Context, request model.Request, stream bool) ([]byte, error) {
-	messages := make([]chatMessage, len(request.Messages))
+	messages := make([]chatMessage, 0, len(request.Messages))
+	var toolImages []chatMessage
 	for i, message := range request.Messages {
+		// Keep tool results textual for Chat compatibility. Defer image
+		// attachments until all adjacent tool results have been emitted, so a
+		// user message never interrupts a parallel tool-call response group.
+		if message.Role != model.RoleTool {
+			messages = append(messages, toolImages...)
+			toolImages = nil
+		} else if _, textOnly := content.TextOnly(message.Content); !textOnly {
+			mapped, images, err := p.encodeToolImages(ctx, i, message)
+			if err != nil {
+				return nil, fmt.Errorf("messages[%d]: %w", i, err)
+			}
+			messages = append(messages, mapped)
+			toolImages = append(toolImages, images)
+			continue
+		}
 		mapped, err := p.encodeMessage(ctx, i, message)
 		if err != nil {
 			return nil, fmt.Errorf("messages[%d]: %w", i, err)
 		}
-		messages[i] = mapped
+		messages = append(messages, mapped)
 	}
+	messages = append(messages, toolImages...)
 	tools := make([]chatTool, len(request.Tools))
 	for i, definition := range request.Tools {
 		if definition.Name == "" || !utf8.ValidString(definition.Name) || !utf8.ValidString(definition.Description) || !validJSONObject(definition.InputSchema) {
@@ -185,14 +202,53 @@ func (p *provider) encodeContent(ctx context.Context, messageIndex int, message 
 	if text, ok := content.TextOnly(message.Content); ok {
 		return json.Marshal(text)
 	}
+	parts, err := p.encodeContentParts(ctx, messageIndex, message)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(parts)
+}
+
+func (p *provider) encodeToolImages(ctx context.Context, messageIndex int, message model.Message) (chatMessage, chatMessage, error) {
+	parts, err := p.encodeContentParts(ctx, messageIndex, message)
+	if err != nil {
+		return chatMessage{}, chatMessage{}, err
+	}
+	var toolText strings.Builder
+	var images []chatContentPart
+	imageIndex := 0
+	for _, part := range parts {
+		if part.Type == "text" {
+			toolText.WriteString(part.Text)
+			continue
+		}
+		imageIndex++
+		label := fmt.Sprintf("Image %d from tool call %q", imageIndex, message.ToolCallID)
+		toolText.WriteString("\n[" + label + "]\n")
+		images = append(images, chatContentPart{Type: "text", Text: label}, part)
+	}
+	// Work on a copy: canonical history must retain the original tool content.
+	message.Content = content.FromText(toolText.String())
+	mapped, err := p.encodeMessage(ctx, messageIndex, message)
+	if err != nil {
+		return chatMessage{}, chatMessage{}, err
+	}
+	wireImages, err := json.Marshal(images)
+	if err != nil {
+		return chatMessage{}, chatMessage{}, err
+	}
+	return mapped, chatMessage{Role: string(model.RoleUser), Content: wireImages}, nil
+}
+
+func (p *provider) encodeContentParts(ctx context.Context, messageIndex int, message model.Message) ([]chatContentPart, error) {
 	parts := make([]chatContentPart, 0, len(message.Content))
 	for partIndex, part := range message.Content {
 		switch part.Kind {
 		case content.KindText:
 			parts = append(parts, chatContentPart{Type: "text", Text: part.Text})
 		case content.KindImage:
-			if message.Role != model.RoleUser {
-				return nil, unsupported(messageIndex, partIndex, part, "image content is only supported for user messages")
+			if message.Role != model.RoleUser && message.Role != model.RoleTool {
+				return nil, unsupported(messageIndex, partIndex, part, "image content is only supported for user messages and tool outputs")
 			}
 			imageURL, err := p.imageURL(ctx, part)
 			if err != nil {
@@ -210,7 +266,7 @@ func (p *provider) encodeContent(ctx context.Context, messageIndex int, message 
 			return nil, unsupported(messageIndex, partIndex, part, "modality is not supported by this provider")
 		}
 	}
-	return json.Marshal(parts)
+	return parts, nil
 }
 
 func (p *provider) imageURL(ctx context.Context, part content.Part) (string, error) {
@@ -220,7 +276,7 @@ func (p *provider) imageURL(ctx context.Context, part content.Part) (string, err
 			return "", &content.UnsupportedError{Reason: "image URI must be valid UTF-8"}
 		}
 		parsed, err := url.Parse(part.Media.Source.URI)
-		if err != nil || !parsed.IsAbs() {
+		if err != nil || !parsed.IsAbs() || parsed.Host == "" {
 			return "", &content.UnsupportedError{Reason: "image URI must be an absolute remote URI"}
 		}
 		switch strings.ToLower(parsed.Scheme) {

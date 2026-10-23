@@ -7,7 +7,6 @@ import (
 	"reflect"
 	"time"
 
-	ingotabi "github.com/ingot-agent/ingot-abi"
 	appbackend "github.com/ingot-agent/plugins/app-webui"
 	"github.com/ingot-agent/sdk/agent"
 	"github.com/ingot-agent/sdk/execution"
@@ -19,50 +18,26 @@ import (
 const sessionCompensationTimeout = 5 * time.Second
 
 type agentController interface {
+	agent.Runtime
+	agent.Control
 	Capabilities() appbackend.AgentCapabilities
-	Run(context.Context, agent.Turn) (agent.Execution, error)
-	Stream(context.Context, agent.Turn, agent.StreamHandler) (agent.Execution, error)
 	History(context.Context, session.ID) ([]model.Message, error)
 }
-
 type defaultAgentController struct {
-	runtime   agent.Runtime
-	streaming agent.StreamingRuntime
-	history   agent.History
+	agent.Runtime
+	agent.Control
+	history agent.History
 }
 
-func newAgentController(runtime ingotabi.Optional[agent.Runtime], streaming ingotabi.Optional[agent.StreamingRuntime], history agent.History) (agentController, error) {
-	if isNil(history) || (!runtime.Valid && !streaming.Valid) || (runtime.Valid && isNil(runtime.Value)) || (streaming.Valid && isNil(streaming.Value)) {
-		return nil, fmt.Errorf("history and at least one agent execution capability are required: %w", appbackend.ErrInvalidConfig)
+func newAgentController(runtime agent.Runtime, control agent.Control, history agent.History) (agentController, error) {
+	if isNil(runtime) || isNil(control) || isNil(history) {
+		return nil, fmt.Errorf("agent submission, control and history are required: %w", appbackend.ErrInvalidConfig)
 	}
-	c := &defaultAgentController{history: history}
-	if runtime.Valid {
-		c.runtime = runtime.Value
-	}
-	if streaming.Valid {
-		c.streaming = streaming.Value
-	}
-	return c, nil
+	return &defaultAgentController{Runtime: runtime, Control: control, history: history}, nil
 }
-
 func (c *defaultAgentController) Capabilities() appbackend.AgentCapabilities {
-	return appbackend.AgentCapabilities{Run: c.runtime != nil, Stream: c.streaming != nil}
+	return appbackend.AgentCapabilities{SendMessage: true}
 }
-
-func (c *defaultAgentController) Run(ctx context.Context, turn agent.Turn) (agent.Execution, error) {
-	if c.runtime == nil {
-		return agent.Execution{}, appbackend.ErrCapabilityUnavailable
-	}
-	return c.runtime.Run(ctx, turn)
-}
-
-func (c *defaultAgentController) Stream(ctx context.Context, turn agent.Turn, handler agent.StreamHandler) (agent.Execution, error) {
-	if c.streaming == nil {
-		return agent.Execution{}, appbackend.ErrCapabilityUnavailable
-	}
-	return c.streaming.Stream(ctx, turn, handler)
-}
-
 func (c *defaultAgentController) History(ctx context.Context, id session.ID) ([]model.Message, error) {
 	return c.history.Load(ctx, id)
 }

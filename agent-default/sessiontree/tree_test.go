@@ -261,6 +261,9 @@ allowed_child_types = []
 	if err != nil || snapshot.SessionID == "" {
 		t.Fatalf("create snapshot=%#v err=%v", snapshot, err)
 	}
+	if err := exports.Control.ValidateRoot(context.Background(), snapshot.SessionID); !errors.Is(err, agent.ErrChildInvalidState) {
+		t.Fatalf("public child submission check: %v", err)
+	}
 	task, err := exports.Control.Next(context.Background())
 	if err != nil || task.Handle.SessionID != snapshot.SessionID {
 		t.Fatalf("task=%#v err=%v", task, err)

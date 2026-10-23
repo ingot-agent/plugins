@@ -72,8 +72,11 @@ startup creates the current schema. This discards its Session history and usage.
 
 ## Session lifecycle
 
-`Append` assigns the next sequence and advances the activity timestamp in the
-same transaction. Appending to an archived session returns `session.ErrArchived`.
+`Append(ctx, id, entries...)` assigns consecutive sequences and advances the
+activity timestamp once in a single transaction. Concurrent single/batch writers
+cannot split a batch, Load cannot see a partial batch, and an INSERT failure
+rolls back the entire group. Empty append is a no-op, including its timestamp.
+No schema or payload-format change is required. Appending to an archived session returns `session.ErrArchived`.
 `Load` returns all entries in ascending sequence and works for archived sessions.
 Missing IDs return `session.ErrNotFound`.
 

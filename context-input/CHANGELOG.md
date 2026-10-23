@@ -12,5 +12,5 @@
 - Preserve Store ordering and error semantics without automatic retries,
   scheduling, model invocation, or instruction-priority rules.
 
-This module requires the plugin-input contracts published in SDK v0.2.16 and
-supports isolated validation with `GOWORK=off`.
+This module pins SDK v0.2.19 for plugin-input contracts and atomic batch
+Store.Append, including its test stores. Validate independently with `GOWORK=off`.

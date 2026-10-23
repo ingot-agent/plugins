@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import { command, request } from '../api'
-import type { Attachment, Interaction, InteractionState, Message, ModelSelectionSnapshot, OperationInvocation, Session, Snapshot } from '../protocol'
+import type { Attachment, Interaction, InteractionState, Message, ModelSelectionSnapshot, OperationInvocation, Session, Snapshot, Turn } from '../protocol'
+import { turnSnapshot } from '../test/turn'
 import { useRuntime } from './runtime'
 
 vi.mock('../api', async importOriginal => ({
@@ -16,7 +17,7 @@ function deferred<T>() {
 }
 const session = (title: string): Session => ({ id: 's', title, createdAt: '2026-01-01', updatedAt: '2026-01-01', totalToken: 0 })
 const snapshot = (): Snapshot => ({
-  cursor: 4, agent: { capabilities: { run: true, stream: true } },
+  cursor: 4, agent: { capabilities: { sendMessage: true } },
   workspace: { defaultPath: '/state/workspace' },
   sessions: [session('Initial')], turns: [], interactions: [], interactionStates: [], operations: [], operationInvocations: [],
 })
@@ -26,6 +27,20 @@ const selection = (revision: string, model: string): ModelSelectionSnapshot => (
 })
 
 beforeEach(() => { setActivePinia(createPinia()); vi.resetAllMocks() })
+
+it('associates an interaction delivered before its runtime submission snapshot', () => {
+  const runtime = useRuntime()
+  runtime.bootstrap(snapshot())
+  const interaction = { id: 'approval', name: 'approval', scope: { agent: { sessionId: 's', turnId: 'turn-1' } }, fields: [] }
+  runtime.receive(5, { type: 'interaction.requested', scope: interaction.scope, data: interaction })
+  runtime.receive(6, { type: 'agent.runtime.updated', data: { turns: [{
+    ...turnSnapshot(),
+    id: 'receipt', sessionId: 's', sdkTurnId: 'turn-1', status: 'running',
+    persisted: true, started: true, revision: 10, sequence: 1, input: 'A',
+    blocks: [{ id: 'round-0-output', kind: 'output', text: 'checking', boundary: 0 }],
+  }], turnQueues: [] } })
+  expect(runtime.turns.receipt!.blocks!.map(block => block.kind)).toEqual(['output', 'interaction'])
+})
 
 const usageState = (id: string, totalToken: unknown): InteractionState => ({
   id: 'model-runtime.session-usage/' + id, name: 'model-runtime.session-usage/' + id,
@@ -215,6 +230,70 @@ describe('runtime request and event ordering', () => {
     expect(runtime.turns).toEqual({})
   })
 
+  it('reuses an uncertain request ID on explicit retry and starts a new ID after acceptance', async () => {
+    const runtime = useRuntime()
+    vi.mocked(command).mockRejectedValueOnce(new TypeError('Connection lost'))
+      .mockResolvedValueOnce(turnSnapshot({ id: 'q', status: 'queued', started: false, persisted: false, sdkTurnId: undefined }))
+      .mockResolvedValueOnce(turnSnapshot({ id: 'next', sequence: 2, status: 'queued', started: false, persisted: false, sdkTurnId: undefined }))
+    await expect(runtime.send('s', 'next', [])).rejects.toThrow('Connection lost')
+    await runtime.send('s', 'next', [])
+    await runtime.send('s', 'next', [])
+    const calls = vi.mocked(command).mock.calls.map(call => call[2] as { requestId: string })
+    expect(calls[0].requestId).toBe(calls[1].requestId)
+    expect(calls[2].requestId).not.toBe(calls[1].requestId)
+    expect(runtime.queued('s')).toHaveLength(2)
+    expect(runtime.running('s')).toHaveLength(0)
+    expect(runtime.optimistic).toEqual({})
+  })
+
+  it.each([undefined, 'queued', 'running'] as const)('handles a completed retry snapshot with previous state %s', async status => {
+    const runtime = useRuntime()
+    if (status) {
+      runtime.turns.web = turnSnapshot({ status })
+      runtime.optimistic.web = { sessionId: 's', message: { role: 'user', content: [] } }
+    }
+    const history: Message[] = [{ role: 'assistant', content: [{ kind: 'text', text: 'Saved answer' }] }]
+    vi.mocked(command).mockResolvedValueOnce(turnSnapshot({ revision: 2, requestId: 'request', status: 'succeeded', historyEnd: 1, outcome: { status: 'succeeded', durationNs: 1000 } }))
+    vi.mocked(request).mockResolvedValueOnce(history)
+    await runtime.send('s', 'hello', [])
+    expect(runtime.turns.web).toMatchObject({ status: 'succeeded', reconciled: true, historyEnd: 1, outcome: { durationNs: 1000 } })
+    expect(runtime.optimistic.web).toBeUndefined()
+    expect(runtime.histories.s).toEqual(history)
+  })
+
+  it('keeps SSE completion details when an older command snapshot arrives', async () => {
+    const runtime = useRuntime()
+    runtime.receive(1, { type: 'agent.runtime.updated', data: { turns: [turnSnapshot({
+      status: 'failed', revision: 4, output: 'Partial answer', historyEnd: 1,
+      error: { code: 'failed', message: 'Execution failed' },
+    })], turnQueues: [] } })
+    vi.mocked(command).mockResolvedValueOnce(turnSnapshot({ revision: 3, requestId: 'request' }))
+    vi.mocked(request).mockResolvedValueOnce([{ role: 'user', content: [] }])
+    await runtime.send('s', 'hello', [])
+    expect(runtime.turns.web).toMatchObject({ status: 'failed', output: 'Partial answer', historyEnd: 1, error: { message: 'Execution failed' } })
+  })
+
+  it('restores the shared queue and reconciles completed turns at their own history boundaries', async () => {
+    const runtime = useRuntime()
+    runtime.bootstrap({ ...snapshot(), turnQueues: [{ sessionId: 's', revision: 3, paused: true }], turns: [
+      turnSnapshot({ id: 'first', status: 'queued', started: false, persisted: false, sdkTurnId: undefined, input: 'first' }),
+      turnSnapshot({ id: 'second', status: 'queued', started: false, persisted: false, sdkTurnId: undefined, sequence: 2, input: 'second' }),
+      turnSnapshot({ id: 'q', status: 'queued', started: false, persisted: false, sdkTurnId: undefined, sequence: 3, input: 'pending' }),
+    ] })
+    runtime.receive(5, { type: 'agent.runtime.updated', data: { turns: [turnSnapshot({ id: 'first', status: 'succeeded', revision: 3, historyEnd: 2 })], turnQueues: [] } })
+    runtime.receive(6, { type: 'agent.runtime.updated', data: { turns: [turnSnapshot({ id: 'second', sequence: 2, sdkTurnId: 'second-turn', status: 'succeeded', revision: 3, historyEnd: 4 })], turnQueues: [] } })
+    expect(runtime.queued('s').map(turn => turn.input)).toEqual(['pending'])
+    expect(runtime.turnQueues.s.paused).toBe(true)
+    runtime.receive(7, { type: 'agent.runtime.updated', data: { turns: [], turnQueues: [{ sessionId: 's', revision: 2, paused: false }] } })
+    expect(runtime.turnQueues.s.paused).toBe(true)
+    vi.mocked(request).mockResolvedValueOnce(Array.from({ length: 4 }, () => ({ role: 'user', content: [] })))
+    await runtime.loadHistory('s')
+    expect(runtime.turns.first.historyEnd).toBe(2)
+    expect(runtime.turns.second.historyEnd).toBe(4)
+    expect(runtime.turns.q.reconciled).toBeUndefined()
+    expect(runtime.optimistic).toEqual({})
+  })
+
   it.each(['', 'Read these files.'])('displays selected files in order before history arrives: %s', async input => {
     const runtime = useRuntime()
     const attachments: Attachment[] = [
@@ -222,11 +301,11 @@ describe('runtime request and event ordering', () => {
       { kind: 'image', name: 'pixel.png', mimeType: 'image/png', path: '/reports/pixel.png', assetId: 'pixel' },
       { kind: 'image', name: 'local.png', mimeType: 'image/png', path: '/reports/local.png' },
     ]
-    const pending = deferred<{ id: string }>()
+    const pending = deferred<Turn>()
     vi.mocked(command).mockReturnValueOnce(pending.promise)
     const sending = runtime.send('s', input, attachments)
     attachments.reverse()
-    pending.resolve({ id: 'web' })
+    pending.resolve(turnSnapshot({ input, attachments: [...attachments].reverse() }))
     await sending
     expect(runtime.histories).toEqual({})
     expect(runtime.optimistic.web.message).toEqual({ role: 'user', content: [
@@ -259,13 +338,17 @@ describe('runtime request and event ordering', () => {
   it('retains ordered tool cards after detailed trace retention rolls over', () => {
     const runtime = useRuntime()
     runtime.bootstrap(snapshot())
-    runtime.receive(5, { type: 'agent.invocation.started', data: { id: 'web', sessionId: 's', revision: 0, reasoning: '', output: '' } })
+    runtime.receive(5, { type: 'agent.runtime.updated', data: { turns: [turnSnapshot()], turnQueues: [] } })
     const scope = { agent: { sessionId: 's', turnId: 'sdk', toolCallId: 'tool' } }
     runtime.receive(6, { type: 'agent.tool.started', scope, data: { call: { id: 'tool', name: 'inspect', arguments: {} } } })
     for (let id = 7; id < 550; id++) runtime.receive(id, { type: 'agent.model.progress', scope, data: {} })
     runtime.receive(550, { type: 'agent.tool.finished', scope, data: { status: 'succeeded', result: { content: [{ kind: 'text', text: 'Done' }] } } })
-    runtime.receive(551, { type: 'agent.reasoning.delta', data: { invocationId: 'web', revision: 1, text: 'Next thought' } })
-    runtime.receive(551, { type: 'agent.reasoning.delta', data: { invocationId: 'web', revision: 1, text: 'Duplicate' } })
+    const next = turnSnapshot({ revision: 2, reasoning: 'Next thought', blocks: [
+      { id: 'tool-tool', kind: 'tool', call: { id: 'tool', name: 'inspect', arguments: {} }, status: 'succeeded', content: [{ kind: 'text', text: 'Done' }] },
+      { id: 'round-1-reasoning', kind: 'reasoning', boundary: 1, text: 'Next thought' },
+    ] })
+    runtime.receive(551, { type: 'agent.runtime.updated', data: { turns: [next], turnQueues: [] } })
+    runtime.receive(551, { type: 'agent.runtime.updated', data: { turns: [{ ...next, reasoning: 'Duplicate' }], turnQueues: [] } })
     expect(runtime.traces.s).toHaveLength(500)
     expect(runtime.turns.web.blocks).toMatchObject([
       { kind: 'tool', status: 'succeeded', content: [{ text: 'Done' }] },
@@ -275,7 +358,7 @@ describe('runtime request and event ordering', () => {
 
   it('keeps a completed invocation anchored before subsequent history', async () => {
     const runtime = useRuntime()
-    runtime.turns.web = { id: 'web', sessionId: 's', revision: 1, reasoning: '', output: 'Partial', status: 'canceled' }
+    runtime.turns.web = turnSnapshot({ output: 'Partial', status: 'canceled', historyEnd: 1 })
     const first: Message[] = [{ role: 'user', content: [{ kind: 'text', text: 'First request' }] }]
     vi.mocked(request).mockResolvedValueOnce(first)
     await runtime.loadHistory('s')

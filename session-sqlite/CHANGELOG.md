@@ -4,6 +4,9 @@ All notable changes to this plugin are documented in this file.
 
 ## Unreleased
 
+- Append accepts atomic contiguous entry batches with one activity update and rollback on failure.
+- Pin published SDK v0.2.19 for the variadic Store.Append interface and independent module validation.
+
 ### Added
 
 - Add schema version 4 with an independent `sessions.totaltoken` INTEGER

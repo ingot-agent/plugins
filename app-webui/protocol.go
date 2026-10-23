@@ -42,8 +42,7 @@ type ErrorDetail struct {
 
 // AgentCapabilities reports independently available execution modes.
 type AgentCapabilities struct {
-	Run    bool `json:"run"`
-	Stream bool `json:"stream"`
+	SendMessage bool `json:"sendMessage"`
 }
 
 // AgentState is the agent portion of the bootstrap snapshot.
@@ -71,27 +70,63 @@ type Session struct {
 	ArchivedAt *time.Time `json:"archivedAt,omitempty"`
 }
 
-// TurnSnapshot is the recoverable projection of a running turn.
-type TurnSnapshot struct {
-	ID        string     `json:"id"`
-	SessionID string     `json:"sessionId"`
-	Revision  uint64     `json:"revision"`
-	Reasoning string     `json:"reasoning"`
-	Output    string     `json:"output"`
-	Retry     *TurnRetry `json:"retry,omitempty"`
+// TurnReceipt confirms acceptance without retaining the submitted payload.
+type TurnReceipt struct {
+	ID        string `json:"id"`
+	SessionID string `json:"sessionId"`
+	RequestID string `json:"requestId,omitempty"`
+	Status    string `json:"status"`
 }
 
-// TurnRetry is the latest planned model retry, retained across reconnects until
-// text resumes or the invocation finishes. DelayMS is the original planned wait.
+// TurnSnapshot projects queued and running invocations.
+type TurnSnapshot struct {
+	SDKTurnID  string       `json:"sdkTurnId,omitempty"`
+	Blocks     []any        `json:"blocks"`
+	HistoryEnd *int         `json:"historyEnd,omitempty"`
+	Outcome    any          `json:"outcome,omitempty"`
+	Result     any          `json:"result,omitempty"`
+	Error      *ErrorDetail `json:"error,omitempty"`
+	Persisted  bool         `json:"persisted"`
+	TurnReceipt
+	Revision    uint64       `json:"revision"`
+	Reasoning   string       `json:"reasoning"`
+	Output      string       `json:"output"`
+	Sequence    uint64       `json:"sequence"`
+	Started     bool         `json:"started"`
+	Input       string       `json:"input"`
+	Attachments []Attachment `json:"attachments,omitempty"`
+	Retry       *TurnRetry   `json:"retry,omitempty"`
+}
+
+// TurnRetry retains the current model retry across reconnects.
 type TurnRetry struct {
 	Attempt int   `json:"attempt"`
 	DelayMS int64 `json:"delayMs"`
+}
+
+// TurnFinished carries completion details in the event stream only.
+type TurnFinished struct {
+	TurnSnapshot
+	InvocationID string       `json:"invocationId"`
+	HistoryEnd   *int         `json:"historyEnd,omitempty"`
+	Outcome      any          `json:"outcome,omitempty"`
+	Result       any          `json:"result,omitempty"`
+	Error        *ErrorDetail `json:"error,omitempty"`
+}
+
+// TurnQueueSnapshot describes the process-local scheduler for one Session.
+type TurnQueueSnapshot struct {
+	SessionID string `json:"sessionId"`
+	ActiveID  string `json:"activeId,omitempty"`
+	Paused    bool   `json:"paused"`
+	Revision  uint64 `json:"revision"`
 }
 
 // StateSnapshot bootstraps all process-local Web state. Session history is
 // intentionally fetched separately.
 type StateSnapshot struct {
 	Cursor               uint64                `json:"cursor"`
+	RuntimeID            string                `json:"runtimeId"`
 	Agent                AgentState            `json:"agent"`
 	Assets               AssetState            `json:"assets"`
 	Files                AssetState            `json:"files"`
@@ -99,6 +134,7 @@ type StateSnapshot struct {
 	Sessions             []Session             `json:"sessions"`
 	Operations           []OperationDefinition `json:"operations"`
 	Turns                []TurnSnapshot        `json:"turns"`
+	TurnQueues           []TurnQueueSnapshot   `json:"turnQueues"`
 	OperationInvocations []OperationSnapshot   `json:"operationInvocations"`
 	Interactions         []PendingInteraction  `json:"interactions"`
 	InteractionStates    []InteractionState    `json:"interactionStates"`

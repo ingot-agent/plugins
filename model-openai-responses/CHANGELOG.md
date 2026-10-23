@@ -4,6 +4,9 @@ All notable changes to this plugin are documented in this file.
 
 ## Unreleased
 
+- Send local user and tool images as base64 data URLs in complete and streaming
+  requests, without Files API uploads, file-ID caches, or upload diagnostic files.
+
 - Derive a stable Session cache key for `prompt_cache_key` and the Responses
   `session-id` / `thread-id` headers so compatible gateways can route related
   requests consistently across rounds, turns and runtime restarts.
@@ -45,6 +48,9 @@ Requires published SDK v0.2.18 for `model.Message.Replay`; validate with
 
 ### Fixed
 
+- Accept image-only and mixed text/image tool outputs in Complete and Stream
+  requests as native `function_call_output` content arrays, preserving content
+  order, call IDs, image validation, and the existing text-only wire format.
 - Ignore SSE `keepalive` heartbeats before, during, and after a terminal response
   instead of aborting the stream with a protocol error.
 - Persist reasoning-effort selections submitted by a host as a MultiChoice

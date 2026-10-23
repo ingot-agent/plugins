@@ -124,7 +124,7 @@ func TestServerFailureRequestsProcessShutdown(t *testing.T) {
 	<-a.serveDone
 }
 
-func TestCleanupCancelsSSEAndWaitsForBackgroundTurn(t *testing.T) {
+func TestComponentCleanupCancelsSSEAndRuntimeOwnedTurn(t *testing.T) {
 	started := make(chan context.Context, 1)
 	canceled := make(chan struct{})
 	release := make(chan struct{})
@@ -241,7 +241,14 @@ func TestCleanupCancelsSSEAndWaitsForBackgroundTurn(t *testing.T) {
 	cleanupCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	cleanupDone := make(chan error, 1)
-	go func() { cleanupDone <- cleanup(cleanupCtx) }()
+	go func() {
+		// The composition cleans up both components. Web cleanup only closes
+		// transport/operations; Agent cleanup owns accepted executions.
+		agentDone := make(chan error, 1)
+		go func() { agentDone <- runtime.cleanup(cleanupCtx) }()
+		webErr := cleanup(cleanupCtx)
+		cleanupDone <- errors.Join(webErr, <-agentDone)
+	}()
 	select {
 	case <-canceled:
 	case <-time.After(time.Second):

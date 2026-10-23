@@ -3,7 +3,6 @@ package appcomponent
 import (
 	"errors"
 	"io"
-	"mime"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -11,11 +10,11 @@ import (
 	"unicode/utf8"
 
 	appbackend "github.com/ingot-agent/plugins/app-webui"
-	"github.com/ingot-agent/sdk/asset"
 )
 
 // Clipboard files carry bytes, not a trustworthy path on the Runtime host.
-// File notices need durable paths. Without a writer, images use Assets directly.
+// The Agent owns file notices, so all clipboard attachments retain durable paths
+// in their original order. Supported images are also imported into Assets.
 func (a *application) handleUploadFile(w http.ResponseWriter, r *http.Request) {
 	name := r.URL.Query().Get("name")
 	if !utf8.ValidString(name) || !filepath.IsLocal(name) || name == "." || strings.ContainsAny(name, "/\\\x00") {
@@ -28,28 +27,6 @@ func (a *application) handleUploadFile(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.ContentLength > a.config.MaxAssetBytes {
 		writeError(w, errLocalFileTooLarge)
-		return
-	}
-	mimeType := mime.TypeByExtension(strings.ToLower(filepath.Ext(name)))
-	if mimeType == "" {
-		mimeType = "application/octet-stream"
-	}
-	if supportedImage(mimeType) && a.assets != nil && a.pluginInputs == nil {
-		r.Body = http.MaxBytesReader(w, r.Body, a.config.MaxAssetBytes)
-		reference, info, err := a.assets.Put(r.Context(), asset.PutRequest{Body: r.Body, Size: uint64(r.ContentLength)})
-		if err != nil {
-			writeUploadError(w, err)
-			return
-		}
-		if reference.ID == "" || info.Size != uint64(r.ContentLength) {
-			writeAPIError(w, http.StatusInternalServerError, "invalid_asset_result", "asset store returned an invalid reference or size")
-			return
-		}
-		writeJSON(w, http.StatusCreated, appbackend.Attachment{Kind: "image", MIMEType: mimeType, Name: name, AssetID: reference.ID, Size: info.Size})
-		return
-	}
-	if a.pluginInputs == nil {
-		writeAPIError(w, http.StatusNotImplemented, "capability_unavailable", "this file type cannot be attached in this composition")
 		return
 	}
 	if err := os.MkdirAll(a.uploadDirectory, 0o700); err != nil {

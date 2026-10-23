@@ -192,7 +192,10 @@ func TestProjectionRejectsInvalidUTF8AndNonFiniteNumbers(t *testing.T) {
 		}},
 		{name: "stop", project: func() error { _, err := projectModelRequest(model.Request{Stop: []string{invalid}}); return err }},
 		{name: "temperature", project: func() error { _, err := projectModelRequest(model.Request{Temperature: &temperature}); return err }},
-		{name: "agent request", project: func() error { _, err := projectAgentRequest(agent.Turn{Input: invalid}); return err }},
+		{name: "agent request", project: func() error {
+			_, err := projectAgentRequest(agent.Turn{Inputs: []agent.Input{{Text: invalid}}})
+			return err
+		}},
 		{name: "agent response", project: func() error { _, err := projectAgentResponse(agent.Result{Output: invalidText(invalid)}); return err }},
 		{name: "error", project: func() error { _, err := describeError(errors.New(invalid)); return err }},
 	}
@@ -320,15 +323,15 @@ func TestModelStreamAndAgentProjectionGolden(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		request := agent.Turn{SessionID: session.ID("s1"), Input: "hello"}
+		request := agent.Turn{SessionID: session.ID("s1"), Inputs: []agent.Input{{Text: "hello"}}}
 		response := agent.Result{Output: content.FromText("world")}
 		got, err := exports.AgentInterceptors[0].Invoke(context.Background(), request, func(context.Context, agent.Turn) (agent.Result, error) { return response, nil })
 		if err != nil || !reflect.DeepEqual(got, response) {
 			t.Fatalf("response=%#v error=%v", got, err)
 		}
 		assertTraceJSON(t, trace, []string{
-			`{"protocol_version":2,"hook":"policy","target":"agent","phase":"before","request":{"session_id":"s1","input":"hello","attachments":[]}}`,
-			`{"protocol_version":2,"hook":"policy","target":"agent","phase":"after","request":{"session_id":"s1","input":"hello","attachments":[]},"outcome":{"response":{"output":[{"kind":"text","text":"world"}]},"error":null}}`,
+			`{"protocol_version":2,"hook":"policy","target":"agent","phase":"before","request":{"session_id":"s1","inputs":[{"text":"hello","attachments":[]}]}}`,
+			`{"protocol_version":2,"hook":"policy","target":"agent","phase":"after","request":{"session_id":"s1","inputs":[{"text":"hello","attachments":[]}]},"outcome":{"response":{"output":[{"kind":"text","text":"world"}]},"error":null}}`,
 		})
 	})
 }

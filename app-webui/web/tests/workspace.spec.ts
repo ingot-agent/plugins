@@ -330,13 +330,15 @@ test('multiple follow-up windows can overlap and clicking a window brings it to 
   expect(await front()).toBe(notes.find(note => note.quote === 'next step together')!.id)
 })
 
-test('pending approval survives refresh while history is blocked and settles across tabs', async ({ page, context }) => {
+test('pending approval and the complete history boundary survive refresh and settle across tabs', async ({ page, context }) => {
   await ready(page)
   await send(page, 'approve workspace')
   await expect(page.getByText('Allow workspace inspection?', { exact: true })).toBeVisible()
   await page.reload()
   await expect(page.getByText('Allow workspace inspection?', { exact: true })).toBeVisible()
-  await expect(page.getByText('Earlier messages may be available after the current execution finishes.', { exact: true })).toBeVisible()
+  await expect(page.locator('.transcript .message-user .markdown')).toHaveText(['approve workspace'])
+  const history = await page.request.get('/api/sessions/' + page.url().split('/sessions/')[1] + '/history')
+  expect(history.status()).toBe(200)
   const second = await context.newPage()
   await second.goto(page.url())
   await expect(second.getByText('Allow workspace inspection?', { exact: true })).toBeVisible()
@@ -520,6 +522,7 @@ test('cancellation retains partial output and becomes terminal', async ({ page }
   await expect(page.getByText('Partial response', { exact: true })).toBeVisible()
   await expect(page.getByRole('button', { name: /Canceled/ })).toBeVisible()
   await send(page, 'next after cancellation')
+  await page.getByRole('button', { name: 'Resume queue', exact: true }).click()
   await expect(page.getByText('Your workspace is ready. We can take the next step together.', { exact: true })).toHaveCount(1)
   const text = page.locator('.transcript .markdown').filter({ hasText: /^\s*(Partial response|next after cancellation)\s*$/ })
   await expect(text).toHaveText(['Partial response', 'next after cancellation'])
@@ -856,7 +859,7 @@ test('local document renders as an attachment while its plugin message stays hid
   await expect(attachment).toContainText('report.pdf')
   await expect(attachment).toContainText('application/pdf')
   await expect(users.nth(0).locator('.empty-input')).toHaveCount(0)
-  await expect(attachment.getByRole('button')).toHaveCount(0)
+  await expect(attachment.getByRole('button')).toHaveCount(1)
   await expect(page.locator('.transcript')).not.toContainText('<system source="plugin">')
   await expect(page.locator('.transcript')).not.toContainText('以上是紧随其后的用户输入所上传的文件')
   releaseHistory()
@@ -917,12 +920,12 @@ test('operation form, complex JSON, result recovery, and cancellation', async ({
   await expect(call.getByText('Canceled', { exact: true })).toBeVisible()
 })
 
-test('Run-only capability and execution failure', async ({ page }) => {
+test('model Complete fallback and execution failure', async ({ page }) => {
   await ready(page, 'http://127.0.0.1:17317')
   await send(page, 'non streaming')
   await expect(page.getByText('Your workspace is ready. We can take the next step together.', { exact: true })).toHaveCount(1)
   await send(page, 'fail this request')
-  await expect(page.getByText('fixture execution failed', { exact: true })).toBeVisible()
+  await expect(page.getByText(/fixture execution failed/)).toBeVisible()
 })
 
 test('expired SSE cursor bootstraps again without blocking the composer', async ({ page }) => {

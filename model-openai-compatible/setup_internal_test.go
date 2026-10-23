@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -50,6 +51,45 @@ func (c *setupTestChannel) Request(_ context.Context, request interaction.Reques
 func (*setupTestChannel) Emit(context.Context, interaction.Event) error { return nil }
 func (*setupTestChannel) Set(context.Context, interaction.State) error  { return nil }
 func (*setupTestChannel) Clear(context.Context, string) error           { return nil }
+
+func TestSetupDropsRetiredImageFileFormat(t *testing.T) {
+	scope := setupTestScope{dir: t.TempDir()}
+	path := filepath.Join(scope.Dir(), configFileName)
+	legacy := "[[providers]]\nname = \"p\"\nbase_url = \"https://proxy.test\"\napi_key = \"secret\"\nimage_file_format = \"deepseek\"\n"
+	if err := os.WriteFile(path, []byte(legacy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	exports, _, err := New(context.Background(), Dependencies{HTTP: setupTestHTTP{}, Assets: setupTestAssets{}, State: scope})
+	if err != nil {
+		t.Fatal(err)
+	}
+	channel := &setupTestChannel{respond: func(request interaction.Request) (interaction.Response, error) {
+		providers := findSetupField(t, request.Fields, "providers")
+		for _, field := range providers.Element.Fields {
+			if field.Name == "image_file_format" {
+				t.Fatal("retired image setting is still editable")
+			}
+		}
+		return interaction.Response{Values: []interaction.Answer{{Name: "providers", Value: *providers.Default}}}, nil
+	}}
+	if _, err := exports.Operations[0].Invoke(context.Background(), operation.Request{Interaction: channel}); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil || strings.Contains(string(raw), "image_file_format") {
+		t.Fatalf("retired image file format was not removed: %v", err)
+	}
+	stored, err := loadConfig(scope.Dir())
+	if err != nil || len(stored.Providers) != 1 || stored.Providers[0].APIKey != "secret" || stored.Providers[0].BaseURL != "https://proxy.test" {
+		t.Fatalf("provider settings changed during save: %v", err)
+	}
+	if err := os.WriteFile(path, []byte(legacy+"unknown_option = true\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadConfig(scope.Dir()); err == nil {
+		t.Fatal("configuration accepted an unrelated unknown field")
+	}
+}
 
 func TestSetupRenamePreservesSecretAndHiddenProviderFields(t *testing.T) {
 	scope := setupTestScope{dir: filepath.Join(t.TempDir(), "state")}
