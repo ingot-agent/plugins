@@ -292,6 +292,8 @@ func reasoningEffortOptions() []interaction.Option {
 		{Value: "medium", Label: "Medium"},
 		{Value: "high", Label: "High"},
 		{Value: "xhigh", Label: "Extra high"},
+		{Value: "max", Label: "Max"},
+		{Value: "ultra", Label: "Ultra"},
 	}
 }
 

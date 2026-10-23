@@ -7,8 +7,9 @@ All notable changes to this plugin are documented in this file.
 - Preserve and independently clone provider replay state through request
   resolution, invocation and returned response snapshots.
 
-Requires published SDK v0.2.18 for `model.Message.Replay`; validate with
-`GOWORK=off` against that exact dependency.
+Requires published SDK v0.2.20 for `model.Message.Replay` and the
+`max`/`ultra` reasoning efforts that provider snapshots may now declare;
+validate with `GOWORK=off` against that exact dependency.
 
 ### Changed
 

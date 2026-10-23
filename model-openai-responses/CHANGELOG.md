@@ -28,6 +28,8 @@ Requires published SDK v0.2.18 for `model.Message.Replay`; validate with
 
 ### Added
 
+- Accept `max` and `ultra` as explicit reasoning efforts in provider defaults
+  and per-model overrides, and offer both in the configuration form.
 - Add per-attempt structured diagnostics for Responses requests: correlation,
   HTTP/TLS negotiation and connection reuse, request IDs, stream progress/timing,
   and failure origin with typed HTTP/2/network details. Omit content and arbitrary
@@ -37,6 +39,10 @@ Requires published SDK v0.2.18 for `model.Message.Replay`; validate with
   `reasoning.effort` on Responses API requests.
 - Allow individual models to override the provider-level reasoning efforts;
   an empty override disables explicit reasoning effort for that model.
+
+Requires published SDK v0.2.20 for `model.ReasoningEffortMax` and
+`model.ReasoningEffortUltra`; validate with `GOWORK=off` against that exact
+dependency.
 
 ### Changed
 
