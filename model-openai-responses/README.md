@@ -183,11 +183,15 @@ context and closes open response/asset bodies.
 
 ## Request diagnostics
 
-Each validated complete or streaming attempt writes structured `log/slog`
-records at request start, receipt of HTTP response headers, and completion.
-Start/headers/success use INFO; failures use WARN. The default logger writes to
-stderr. A fresh local `call_id` groups the records; available observation
-`session_id`, `turn_id`, and `round` link attempts to the Agent execution.
+Each validated complete or streaming attempt emits records through the injected
+`logging.Logger` at request start, receipt of HTTP response headers, and
+completion. Start/headers/success use INFO; failures use WARN. A fresh local
+`call_id` groups the records, and the logging implementation attaches
+`session_id`, `turn_id`, and `round` from the operation context.
+
+Diagnostics are an optional capability (`Optional[logging.Logger]`). Without a
+logging provider, requests behave identically and nothing is recorded; the
+adapter never falls back to `log` or `log/slog`.
 
 Diagnostics include provider/model/effort, endpoint **host only**, Go version,
 message/tool counts, encoded request and response byte counts, caller deadline,

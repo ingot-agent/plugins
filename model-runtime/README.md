@@ -13,6 +13,7 @@ is `model-runtime`. The constructor is `New(ctx, deps)`.
 | Dependency field | Capability |
 | --- | --- |
 | `State` | `state.Scope` |
+| `Logger` | `Optional[logging.Logger]`; retry and usage-settlement diagnostics. Absent means no records, not a fallback logger |
 | `ProviderSources` | Ordered `[]model.ProviderSource` |
 | `Interceptors` | Ordered `[]model.Interceptor` for `Complete` |
 | `StreamInterceptors` | Ordered `[]model.StreamInterceptor` for `Stream` |

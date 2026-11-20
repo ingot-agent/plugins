@@ -13,10 +13,12 @@ import (
 	"sync"
 	"testing"
 
+	ingotabi "github.com/ingot-agent/ingot-abi"
 	openairesponses "github.com/ingot-agent/plugins/model-openai-responses"
 	"github.com/ingot-agent/sdk/asset"
 	"github.com/ingot-agent/sdk/content"
 	"github.com/ingot-agent/sdk/httpx"
+	"github.com/ingot-agent/sdk/logging"
 	"github.com/ingot-agent/sdk/model"
 	"github.com/ingot-agent/sdk/tool"
 )
@@ -566,9 +568,16 @@ func staticClient(body string) httpx.Client {
 	})
 }
 
-func newProvider(t *testing.T, cfg openairesponses.ProviderConfig, client httpx.Client, assets asset.Resolver) model.ProviderEntry {
+// newProvider builds one provider entry. An optional logger is injected into
+// Dependencies; without one the provider records nothing, exactly as a graph
+// without a logging provider behaves.
+func newProvider(t *testing.T, cfg openairesponses.ProviderConfig, client httpx.Client, assets asset.Resolver, loggers ...logging.Logger) model.ProviderEntry {
 	t.Helper()
-	exports, _, err := openairesponses.New(context.Background(), withState(t, openairesponses.Config{Providers: []openairesponses.ProviderConfig{cfg}}, openairesponses.Dependencies{HTTP: client, Assets: assets}))
+	deps := openairesponses.Dependencies{HTTP: client, Assets: assets}
+	if len(loggers) > 0 {
+		deps.Logger = ingotabi.Some(loggers[0])
+	}
+	exports, _, err := openairesponses.New(context.Background(), withState(t, openairesponses.Config{Providers: []openairesponses.ProviderConfig{cfg}}, deps))
 	if err != nil {
 		t.Fatal(err)
 	}

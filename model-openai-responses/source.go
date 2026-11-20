@@ -7,6 +7,7 @@ import (
 
 	"github.com/ingot-agent/sdk/asset"
 	"github.com/ingot-agent/sdk/httpx"
+	"github.com/ingot-agent/sdk/logging"
 	"github.com/ingot-agent/sdk/model"
 )
 
@@ -17,6 +18,7 @@ type providerSnapshot struct {
 type providerSource struct {
 	http    httpx.Client
 	assets  asset.Resolver
+	logger  logging.Logger
 	current atomic.Pointer[providerSnapshot]
 }
 
@@ -32,7 +34,7 @@ func (s *providerSource) Snapshot(ctx context.Context) ([]model.ProviderEntry, e
 func (s *providerSource) prepare(configs []normalizedProviderConfig) *providerSnapshot {
 	entries := make([]model.ProviderEntry, 0, len(configs))
 	for _, config := range configs {
-		instance := newProviderFromNormalized(config, s.http, s.assets)
+		instance := newProviderFromNormalized(config, s.http, s.assets, s.logger)
 		entries = append(entries, model.ProviderEntry{Name: instance.name, Models: cloneModelEntries(instance.modelEntries), Complete: instance.Complete, Stream: instance.Stream})
 	}
 	return &providerSnapshot{entries: entries}

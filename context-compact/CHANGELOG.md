@@ -4,6 +4,9 @@ All notable changes to this plugin are documented in this file.
 
 ## Unreleased
 
+- Report context-snapshot publication failures through an injected
+  `logging.Logger` (`Optional[logging.Logger]`) instead of `log/slog`. The
+  compacted snapshot retains the logger so in-flight compactions keep reporting.
 - Preserve opaque provider replay data in untouched messages and clone it at
   ownership boundaries. Include it in checkpoint source identity while excluding
   it from summary prompts; generated summaries carry no inherited replay state.

@@ -14,6 +14,7 @@ import (
 	"github.com/ingot-agent/ingot-abi/state"
 	"github.com/ingot-agent/sdk/contextwindow"
 	"github.com/ingot-agent/sdk/interaction"
+	"github.com/ingot-agent/sdk/logging"
 	"github.com/ingot-agent/sdk/model"
 	"github.com/ingot-agent/sdk/operation"
 	"github.com/ingot-agent/sdk/session"
@@ -76,8 +77,12 @@ type Dependencies struct {
 	Resolver        ingotabi.Optional[model.RequestResolver]
 	ProviderSources []model.ProviderSource
 	Interactions    ingotabi.Optional[interaction.ExecutionBinder]
-	Store           session.Store
-	State           state.Scope
+	// Logger receives diagnostics about optional telemetry publication. It is
+	// optional: without a logging provider the compactor still works and
+	// publishes nothing extra. There is no fallback logging system.
+	Logger ingotabi.Optional[logging.Logger]
+	Store  session.Store
+	State  state.Scope
 }
 
 type Exports struct {
@@ -103,6 +108,7 @@ type compactor struct {
 	counter      usage.Counter
 	resolver     model.RequestResolver
 	interactions interaction.ExecutionBinder
+	logger       logging.Logger
 	store        session.Store
 	cfg          normalizedConfig
 	config       atomic.Pointer[normalizedConfig]
@@ -121,6 +127,13 @@ func New(ctx context.Context, deps Dependencies) (Exports, ingotabi.Cleanup, err
 	}
 	if deps.Interactions.Valid && isNil(deps.Interactions.Value) {
 		return Exports{}, nil, fmt.Errorf("interaction binder is nil: %w", ErrInvalidConfig)
+	}
+	logger := logging.Discard()
+	if deps.Logger.Valid {
+		if isNil(deps.Logger.Value) {
+			return Exports{}, nil, fmt.Errorf("logger is typed nil: %w", ErrInvalidConfig)
+		}
+		logger = deps.Logger.Value
 	}
 	for i, source := range deps.ProviderSources {
 		if isNil(source) {
@@ -143,7 +156,7 @@ func New(ctx context.Context, deps Dependencies) (Exports, ingotabi.Cleanup, err
 		resolver = deps.Resolver.Value
 	}
 	counter := newCounter(resolver, unicodeEstimateProfile{}, normalized.tokenCountCacheEntries)
-	instance := &compactor{model: deps.Model, counter: counter, resolver: resolver, store: deps.Store, cfg: normalized, gates: newGateManager()}
+	instance := &compactor{model: deps.Model, counter: counter, resolver: resolver, logger: logger, store: deps.Store, cfg: normalized, gates: newGateManager()}
 	if deps.Interactions.Valid {
 		instance.interactions = deps.Interactions.Value
 	}

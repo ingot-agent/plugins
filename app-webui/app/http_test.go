@@ -10,6 +10,7 @@ import (
 	"github.com/ingot-agent/sdk/agent"
 	"github.com/ingot-agent/sdk/content"
 	"github.com/ingot-agent/sdk/execution"
+	"github.com/ingot-agent/sdk/logging"
 	"github.com/ingot-agent/sdk/model"
 	"github.com/ingot-agent/sdk/session"
 	"github.com/ingot-agent/sdk/workspace"
@@ -299,6 +300,9 @@ func testApplication(t *testing.T) *application {
 	defaultWorkspace := t.TempDir()
 	a := &application{
 		backend: deps.Backend, agent: controller, sessions: sessions,
+		// Tests never assert on cleanup diagnostics; an explicit Discard keeps
+		// the no-provider behavior without a nil logger.
+		logger:           logging.Discard(),
 		defaultWorkspace: defaultWorkspace,
 		uploadDirectory:  filepath.Join(t.TempDir(), "uploads"),
 		workspacePicker:  &stubWorkspacePicker{canceled: true},

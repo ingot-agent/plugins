@@ -10,6 +10,7 @@ import (
 	ingotabi "github.com/ingot-agent/ingot-abi"
 	"github.com/ingot-agent/ingot-abi/state"
 	"github.com/ingot-agent/sdk/interaction"
+	"github.com/ingot-agent/sdk/logging"
 	"github.com/ingot-agent/sdk/model"
 	"github.com/ingot-agent/sdk/session"
 	"github.com/ingot-agent/sdk/usage"
@@ -22,13 +23,15 @@ type testDependencies struct {
 	Resolver        ingotabi.Optional[model.RequestResolver]
 	ProviderSources []model.ProviderSource
 	Interactions    ingotabi.Optional[interaction.ExecutionBinder]
+	Logger          ingotabi.Optional[logging.Logger]
 	Store           session.Store
 	State           state.Scope
 	Counter         ingotabi.Optional[usage.Counter]
 }
 
 func newTestCompactor(ctx context.Context, deps testDependencies) (Exports, ingotabi.Cleanup, error) {
-	exports, cleanup, err := New(ctx, Dependencies{Model: deps.Model, Resolver: deps.Resolver, ProviderSources: deps.ProviderSources, Interactions: deps.Interactions, Store: deps.Store, State: deps.State})
+	exports, cleanup, err := New(ctx, Dependencies{Model: deps.Model, Resolver: deps.Resolver, ProviderSources: deps.ProviderSources,
+		Interactions: deps.Interactions, Logger: deps.Logger, Store: deps.Store, State: deps.State})
 	if err == nil && deps.Counter.Valid {
 		exports.Compactor.(*compactor).counter = deps.Counter.Value
 	}

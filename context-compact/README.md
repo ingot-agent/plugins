@@ -35,7 +35,9 @@ snapshot for the current Session, with `sessionId`, `inputTokens`, `accuracy`,
 `turnId` and `roundIndex`. The count covers the final input request, including
 tools and materialized compacted history, before model generation. It may shrink
 after compaction and is not cumulative usage. Publication failures do not fail
-compaction; without a binder, no snapshot is published. Runtime restart clears
+compaction; without a binder, no snapshot is published. Reported failures go to
+the injected `logging.Logger` (`Optional[logging.Logger]`); without a logging
+provider they are recorded nowhere and compaction is unaffected. Runtime restart clears
 the snapshot until another request is counted.
 
 ## Configuration

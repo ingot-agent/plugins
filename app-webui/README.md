@@ -163,7 +163,7 @@ Token 卡片同时显示 `context-compact.session-context/<sessionId>` 的 `inpu
 
 模型供应商成功报告用量后，由 ModelRuntime 先持久化，再通过绑定 Session 的 `interaction.Channel.Set` 发布 `model-runtime.session-usage/<sessionId>`。Values 为 `sessionId` 和 `totalToken`；每个 Session 使用独立状态名，前端按累计快照的最大值归并，重复事件或旧查询不会重复加数。刷新与重开会从 Session 查询恢复，不依赖 Turn 或 Observation 回放。
 
-普通会话与普通 Fork 的 root/current 均为自身，Fork 初值为 0。追问的 root 由服务端读取其 `Meta["app-webui"].sourceSessionId` 并校验，current 为便签自身；浏览器只提交 current。根会话累计包含所属子任务、压缩和追问，不能把全部 Session 的累计值相加作为全局消耗。删除成功后 Clear 对应状态，前端忽略已删除 Session 的晚到快照。
+普通会话与普通 Fork 的 root/current 均为自身，Fork 初值为 0。追问的 root 由服务端读取其 `Meta["app-webui"].sourceSessionId` 并校验，current 为便签自身；浏览器只提交 current。根会话累计包含所属子任务、压缩和追问，不能把全部 Session 的累计值相加作为全局消耗。删除成功后 Clear 对应状态，前端忽略已删除 Session 的晚到快照。Clear 失败不会影响删除结果，只通过注入的 `logging.Logger`（`Optional[logging.Logger]`）报告；没有日志插件时不做任何记录，也不会回退到 `log/slog`。
 
 此合同使用 SDK v0.2.15 发布的 Runtime 双 Session 参数及 `session.Metadata.TotalToken`，应组合相容版本的 Agent、ModelRuntime、Compactor 和 Session 插件。本模块固定依赖 SDK v0.2.19，其中已包含 SendMessage、Control 与批量 Store.Append，可使用 `GOWORK=off` 独立验证。
 

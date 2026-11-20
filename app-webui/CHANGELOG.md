@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Report best-effort session-usage cleanup failures through an injected
+  `logging.Logger` (`Optional[logging.Logger]`) instead of `log/slog`.
 - Integrated clipboard uploads, file previews and retry status with SendMessage
   scheduling and revision-ordered runtime projections.
 

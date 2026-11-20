@@ -4,12 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"math/rand"
 	"time"
 
+	"github.com/ingot-agent/sdk/logging"
 	"github.com/ingot-agent/sdk/model"
-	"github.com/ingot-agent/sdk/observation"
 )
 
 const (
@@ -87,11 +86,15 @@ func waitRetry(ctx context.Context, delay time.Duration) error {
 	}
 }
 
-func logProviderRetry(ctx context.Context, request model.Request, attempt, limit int, delay time.Duration, stream bool) {
-	attrs := []any{"provider", request.Provider, "model", request.Model,
-		"attempt", attempt, "max_attempts", limit, "delay_ms", delay.Milliseconds(), "stream", stream}
-	if correlation, ok := observation.CorrelationFromContext(ctx); ok {
-		attrs = append(attrs, "session_id", correlation.SessionID, "turn_id", correlation.TurnID, "round", correlation.RoundIndex)
-	}
-	slog.WarnContext(ctx, "retrying model provider request", attrs...)
+// logProviderRetry reports one retry decision. Correlation is attached by the
+// logging implementation from ctx, so it is not repeated here.
+func (r *runtime) logProviderRetry(ctx context.Context, request model.Request, attempt, limit int, delay time.Duration, stream bool) {
+	r.logger.Warn(ctx, "retrying model provider request",
+		logging.String("provider", request.Provider),
+		logging.String("model", request.Model),
+		logging.Int("attempt", int64(attempt)),
+		logging.Int("max_attempts", int64(limit)),
+		logging.Int("delay_ms", delay.Milliseconds()),
+		logging.Bool("stream", stream),
+	)
 }

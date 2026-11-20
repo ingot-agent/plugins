@@ -2,10 +2,10 @@ package contextcompact
 
 import (
 	"context"
-	"log/slog"
 
 	"github.com/ingot-agent/sdk/execution"
 	"github.com/ingot-agent/sdk/interaction"
+	"github.com/ingot-agent/sdk/logging"
 	"github.com/ingot-agent/sdk/observation"
 	"github.com/ingot-agent/sdk/session"
 	"github.com/ingot-agent/sdk/usage"
@@ -17,11 +17,11 @@ func (r *compactor) publishContext(ctx context.Context, id session.ID, tokens in
 	}
 	channel, err := r.interactions.Bind(execution.Scope{SessionID: id})
 	if err != nil {
-		slog.Warn("bind context estimate state", "session", id, "error", err)
+		r.logger.Warn(ctx, "bind context estimate state", logging.String("session", string(id)), logging.Err(err))
 		return
 	}
 	if isNil(channel) {
-		slog.Warn("context estimate binder returned nil channel", "session", id)
+		r.logger.Warn(ctx, "context estimate binder returned nil channel", logging.String("session", string(id)))
 		return
 	}
 	values := []interaction.Entry{
@@ -43,6 +43,6 @@ func (r *compactor) publishContext(ctx context.Context, id session.ID, tokens in
 	if err := channel.Set(ctx, interaction.State{
 		Name: "context-compact.session-context/" + string(id), Level: interaction.LevelInfo, Values: values,
 	}); err != nil {
-		slog.Warn("publish context estimate state", "session", id, "error", err)
+		r.logger.Warn(ctx, "publish context estimate state", logging.String("session", string(id)), logging.Err(err))
 	}
 }

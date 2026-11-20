@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -18,17 +17,124 @@ import (
 
 	openairesponses "github.com/ingot-agent/plugins/model-openai-responses"
 	"github.com/ingot-agent/sdk/content"
+	"github.com/ingot-agent/sdk/logging"
 	"github.com/ingot-agent/sdk/model"
 	"github.com/ingot-agent/sdk/observation"
 )
 
-func captureDiagnostics(t *testing.T) *bytes.Buffer {
+// diagnosticsCapture is an injected logging.Logger that records every accepted
+// record as one JSON line. Tests never touch global logging state.
+type diagnosticsCapture struct {
+	logger *recordingLogger
+	buffer *bytes.Buffer
+}
+
+func (c *diagnosticsCapture) String() string { return c.buffer.String() }
+
+type recordingLogger struct {
+	state *recordingState
+	attrs []logging.Attr
+}
+
+// recordingState is shared by every Logger derived through With, so a derived
+// logger writes to the same buffer under the same lock.
+type recordingState struct {
+	mu  sync.Mutex
+	out *bytes.Buffer
+}
+
+func (l *recordingLogger) Enabled(logging.Level) bool { return true }
+
+func (l *recordingLogger) Debug(ctx context.Context, message string, attrs ...logging.Attr) {
+	l.emit(ctx, logging.LevelDebug, message, attrs)
+}
+
+func (l *recordingLogger) Info(ctx context.Context, message string, attrs ...logging.Attr) {
+	l.emit(ctx, logging.LevelInfo, message, attrs)
+}
+
+func (l *recordingLogger) Warn(ctx context.Context, message string, attrs ...logging.Attr) {
+	l.emit(ctx, logging.LevelWarn, message, attrs)
+}
+
+func (l *recordingLogger) Error(ctx context.Context, message string, attrs ...logging.Attr) {
+	l.emit(ctx, logging.LevelError, message, attrs)
+}
+
+func (l *recordingLogger) With(attrs ...logging.Attr) logging.Logger {
+	clone := *l
+	clone.attrs = append(append([]logging.Attr(nil), l.attrs...), attrs...)
+	return &clone
+}
+
+// emit renders a JSON record and attaches observation correlation from ctx, as
+// the logging contract asks an implementation to do.
+func (l *recordingLogger) emit(ctx context.Context, level logging.Level, message string, attrs []logging.Attr) {
+	record := map[string]any{"level": strings.ToUpper(level.String()), "msg": message}
+	applyAttrs(record, l.attrs)
+	if correlation, ok := observation.CorrelationFromContext(ctx); ok {
+		if correlation.SessionID != "" {
+			record["session_id"] = string(correlation.SessionID)
+		}
+		if correlation.TurnID != "" {
+			record["turn_id"] = string(correlation.TurnID)
+			record["round"] = correlation.RoundIndex
+		}
+		if correlation.ToolCallID != "" {
+			record["tool_call_id"] = correlation.ToolCallID
+		}
+	}
+	applyAttrs(record, attrs)
+	l.state.mu.Lock()
+	defer l.state.mu.Unlock()
+	_ = json.NewEncoder(l.state.out).Encode(record)
+}
+
+func applyAttrs(record map[string]any, attrs []logging.Attr) {
+	for _, attr := range attrs {
+		if attr.Key == "" {
+			continue
+		}
+		record[attr.Key] = attrValue(attr.Value)
+	}
+}
+
+func attrValue(value logging.Value) any {
+	switch value.Kind {
+	case logging.KindString:
+		return value.String
+	case logging.KindInt64:
+		return value.Int64
+	case logging.KindUint64:
+		return value.Uint64
+	case logging.KindFloat64:
+		return value.Float64
+	case logging.KindBool:
+		return value.Boolean
+	case logging.KindDuration:
+		return value.Duration.String()
+	case logging.KindTime:
+		return value.Time.Format(time.RFC3339Nano)
+	case logging.KindError:
+		if value.Error == nil {
+			return ""
+		}
+		return value.Error.Error()
+	case logging.KindGroup:
+		nested := make(map[string]any, len(value.Group))
+		applyAttrs(nested, value.Group)
+		return nested
+	default:
+		return ""
+	}
+}
+
+var _ logging.Logger = (*recordingLogger)(nil)
+
+func captureDiagnostics(t *testing.T) *diagnosticsCapture {
 	t.Helper()
-	var buffer bytes.Buffer
-	previous := slog.Default()
-	slog.SetDefault(slog.New(slog.NewJSONHandler(&buffer, nil)))
-	t.Cleanup(func() { slog.SetDefault(previous) })
-	return &buffer
+	buffer := &bytes.Buffer{}
+	return &diagnosticsCapture{logger: &recordingLogger{state: &recordingState{out: buffer}}, buffer: buffer}
 }
 
 func diagnosticRecords(t *testing.T, buffer *bytes.Buffer) []map[string]any {
@@ -67,7 +173,7 @@ func TestDiagnosticsProviderFailureAndRedaction(t *testing.T) {
 				response.Header.Set("X-Request-Id", "req-api-secret-header-secret")
 				response.Header.Set("Set-Cookie", "private-cookie")
 				return response, nil
-			}), assetResolver{})
+			}), assetResolver{}, logs.logger)
 			ctx := observation.WithCorrelation(context.Background(), observation.Correlation{SessionID: "s", TurnID: "turn", RoundIndex: 2})
 			_, err := provider.Stream(ctx, model.Request{Model: "m", Messages: []model.Message{{Role: model.RoleUser, Content: content.FromText("private-prompt")}}}, func(model.StreamEvent) error { return nil })
 			var upstream *openairesponses.ProviderResponseError
@@ -79,7 +185,7 @@ func TestDiagnosticsProviderFailureAndRedaction(t *testing.T) {
 					t.Fatalf("diagnostics exposed %q", secret)
 				}
 			}
-			records := diagnosticRecords(t, logs)
+			records := diagnosticRecords(t, logs.buffer)
 			if len(records) != 3 {
 				t.Fatalf("expected start, headers, failure; got %d", len(records))
 			}
@@ -140,7 +246,7 @@ func TestDiagnosticsHTTP2ReuseAndStreamReset(t *testing.T) {
 	client := server.Client()
 	provider := newProvider(t, openairesponses.ProviderConfig{Name: "p", BaseURL: server.URL}, clientFunc(func(ctx context.Context, request *http.Request) (*http.Response, error) {
 		return client.Do(request.WithContext(ctx))
-	}), assetResolver{})
+	}), assetResolver{}, logs.logger)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if _, err := provider.Stream(ctx, model.Request{Model: "m"}, func(model.StreamEvent) error { return nil }); err != nil {
@@ -151,7 +257,7 @@ func TestDiagnosticsHTTP2ReuseAndStreamReset(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected HTTP/2 reset")
 	}
-	records := diagnosticRecords(t, logs)
+	records := diagnosticRecords(t, logs.buffer)
 	if len(records) != 6 {
 		t.Fatalf("expected two attempts with three records each, got %d", len(records))
 	}
@@ -184,7 +290,7 @@ func TestDiagnosticsDoNotLogHTTPBodiesOrConsumerErrors(t *testing.T) {
 					return httpResponse(200, "data: {\"type\":\"response.output_text.delta\",\"output_index\":0,\"content_index\":0,\"delta\":\"private-output\"}\n\n"), nil
 				}
 				return httpResponse(502, "private-provider-body"), nil
-			}), assetResolver{})
+			}), assetResolver{}, logs.logger)
 			consumerErr := errors.New("private-consumer-error")
 			_, err := provider.Stream(context.Background(), model.Request{Model: "m"}, func(model.StreamEvent) error { return consumerErr })
 			if consumer && !errors.Is(err, consumerErr) {
@@ -195,7 +301,7 @@ func TestDiagnosticsDoNotLogHTTPBodiesOrConsumerErrors(t *testing.T) {
 					t.Fatalf("diagnostics exposed %q", private)
 				}
 			}
-			records := diagnosticRecords(t, logs)
+			records := diagnosticRecords(t, logs.buffer)
 			failure := records[len(records)-1]
 			want := "http_status"
 			if consumer {
