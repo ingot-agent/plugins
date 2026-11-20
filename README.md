@@ -71,6 +71,7 @@ dependencies, operations/tools, state, defaults and limitations.
 | [http-default](http-default/README.md) | `http.default` | Shared HTTP transport |
 | [interceptor-approval](interceptor-approval/README.md) | `interceptor.approval` | Tool allow/ask/deny policy |
 | [interceptor-script](interceptor-script/README.md) | `interceptor.script` | External script hooks for typed interception chains |
+| [logger-standard](logger-standard/README.md) | `logger.standard` | Leveled, bounded logging with rotation |
 | [model-openai-compatible](model-openai-compatible/README.md) | `model.openai-compatible` | Chat Completions adapter |
 | [model-openai-responses](model-openai-responses/README.md) | `model.openai-responses` | Responses API adapter |
 | [model-runtime](model-runtime/README.md) | `model.runtime` | Provider selection, defaults and interception |

@@ -98,6 +98,52 @@ The exact ABI types `invocation.Invocation`, `lifecycle.Controller` and
 plugins. Their semantics are documented in the [ABI repository](https://github.com/ingot-agent/ingot-abi).
 They are not ordinary replaceable agent services.
 
+## Diagnostics
+
+Emit diagnostics through the [SDK `logging`](https://github.com/ingot-agent/sdk/tree/main/logging) contract instead
+of `log`, `log/slog`, or printing to the process streams. A plugin declares the
+capability it needs; the graph decides whether anything records it.
+
+```go
+type Dependencies struct {
+    Logger ingotabi.Optional[logging.Logger]
+}
+
+func New(ctx context.Context, deps Dependencies) (Exports, ingotabi.Cleanup, error) {
+    logger := logging.Discard()
+    if deps.Logger.Valid {
+        if isNil(deps.Logger.Value) {
+            return Exports{}, nil, fmt.Errorf("logger is typed nil: %w", ErrInvalidConfig)
+        }
+        logger = deps.Logger.Value
+    }
+    // ...
+}
+```
+
+Two declarations are possible and they mean different things:
+
+- `ingotabi.Optional[logging.Logger]` — diagnostics are optional. A graph
+  without a logging provider must still construct and run, and the plugin then
+  records nothing. Resolve the choice once in `New` as above; do not check the
+  option again at each call site, and never substitute `log`, `log/slog`, or a
+  private writer for the absent capability.
+- `logging.Logger` — diagnostics are required. The graph fails when no provider
+  exists. Choose this only when the records are part of the plugin's contract,
+  because every composition of the plugin must then select a logging provider.
+
+Pass the operation context to every record and let the implementation attach
+`observation.Correlation`; do not repeat `session_id` or `turn_id` per call.
+Guard expensive attribute construction with `Enabled`, keep attribute keys
+stable, and never log credentials, prompts, request or response bodies, file
+contents, or tool output. Volume is the caller's responsibility: diagnostics are
+not a substitute for durable execution records, and an unbounded payload will be
+written as often as the code path runs.
+
+Diagnostics are not a business effect. A logging failure must not change the
+operation's result, and a plugin must not fail a request because a record could
+not be written.
+
 ## Lifecycle, state and configuration
 
 `New` must return promptly. A component owning background work starts it with

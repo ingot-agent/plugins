@@ -98,16 +98,16 @@ it does not restore state or undo external tool effects.
 
 ## Activation boundaries
 
-The current catalog has **20 modules, 16 with configuration Operations**:
+The current catalog has **21 modules, 17 with configuration Operations**:
 
 | Activation | Modules / settings |
 |---|---|
-| Saved changes apply to later calls without restart | `agent-default`, `asset-local`, `context-compact`, `http-default`, `interceptor-approval`, `interceptor-script`, `model-openai-compatible`, `model-openai-responses`, `model-runtime`, `prompt-default`, `tool-ask`, `tool-edit`, `tool-runtime`, `tool-shell` |
+| Saved changes apply to later calls without restart | `agent-default`, `asset-local`, `context-compact`, `http-default`, `interceptor-approval`, `interceptor-script`, `logger-standard`, `model-openai-compatible`, `model-openai-responses`, `model-runtime`, `prompt-default`, `tool-ask`, `tool-edit`, `tool-runtime`, `tool-shell` |
 | Changed settings require restart | `app-webui`: listener, replay/subscriber buffers, heartbeat, Operation retention and asset-upload limit |
 | No configuration Operation | `session-sqlite`, `skill-runtime`, `tool-image`, `tool-subagent` |
 | Saved changes apply to later calls without restart | `agent-default` child definitions in `subagents.toml`, managed by `/agent-default subagents` independently of `/agent-default config` |
 
-The 16 live Operations return `restart_required:false` after persistence and
+The 17 live Operations return `restart_required:false` after persistence and
 publication. Existing calls keep captured settings; later calls use the update.
 Subagent configuration updates preserve accepted child tasks, including their
 prompts, tools, and lifecycle support when new child creation is disabled.
