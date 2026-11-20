@@ -19,6 +19,7 @@ use (
 	./app-webui
 	./context-compact
 	./context-input
+	./logger-standard
 	./model-openai-compatible
 	./model-openai-responses
 	./model-runtime

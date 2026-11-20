@@ -1,0 +1,9 @@
+module github.com/ingot-agent/plugins/logger-standard
+
+go 1.24.0
+
+require (
+	github.com/ingot-agent/ingot-abi v0.1.0
+	github.com/ingot-agent/sdk v0.2.21
+	github.com/pelletier/go-toml/v2 v2.2.4
+)
