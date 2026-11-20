@@ -137,7 +137,7 @@ func TestDiagnosticsReportCachedInputTokens(t *testing.T) {
 				if stream {
 					response = "data: {\"type\":\"response.completed\",\"response\":" + response + "}\n\n"
 				}
-				provider := newProvider(t, openairesponses.ProviderConfig{Name: "p", BaseURL: "https://example.test"}, staticClient(response), assetResolver{})
+				provider := newProvider(t, openairesponses.ProviderConfig{Name: "p", BaseURL: "https://example.test"}, staticClient(response), assetResolver{}, logs.logger)
 				ctx := observation.WithCorrelation(context.Background(), observation.Correlation{SessionID: "s", TurnID: "t"})
 				var err error
 				if stream {
@@ -148,7 +148,7 @@ func TestDiagnosticsReportCachedInputTokens(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				records := diagnosticRecords(t, logs)
+				records := diagnosticRecords(t, logs.buffer)
 				last := records[len(records)-1]
 				if records[0]["cache_session_key_present"] != true || last["input_tokens"] != float64(5000) {
 					t.Fatal("missing cache diagnostics")

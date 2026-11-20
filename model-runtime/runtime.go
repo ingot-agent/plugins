@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"reflect"
 	"slices"
 	"sync"
@@ -22,6 +21,7 @@ import (
 	"github.com/ingot-agent/sdk/content"
 	"github.com/ingot-agent/sdk/execution"
 	"github.com/ingot-agent/sdk/interaction"
+	"github.com/ingot-agent/sdk/logging"
 	"github.com/ingot-agent/sdk/model"
 	"github.com/ingot-agent/sdk/operation"
 	"github.com/ingot-agent/sdk/pipeline"
@@ -58,7 +58,12 @@ type Dependencies struct {
 	Sessions           session.Manager
 	TokenUsage         session.TokenUsageStore
 	Interactions       ingotabi.Optional[interaction.ExecutionBinder]
-	State              state.Scope
+	// Logger receives diagnostic records about retries and usage settlement.
+	// It is optional: a Runtime Image without a logging provider keeps working
+	// and produces no diagnostics. There is no fallback to another logging
+	// system, so presence of a provider is exclusively a graph decision.
+	Logger ingotabi.Optional[logging.Logger]
+	State  state.Scope
 }
 
 // Exports contains the complete and streaming runtimes, plus the read-only
@@ -81,6 +86,7 @@ type runtime struct {
 	sessions           session.Manager
 	tokenUsage         session.TokenUsageStore
 	interactions       interaction.ExecutionBinder
+	logger             logging.Logger
 	settlementMu       sync.Mutex
 }
 
@@ -99,6 +105,13 @@ func New(ctx context.Context, deps Dependencies) (Exports, ingotabi.Cleanup, err
 	}
 	if deps.Interactions.Valid && isNil(deps.Interactions.Value) {
 		return Exports{}, nil, fmt.Errorf("interaction binder is nil: %w", ErrInvalidConfig)
+	}
+	logger := logging.Discard()
+	if deps.Logger.Valid {
+		if isNil(deps.Logger.Value) {
+			return Exports{}, nil, fmt.Errorf("logger is typed nil: %w", ErrInvalidConfig)
+		}
+		logger = deps.Logger.Value
 	}
 	cfg, err := loadConfig(deps.State.Dir())
 	if err != nil {
@@ -132,7 +145,7 @@ func New(ctx context.Context, deps Dependencies) (Exports, ingotabi.Cleanup, err
 		scope:           deps.State,
 		providerSources: slices.Clone(deps.ProviderSources),
 		interceptors:    interceptors, streamInterceptors: streamInterceptors,
-		sessions: deps.Sessions, tokenUsage: deps.TokenUsage,
+		sessions: deps.Sessions, tokenUsage: deps.TokenUsage, logger: logger,
 	}
 	if deps.Interactions.Valid {
 		instance.interactions = deps.Interactions.Value
@@ -216,7 +229,7 @@ func (r *runtime) Complete(ctx context.Context, rootSessionID, currentSessionID 
 			if !retry {
 				return cloneResponse(response), err
 			}
-			logProviderRetry(callCtx, selected, attempt+1, policy.maxAttempts, delay, false)
+			r.logProviderRetry(callCtx, selected, attempt+1, policy.maxAttempts, delay, false)
 			if waitErr := waitRetry(callCtx, delay); waitErr != nil {
 				return model.Response{}, waitErr
 			}
@@ -319,7 +332,7 @@ func (r *runtime) Stream(ctx context.Context, rootSessionID, currentSessionID se
 			if resetErr := selectedHandler(model.StreamEvent{Kind: model.StreamRetry, Attempt: attempt + 1, RetryDelay: delay}); resetErr != nil {
 				return cloneResponse(response), resetErr
 			}
-			logProviderRetry(callCtx, selected, attempt+1, policy.maxAttempts, delay, true)
+			r.logProviderRetry(callCtx, selected, attempt+1, policy.maxAttempts, delay, true)
 			if waitErr := waitRetry(callCtx, delay); waitErr != nil {
 				return model.Response{}, waitErr
 			}
@@ -515,7 +528,8 @@ func (r *runtime) settleUsage(ctx context.Context, root, current session.ID, usa
 			})
 		}
 		if err != nil && !errors.Is(err, interaction.ErrUnavailable) {
-			slog.Warn("publish session token usage", "session", value.ID, "error", err)
+			r.logger.Warn(ctx, "publish session token usage",
+				logging.String("session", string(value.ID)), logging.Err(err))
 		}
 	}
 	return nil

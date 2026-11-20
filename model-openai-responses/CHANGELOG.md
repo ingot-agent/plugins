@@ -4,6 +4,11 @@ All notable changes to this plugin are documented in this file.
 
 ## Unreleased
 
+- Emit per-attempt request diagnostics through an injected `logging.Logger`
+  (`Optional[logging.Logger]`) instead of the process-wide `log/slog` default.
+  Records keep their fields and levels; trace timings are now emitted in
+  deterministic key order. Without a logging provider nothing is recorded and
+  there is no fallback logger.
 - Send local user and tool images as base64 data URLs in complete and streaming
   requests, without Files API uploads, file-ID caches, or upload diagnostic files.
 

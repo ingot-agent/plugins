@@ -21,6 +21,7 @@ import (
 	"github.com/ingot-agent/sdk/asset"
 	"github.com/ingot-agent/sdk/content"
 	"github.com/ingot-agent/sdk/httpx"
+	"github.com/ingot-agent/sdk/logging"
 	"github.com/ingot-agent/sdk/model"
 	"github.com/ingot-agent/sdk/operation"
 )
@@ -137,6 +138,10 @@ type ProviderConfig struct {
 type Dependencies struct {
 	HTTP   httpx.Client
 	Assets asset.Resolver
+	// Logger receives per-attempt provider diagnostics. It is optional: an
+	// image without a logging provider still calls the provider and simply
+	// records nothing. There is no fallback to another logging system.
+	Logger ingotabi.Optional[logging.Logger]
 	State  state.Scope
 }
 
@@ -162,6 +167,7 @@ type provider struct {
 	assetSlots              chan struct{}
 	http                    httpx.Client
 	assets                  asset.Resolver
+	logger                  logging.Logger
 }
 
 type normalizedProviderConfig struct {
@@ -201,7 +207,14 @@ func New(ctx context.Context, deps Dependencies) (Exports, ingotabi.Cleanup, err
 			return Exports{}, nil, fmt.Errorf("construct model.openai-responses: %w", err)
 		}
 	}
-	source := &providerSource{http: deps.HTTP, assets: deps.Assets}
+	logger := logging.Discard()
+	if deps.Logger.Valid {
+		if isNil(deps.Logger.Value) {
+			return Exports{}, nil, fmt.Errorf("logger is typed nil: %w", ErrInvalidConfig)
+		}
+		logger = deps.Logger.Value
+	}
+	source := &providerSource{http: deps.HTTP, assets: deps.Assets, logger: logger}
 	source.current.Store(source.prepare(normalized))
 	return Exports{Source: source, Operations: []operation.Operation{&setupOperation{scope: deps.State, source: source}}}, nil, nil
 }
@@ -211,7 +224,7 @@ func newProvider(cfg ProviderConfig, client httpx.Client, assets asset.Resolver)
 	if err != nil {
 		return nil, err
 	}
-	return newProviderFromNormalized(normalized, client, assets), nil
+	return newProviderFromNormalized(normalized, client, assets, logging.Discard()), nil
 }
 
 func normalizeProviderConfig(cfg ProviderConfig) (normalizedProviderConfig, error) {
@@ -313,7 +326,7 @@ func normalizeProviderConfig(cfg ProviderConfig) (normalizedProviderConfig, erro
 	}, nil
 }
 
-func newProviderFromNormalized(cfg normalizedProviderConfig, client httpx.Client, assets asset.Resolver) *provider {
+func newProviderFromNormalized(cfg normalizedProviderConfig, client httpx.Client, assets asset.Resolver, logger logging.Logger) *provider {
 	reasoningEffortsByModel := make(map[string]map[model.ReasoningEffort]struct{}, len(cfg.modelEntries))
 	for _, entry := range cfg.modelEntries {
 		efforts := make(map[model.ReasoningEffort]struct{}, len(entry.ReasoningEfforts))
@@ -328,7 +341,7 @@ func newProviderFromNormalized(cfg normalizedProviderConfig, client httpx.Client
 		organization: cfg.organization, project: cfg.project, models: cfg.models,
 		headers: cfg.headers, maxResponseBytes: cfg.maxResponseBytes,
 		maxErrorBytes: cfg.maxErrorBytes, maxAssetBytes: cfg.maxAssetBytes,
-		assetSlots: make(chan struct{}, cfg.assetConcurrency), http: client, assets: assets,
+		assetSlots: make(chan struct{}, cfg.assetConcurrency), http: client, assets: assets, logger: logger,
 	}
 }
 

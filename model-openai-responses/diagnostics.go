@@ -7,28 +7,28 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptrace"
 	"net/url"
 	"regexp"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
 	"unicode"
 
+	"github.com/ingot-agent/sdk/logging"
 	"github.com/ingot-agent/sdk/model"
-	"github.com/ingot-agent/sdk/observation"
 )
 
 // One diagnostic belongs to one provider attempt, including its entire body.
 // Tracing is observational only: no request headers or retry policy are changed.
 type requestDiagnostic struct {
 	provider                                           *provider
-	logger                                             *slog.Logger
+	logger                                             logging.Logger
 	started                                            time.Time
 	stage                                              string
 	stream                                             bool
@@ -44,68 +44,91 @@ type requestDiagnostic struct {
 
 	// net/http trace callbacks can run concurrently, even after Do returns.
 	mu         sync.Mutex
-	traceAttrs map[string]any
+	traceAttrs map[string]logging.Value
 }
 
 func (p *provider) startDiagnostic(ctx context.Context, request model.Request, stream bool) (*requestDiagnostic, context.Context) {
-	d := &requestDiagnostic{provider: p, started: time.Now(), stage: "encode", stream: stream, traceAttrs: make(map[string]any)}
+	d := &requestDiagnostic{provider: p, started: time.Now(), stage: "encode", stream: stream, traceAttrs: make(map[string]logging.Value)}
 	endpoint, _ := url.Parse(p.endpoint)
-	d.logger = slog.Default().With("component", "model.openai-responses", "call_id", rand.Text(),
-		"provider", d.clean(p.name), "model", d.clean(request.Model), "reasoning_effort", d.clean(string(request.ReasoningEffort)),
-		"endpoint_host", d.clean(endpoint.Host), "stream", stream)
-	if correlation, ok := observation.CorrelationFromContext(ctx); ok {
-		d.logger = d.logger.With("session_id", d.clean(string(correlation.SessionID)), "turn_id", d.clean(string(correlation.TurnID)), "round", correlation.RoundIndex)
+	d.logger = p.logger.With(
+		logging.String("component", "model.openai-responses"),
+		logging.String("call_id", rand.Text()),
+		logging.String("provider", d.clean(p.name)),
+		logging.String("model", d.clean(request.Model)),
+		logging.String("reasoning_effort", d.clean(string(request.ReasoningEffort))),
+		logging.String("endpoint_host", d.clean(endpoint.Host)),
+		logging.Bool("stream", stream),
+	)
+	// Correlation is added by the logging implementation from ctx.
+	attrs := []logging.Attr{
+		logging.Int("messages", int64(len(request.Messages))),
+		logging.Int("tools", int64(len(request.Tools))),
+		logging.String("go_version", runtime.Version()),
+		logging.Bool("cache_session_key_present", sessionCacheKey(ctx) != ""),
 	}
-	attrs := []any{"messages", len(request.Messages), "tools", len(request.Tools), "go_version", runtime.Version(), "cache_session_key_present", sessionCacheKey(ctx) != ""}
 	if request.MaxTokens != nil {
-		attrs = append(attrs, "max_output_tokens", *request.MaxTokens)
+		attrs = append(attrs, logging.Int("max_output_tokens", int64(*request.MaxTokens)))
 	}
 	if deadline, ok := ctx.Deadline(); ok {
-		attrs = append(attrs, "deadline_remaining_ms", time.Until(deadline).Milliseconds())
+		attrs = append(attrs, logging.Int("deadline_remaining_ms", time.Until(deadline).Milliseconds()))
 	}
-	d.logger.InfoContext(ctx, "model provider request started", attrs...)
+	d.logger.Info(ctx, "model provider request started", attrs...)
 	trace := &httptrace.ClientTrace{
-		DNSStart: func(httptrace.DNSStartInfo) { d.trace("dns_started_after_ms", time.Since(d.started).Milliseconds()) },
+		DNSStart: func(httptrace.DNSStartInfo) { d.traceInt("dns_started_after_ms", time.Since(d.started).Milliseconds()) },
 		DNSDone: func(info httptrace.DNSDoneInfo) {
-			d.trace("dns_done_after_ms", time.Since(d.started).Milliseconds())
-			d.trace("dns_failed", info.Err != nil)
+			d.traceInt("dns_done_after_ms", time.Since(d.started).Milliseconds())
+			d.traceBool("dns_failed", info.Err != nil)
 		},
-		ConnectStart: func(_, _ string) { d.trace("connect_started_after_ms", time.Since(d.started).Milliseconds()) },
+		ConnectStart: func(_, _ string) { d.traceInt("connect_started_after_ms", time.Since(d.started).Milliseconds()) },
 		ConnectDone: func(_, _ string, err error) {
-			d.trace("connect_failed", err != nil)
+			d.traceBool("connect_failed", err != nil)
 			if err == nil {
-				d.trace("connected_after_ms", time.Since(d.started).Milliseconds())
+				d.traceInt("connected_after_ms", time.Since(d.started).Milliseconds())
 			}
 		},
-		TLSHandshakeStart: func() { d.trace("tls_started_after_ms", time.Since(d.started).Milliseconds()) },
+		TLSHandshakeStart: func() { d.traceInt("tls_started_after_ms", time.Since(d.started).Milliseconds()) },
 		TLSHandshakeDone: func(state tls.ConnectionState, err error) {
-			d.trace("tls_done_after_ms", time.Since(d.started).Milliseconds())
-			d.trace("tls_handshake_failed", err != nil)
+			d.traceInt("tls_done_after_ms", time.Since(d.started).Milliseconds())
+			d.traceBool("tls_handshake_failed", err != nil)
 			if err == nil {
-				d.trace("tls_alpn", d.clean(state.NegotiatedProtocol))
+				d.traceText("tls_alpn", d.clean(state.NegotiatedProtocol))
 			}
 		},
 		GotConn: func(info httptrace.GotConnInfo) {
-			d.trace("connection_reused", info.Reused)
-			d.trace("connection_was_idle", info.WasIdle)
-			d.trace("connection_idle_ms", info.IdleTime.Milliseconds())
+			d.traceBool("connection_reused", info.Reused)
+			d.traceBool("connection_was_idle", info.WasIdle)
+			d.traceInt("connection_idle_ms", info.IdleTime.Milliseconds())
 			if conn, ok := info.Conn.(*tls.Conn); ok {
-				d.trace("tls_alpn", d.clean(conn.ConnectionState().NegotiatedProtocol))
+				d.traceText("tls_alpn", d.clean(conn.ConnectionState().NegotiatedProtocol))
 			}
 		},
 		WroteRequest: func(info httptrace.WroteRequestInfo) {
-			d.trace("request_written_after_ms", time.Since(d.started).Milliseconds())
-			d.trace("request_write_failed", info.Err != nil)
+			d.traceInt("request_written_after_ms", time.Since(d.started).Milliseconds())
+			d.traceBool("request_write_failed", info.Err != nil)
 		},
-		GotFirstResponseByte: func() { d.trace("first_byte_after_ms", time.Since(d.started).Milliseconds()) },
+		GotFirstResponseByte: func() { d.traceInt("first_byte_after_ms", time.Since(d.started).Milliseconds()) },
 	}
 	return d, httptrace.WithClientTrace(ctx, trace)
 }
 
-func (d *requestDiagnostic) trace(key string, value any) {
+// Trace attributes are produced by net/http callbacks with three concrete
+// value shapes, so each shape has a typed setter instead of an any bucket.
+func (d *requestDiagnostic) traceInt(key string, value int64) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	d.traceAttrs[key] = value
+	d.traceAttrs[key] = logging.IntValue(value)
+}
+
+func (d *requestDiagnostic) traceBool(key string, value bool) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.traceAttrs[key] = logging.BoolValue(value)
+}
+
+func (d *requestDiagnostic) traceText(key string, value string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.traceAttrs[key] = logging.StringValue(value)
 }
 
 func (d *requestDiagnostic) receivedHeaders(ctx context.Context, response *http.Response) {
@@ -115,8 +138,13 @@ func (d *requestDiagnostic) receivedHeaders(ctx context.Context, response *http.
 		d.requestID = d.clean(response.Header.Get("Request-Id"))
 	}
 	d.cfRay = d.clean(response.Header.Get("Cf-Ray"))
-	d.logger.InfoContext(ctx, "model provider response headers", "http_status", d.status, "http_protocol", d.protocol,
-		"request_id", d.requestID, "cf_ray", d.cfRay, "headers_after_ms", time.Since(d.started).Milliseconds())
+	d.logger.Info(ctx, "model provider response headers",
+		logging.Int("http_status", int64(d.status)),
+		logging.String("http_protocol", d.protocol),
+		logging.String("request_id", d.requestID),
+		logging.String("cf_ray", d.cfRay),
+		logging.Int("headers_after_ms", time.Since(d.started).Milliseconds()),
+	)
 	response.Body = &diagnosticBody{ReadCloser: response.Body, diagnostic: d}
 }
 
@@ -165,55 +193,90 @@ func (d *requestDiagnostic) recordUsage(usage *responseUsage) {
 
 func (d *requestDiagnostic) finish(ctx context.Context, err error) {
 	now := time.Now()
-	attrs := []any{"stage", d.stage, "elapsed_ms", now.Sub(d.started).Milliseconds(), "http_status", d.status,
-		"http_protocol", d.protocol, "request_id", d.requestID, "response_id", d.responseID, "cf_ray", d.cfRay,
-		"request_bytes", d.requestBytes, "response_bytes", d.bytes, "sse_events", d.events, "sse_comments", d.comments, "keepalives", d.keepalives,
-		"delivered_events", d.delivered, "last_event", d.lastEvent, "consumer_failed", d.consumerFailed}
+	attrs := []logging.Attr{
+		logging.String("stage", d.stage),
+		logging.Int("elapsed_ms", now.Sub(d.started).Milliseconds()),
+		logging.Int("http_status", int64(d.status)),
+		logging.String("http_protocol", d.protocol),
+		logging.String("request_id", d.requestID),
+		logging.String("response_id", d.responseID),
+		logging.String("cf_ray", d.cfRay),
+		logging.Int("request_bytes", int64(d.requestBytes)),
+		logging.Int("response_bytes", int64(d.bytes)),
+		logging.Int("sse_events", int64(d.events)),
+		logging.Int("sse_comments", int64(d.comments)),
+		logging.Int("keepalives", int64(d.keepalives)),
+		logging.Int("delivered_events", int64(d.delivered)),
+		logging.String("last_event", d.lastEvent),
+		logging.Bool("consumer_failed", d.consumerFailed),
+	}
 	if err == nil && d.inputTokens != nil {
-		attrs = append(attrs, "input_tokens", *d.inputTokens)
+		attrs = append(attrs, logging.Int("input_tokens", int64(*d.inputTokens)))
 		if d.cachedInputTokens != nil {
-			attrs = append(attrs, "cached_input_tokens", *d.cachedInputTokens)
+			attrs = append(attrs, logging.Int("cached_input_tokens", int64(*d.cachedInputTokens)))
 		}
 	}
 	if !d.firstEvent.IsZero() {
-		attrs = append(attrs, "first_event_after_ms", d.firstEvent.Sub(d.started).Milliseconds())
+		attrs = append(attrs, logging.Int("first_event_after_ms", d.firstEvent.Sub(d.started).Milliseconds()))
 	}
 	if !d.lastEventAt.IsZero() {
-		attrs = append(attrs, "last_event_age_ms", now.Sub(d.lastEventAt).Milliseconds())
+		attrs = append(attrs, logging.Int("last_event_age_ms", now.Sub(d.lastEventAt).Milliseconds()))
 	}
 	if !d.previousEventAt.IsZero() {
-		attrs = append(attrs, "last_event_gap_ms", d.lastEventAt.Sub(d.previousEventAt).Milliseconds())
+		attrs = append(attrs, logging.Int("last_event_gap_ms", d.lastEventAt.Sub(d.previousEventAt).Milliseconds()))
 	}
 	if !d.lastRead.IsZero() {
-		attrs = append(attrs, "last_read_age_ms", now.Sub(d.lastRead).Milliseconds())
+		attrs = append(attrs, logging.Int("last_read_age_ms", now.Sub(d.lastRead).Milliseconds()))
 	}
-	d.mu.Lock()
-	for key, value := range d.traceAttrs {
-		attrs = append(attrs, key, value)
-	}
-	d.mu.Unlock()
+	attrs = append(attrs, d.traceAttributes()...)
 	if ctx.Err() != nil {
-		attrs = append(attrs, "context_error", ctx.Err().Error())
+		attrs = append(attrs, logging.String("context_error", ctx.Err().Error()))
 	}
 	if err == nil {
-		d.logger.InfoContext(ctx, "model provider request completed", attrs...)
+		d.logger.Info(ctx, "model provider request completed", attrs...)
 		return
 	}
-	attrs = append(attrs, "error_type", fmt.Sprintf("%T", err), "failure_origin", d.failureOrigin(ctx, err))
+	attrs = append(attrs,
+		logging.String("error_type", fmt.Sprintf("%T", err)),
+		logging.String("failure_origin", d.failureOrigin(ctx, err)),
+	)
 	var hint interface{ RetryDelay() (time.Duration, bool) }
 	retryable := false
 	if !d.consumerFailed && errors.As(err, &hint) {
 		_, retryable = hint.RetryDelay()
 	}
-	attrs = append(attrs, "adapter_retryable", retryable, "stream_reset_required", d.stream && d.delivered > 0)
+	attrs = append(attrs,
+		logging.Bool("adapter_retryable", retryable),
+		logging.Bool("stream_reset_required", d.stream && d.delivered > 0),
+	)
 	if !d.consumerFailed {
 		var responseErr *ProviderResponseError
 		if errors.As(err, &responseErr) {
-			attrs = append(attrs, "provider_status", d.clean(responseErr.Status), "provider_code", d.clean(responseErr.Code))
+			attrs = append(attrs,
+				logging.String("provider_status", d.clean(responseErr.Status)),
+				logging.String("provider_code", d.clean(responseErr.Code)),
+			)
 		}
 		attrs = append(attrs, networkErrorAttrs(err)...)
 	}
-	d.logger.WarnContext(ctx, "model provider request failed", attrs...)
+	d.logger.Warn(ctx, "model provider request failed", attrs...)
+}
+
+// traceAttributes copies the transport timeline in a deterministic key order so
+// two records for the same attempt are directly comparable.
+func (d *requestDiagnostic) traceAttributes() []logging.Attr {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	keys := make([]string, 0, len(d.traceAttrs))
+	for key := range d.traceAttrs {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	attrs := make([]logging.Attr, 0, len(keys))
+	for _, key := range keys {
+		attrs = append(attrs, logging.Attr{Key: key, Value: d.traceAttrs[key]})
+	}
+	return attrs
 }
 
 func (d *requestDiagnostic) failureOrigin(ctx context.Context, err error) string {
@@ -252,20 +315,23 @@ var (
 
 // Arbitrary error strings can contain response bodies, user content or proxy
 // credentials. Only known transport diagnostics and typed provider codes are logged.
-func networkErrorAttrs(err error) []any {
-	var attrs []any
+func networkErrorAttrs(err error) []logging.Attr {
+	var attrs []logging.Attr
 	var network net.Error
 	if errors.As(err, &network) {
-		attrs = append(attrs, "network_timeout", network.Timeout())
+		attrs = append(attrs, logging.Bool("network_timeout", network.Timeout()))
 	}
 	var errno syscall.Errno
 	if errors.As(err, &errno) {
-		attrs = append(attrs, "network_errno", int(errno), "network_error", errno.Error())
+		attrs = append(attrs,
+			logging.Int("network_errno", int64(errno)),
+			logging.String("network_error", errno.Error()),
+		)
 	}
 	if errors.Is(err, io.ErrUnexpectedEOF) {
-		attrs = append(attrs, "network_error", "unexpected EOF")
+		attrs = append(attrs, logging.String("network_error", "unexpected EOF"))
 	} else if errors.Is(err, io.EOF) {
-		attrs = append(attrs, "network_error", "EOF")
+		attrs = append(attrs, logging.String("network_error", "EOF"))
 	}
 	var types []string
 	for cause, depth := err, 0; cause != nil && depth < 16; cause, depth = errors.Unwrap(cause), depth+1 {
@@ -274,19 +340,25 @@ func networkErrorAttrs(err error) []any {
 		// Extract only numeric IDs and protocol codes from known Go transport
 		// errors. Never log a wrapped cause or GOAWAY's arbitrary debug data.
 		if kind == "http.http2StreamError" || kind == "http2.StreamError" {
-			attrs = append(attrs, "http2_stream_error", true)
+			attrs = append(attrs, logging.Bool("http2_stream_error", true))
 			if match := http2StreamDiagnostic.FindStringSubmatch(cause.Error()); len(match) == 3 {
-				attrs = append(attrs, "http2_stream_id", match[1], "http2_error_code", match[2])
+				attrs = append(attrs,
+					logging.String("http2_stream_id", match[1]),
+					logging.String("http2_error_code", match[2]),
+				)
 			}
 		}
 		if kind == "http.http2GoAwayError" || kind == "http2.GoAwayError" {
-			attrs = append(attrs, "http2_goaway", true)
+			attrs = append(attrs, logging.Bool("http2_goaway", true))
 			if match := http2GoAwayDiagnostic.FindStringSubmatch(cause.Error()); len(match) == 3 {
-				attrs = append(attrs, "http2_last_stream_id", match[1], "http2_error_code", match[2])
+				attrs = append(attrs,
+					logging.String("http2_last_stream_id", match[1]),
+					logging.String("http2_error_code", match[2]),
+				)
 			}
 		}
 	}
-	return append(attrs, "error_chain_types", strings.Join(types, " -> "))
+	return append(attrs, logging.String("error_chain_types", strings.Join(types, " -> ")))
 }
 
 func (d *requestDiagnostic) clean(value string) string {

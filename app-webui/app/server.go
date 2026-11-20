@@ -22,6 +22,7 @@ import (
 	"github.com/ingot-agent/plugins/app-webui/modelselection"
 	"github.com/ingot-agent/sdk/agent"
 	"github.com/ingot-agent/sdk/asset"
+	"github.com/ingot-agent/sdk/logging"
 	"github.com/ingot-agent/sdk/operation"
 	"github.com/ingot-agent/sdk/session"
 	"github.com/ingot-agent/sdk/workspace"
@@ -41,9 +42,13 @@ type Dependencies struct {
 	Assets            ingotabi.Optional[asset.Store]
 	Operations        []operation.Operation
 	ModelSelection    ingotabi.Optional[modelselection.Controller]
-	Invocation        invocation.Invocation
-	Lifecycle         lifecycle.Controller
-	State             state.Scope
+	// Logger receives diagnostics about best-effort cleanup. It is optional:
+	// without a logging provider the application still serves requests and
+	// records nothing. There is no fallback logging system.
+	Logger     ingotabi.Optional[logging.Logger]
+	Invocation invocation.Invocation
+	Lifecycle  lifecycle.Controller
+	State      state.Scope
 }
 
 // Exports is empty because the HTTP application is a graph leaf.
@@ -59,6 +64,7 @@ type application struct {
 	modelSelection       modelselection.Controller
 	operationInvocations *operationRegistry
 	assets               asset.Store
+	logger               logging.Logger
 	server               *http.Server
 	listener             net.Listener
 	serveDone            chan struct{}
@@ -126,10 +132,18 @@ func New(ctx context.Context, deps Dependencies) (Exports, ingotabi.Cleanup, err
 	if err != nil {
 		return Exports{}, nil, fmt.Errorf("listen on %s: %w", normalized.Address, err)
 	}
+	logger := logging.Discard()
+	if deps.Logger.Valid {
+		if isNil(deps.Logger.Value) {
+			return Exports{}, nil, fmt.Errorf("logger is typed nil: %w", appbackend.ErrInvalidConfig)
+		}
+		logger = deps.Logger.Value
+	}
 	runCtx, cancel := context.WithCancel(ctx)
 	instance := &application{
 		config: normalized, backend: deps.Backend, agent: agentController, sessions: sessionController,
 		operations:       operations,
+		logger:           logger,
 		listener:         listener,
 		serveDone:        make(chan struct{}),
 		defaultWorkspace: defaultWorkspace,

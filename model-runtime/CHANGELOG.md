@@ -4,6 +4,10 @@ All notable changes to this plugin are documented in this file.
 
 ## Unreleased
 
+- Report provider retries and usage-settlement failures through an injected
+  `logging.Logger` (`Optional[logging.Logger]`) instead of the process-wide
+  `log/slog` default. Without a logging provider the runtime records nothing;
+  there is no fallback logger.
 - Preserve and independently clone provider replay state through request
   resolution, invocation and returned response snapshots.
 
