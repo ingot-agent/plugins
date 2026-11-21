@@ -29,4 +29,5 @@ use (
 	./tool-runtime
 	./tool-shell
 	./tool-subagent
+	./tool-web
 )

@@ -84,6 +84,7 @@ dependencies, operations/tools, state, defaults and limitations.
 | [tool-runtime](tool-runtime/README.md) | `tool.runtime` | Lookup, JSON schema validation and interception |
 | [tool-shell](tool-shell/README.md) | `tool.shell` | Session-workspace shell execution |
 | [tool-subagent](tool-subagent/README.md) | `tool.subagent` | Child-agent discovery, creation and control |
+| [tool-web](tool-web/README.md) | `tool.web` | DeepSeek-backed web search and page fetch |
 
 ## Repository boundary and validation
 
