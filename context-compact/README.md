@@ -1,31 +1,27 @@
 # context-compact
 
-`context.compact` incrementally summarizes complete conversation rounds while
-preserving original session entries. Its watermarks are **estimated input tokens**,
-not byte counts or
-a guaranteed provider context-window limit. See
-the [plugin documentation index](../docs/README.md).
+`context.compact` keeps every model request inside a token budget. It shrinks
+deterministically first and summarizes second, so a summarizer that is slow,
+broken or unavailable costs recall rather than the turn. Original session
+entries are never modified. Watermarks are **estimated input tokens**, not byte
+counts or a guaranteed provider context-window limit. See the
+[plugin documentation index](../docs/README.md) and the
+[design document](../docs/context-compact-v2-design.md).
 
 ## Identity and capabilities
 
-The directory is `context-compact`; [the manifest](ingot.plugin.toml) names
-`context.compact`, with component `default` in `.`, compatible with Ingot
-`>=0.3.0 <0.4.0`. `New(ctx, deps)` requires `model.Runtime`, `session.Store`,
-and `state.Scope`. It owns its Unicode estimator and bounded cache;
-`model.RequestResolver` is optional and `[]model.ProviderSource` supplies live
-configuration choices.
-The optional `interaction.ExecutionBinder` publishes the final input-token
-estimate as Session-scoped state after successful compaction or checkpoint reuse.
-Exports are `contextwindow.Compactor` and `[]operation.Operation`. Wiring this
-component into `agent.default` runs it before model requests.
+The directory is `context-compact`; [the manifest](ingot.plugin.toml)
+names `context.compact`, with component `default` in `.`, compatible with Ingot
+`>=0.3.0 <0.4.0`. `New(ctx, deps)` requires `model.Runtime`, `session.Store`
+and `state.Scope`; `[]model.ProviderSource` supplies live configuration choices
+and `ingotabi.Optional[interaction.ExecutionBinder]` publishes input-token
+estimates. Exports are `contextwindow.Compactor` and `[]operation.Operation`.
+Wiring this component into `agent.default` runs it before model requests.
 
-Unchanged messages retain their opaque `Message.Replay` state byte-for-byte,
-including through checkpoint reuse. Checkpoint source digests account for that
-state; histories without Replay retain their existing digest representation.
-Summary prompts omit opaque state, and synthesized summary messages carry none.
-The local text estimator does not measure tokens hidden inside encrypted provider
-state. This module pins SDK v0.2.19 for Replay and atomic batch Store.Append; validate independently with
-`GOWORK=off`.
+Unchanged messages keep their opaque `Message.Replay` state byte-for-byte, so a
+provider can still resume them. A message whose content is elided clears
+`Replay`, because that state describes text that no longer appears. The local
+estimator does not measure tokens hidden inside encrypted provider state.
 
 ## Context Snapshots
 
@@ -37,8 +33,8 @@ tools and materialized compacted history, before model generation. It may shrink
 after compaction and is not cumulative usage. Publication failures do not fail
 compaction; without a binder, no snapshot is published. Reported failures go to
 the injected `logging.Logger` (`Optional[logging.Logger]`); without a logging
-provider they are recorded nowhere and compaction is unaffected. Runtime restart clears
-the snapshot until another request is counted.
+provider they are recorded nowhere and compaction is unaffected. Runtime restart
+clears the snapshot until another request is counted.
 
 ## Configuration
 
@@ -48,108 +44,103 @@ build recipe. Missing files and zero numeric values select defaults:
 ```toml
 provider = ""
 model = ""
-trigger_input_tokens = 800000
-target_input_tokens = 250000
-recent_rounds = 4
-summary_chunk_tokens = 128000
-summary_input_tokens = 256000
-summary_max_tokens = 1024
-rollup_max_tokens = 4096
-summary_max_bytes = 65536
-memory_trigger_tokens = 16384
-memory_target_tokens = 8192
-state_trigger_tokens = 4096
-state_target_tokens = 2048
-max_summary_passes = 8
-token_count_cache_entries = 1024
-allowed_accuracies = ["exact", "upper_bound", "estimate"]
+trigger_tokens = 800000
+target_tokens = 250000
+protect_recent_tokens = 100000
+summary_max_tokens = 2048
 ```
 
-The 800k trigger and 250k target assume a *nominal* 1M-token model window and
-leave headroom for tool output, response generation, and estimation error. They
-are not derived from provider metadata: configure smaller watermarks for models
-with smaller windows. The target is for the **whole materialized input**, including
-tool definitions, not just the summarized history. `recent_rounds` is a soft
-preference; the compactor may consume those rounds if necessary to reach the
-target. `summary_chunk_tokens` is the minimum desired size of selected complete
-rounds, while `summary_input_tokens` bounds each summarizer request. These
-128k/256k defaults allow large complete rounds to be summarized within the
-eight-call budget; a single round larger than that input budget can still need
-multiple evidence-extraction calls and may exhaust the limit. The summary
-provider must also support a sufficiently large input window; use smaller
-settings for models that cannot accept 256k tokens. The
-memory/state trigger and target values control rollups of existing summaries.
-`summary_max_bytes` is a UTF-8 output size guard; `max_summary_passes` limits
-total summarizer calls including fragment extraction and rollups.
+`provider` and `model` independently inherit the invocation when empty. The
+800k trigger and 250k target assume a *nominal* 1M-token window and leave room
+for response generation and estimation error; configure smaller values for
+smaller windows. `target_tokens` must be below `trigger_tokens`.
 
-`provider`/`model` independently inherit the invocation when empty. The runtime
-can resolve remaining defaults through the optional RequestResolver.
-An explicit unsupported provider fails configuration validation. Negative
-numeric values, unknown TOML fields, malformed config and unknown/empty
-`allowed_accuracies` are rejected. Each token target must be smaller than its
-trigger. Old byte-, turn- and anchor-based config fields are rejected with a
-migration error. An explicitly saved value retains its meaning after changing
-these built-in defaults; remove or set it to zero to adopt the new default.
+`protect_recent_tokens` is a **token budget**, not a round count: turns are
+protected from the newest backwards until the budget is reached. A count would
+be meaningless whenever the newest turns are short.
 
-`/context-compact config` accepts `{}` and uses Interaction to edit these fields.
-It checks for conflicting persisted edits, saves atomically and publishes to new
-calls immediately (`restart_required:false`); ongoing compactions retain their
-snapshot. Direct file edits require reconstruction/restart.
+`summary_max_tokens` is the output budget of one summary call. It is separate
+from the main model's output budget and is not a share of the context window.
 
-## Counting and selection
+Everything else the previous version exposed as a watermark is now either
+derived or a fixed constant: summary input size, summary byte ceiling, elision
+markers, and the reasoning effort used for summaries, which is fixed to `none`
+because a summarizer that spends its output budget thinking returns no text.
 
-The built-in `unicode-estimate-v1` counts text, message framing, tool-call
-arguments and tool-definition schemas. ASCII text contributes about one token
-per four bytes (rounded up), other Unicode runes roughly one each. It preserves
-the former usage plugin's effective algorithm and returns `accuracy=estimate`.
-Non-text content is skipped; this is not an upper bound or a multimodal token
-count. The bounded cache defaults to 1024 entries and shares concurrent work
-for identical requests. Changing its capacity applies to subsequent counts.
+`/context-compact config` edits these fields through Interaction, validates them
+with the same normalization used at construction, persists atomically and
+applies immediately (`restart_required:false`). Direct file edits are also
+picked up without a restart (see *Configuration reload*).
 
-If provider/model is not explicit, `model.RequestResolver` (normally exported
-by `model.runtime`) must be wired; otherwise counting returns
-`ErrInvalidRequest`. Errors do not silently select a different algorithm.
-Excluding `estimate` from `allowed_accuracies` returns `ErrUnsupportedAccuracy`.
-The independent `usage.default` plugin, tokenizer routes and setup operation
-have been removed. Its old state files are no longer read.
+## Counting
 
-Checkpoints are policy-bound: changing these watermarks, the counting source or
-resolved model selection prevents reuse of an incompatible chain. Input usage
-is not model output usage or a price estimate and is never persisted as actual
-Session token usage.
+The built-in estimator keeps the historical `unicode-estimate-v1` algorithm:
+ASCII text contributes about one token per four bytes (rounded up) and each
+non-ASCII rune roughly one token. Message and tool framing add fixed costs.
+Non-text content is skipped, so this is not a multimodal token count. The
+identifier is unchanged, so configured watermarks keep the meaning they had
+before the rewrite.
 
 ## Compaction contract
 
-The compactor validates message/tool-call ordering and serializes work per
-session. It retains leading system messages and prefers recent complete rounds;
-it summarizes only complete eligible text rounds. Non-text media is a barrier to
-summary coverage, not something silently dropped. If no eligible round remains,
-media blocks progress, a summary does not reduce tokens, or the pass limit is
-reached, it returns `ErrContextUncompactable` rather than truncating history.
+Compaction has two stages, and only the first is required to succeed.
 
-Summaries run through `model.Runtime.Complete` at temperature `0`, no tools,
-the configured output-token limit and **nil `Stop`** (compatible with the
-Responses adapter's request validation). The protocol requires strict JSON
-narrative summaries with `set`/`delete` state operations, or a rollup of old
-summaries. Empty, malformed, oversized, non-text or tool-calling responses fail.
-Model-specific limitations beyond `Stop` may still apply; real provider/model
-summarization is not guaranteed by build-time validation.
+**Stage one is deterministic.** The request is split into leading system
+messages, complete user turns and an in-progress tail. Turns are reduced in
+monotone steps, oldest first: tool output is replaced by a marker, then tool
+call arguments, then the tool exchange itself. Only when nothing shallower is
+left is a turn removed. Every step below removal preserves all user and
+assistant text verbatim, so elision costs detail but never narration. Stage one
+makes no model call, cannot fail, and is fast enough to run on every round: a
+3.9 MB history shrinks to 30% of its size in about ten milliseconds.
 
-`CompactionRequest` requires both `RootSessionID` and current `SessionID`.
-Every fragment, segment and rollup call passes these identities unchanged to
-the Runtime. Checkpoints belong to current; provider usage is settled by the
-Runtime even if summary parsing later fails.
+**Stage two summarizes what stage one removed.** It is best effort. An empty
+answer, a provider error, a timeout, a truncated answer or an answer in the
+wrong shape costs recall, never the turn: the removed turns stay removed and
+the summary is skipped. The answer is prose, not JSON — its consumer is another
+model's prompt, so a structural format would add failure modes without adding
+information.
 
-Successful reduction appends version-2 `context.compact.checkpoint` entries,
-including source and policy digests, sequence, coverage, state operations or
-rollup snapshot, and summary provider/model. Checkpoints are reused only when
-their chain, source and policy match. Original `agent.message` entries remain
-available for history and forks. A later pass can fail after earlier valid
-checkpoints were appended. Known version-1 chains are not reused.
+The single error `Compact` returns is a structurally invalid history, which is
+an upstream defect rather than a compaction outcome.
+
+`protect_recent_tokens` is a token budget, not a round count. A tail of short
+turns makes a count meaningless: in one measured session the newest four turns
+totalled 28 tokens.
+
+## Summary records
+
+A successful summary appends one `context.compact.summary` entry carrying the
+running summary, optional durable notes, the number of messages it covers, and
+the digest of those messages. The newest entry whose digest still matches
+current history is used; a record whose digest does not match is ignored and the
+session is compacted from scratch, which is the correct response to history
+having changed. There is no checkpoint chain, no revision counter and no
+policy fingerprint, so changing a threshold never invalidates stored work.
+
+Coverage advances only over turns a summary actually describes. When the request
+budget cannot fit every removed turn, the rest stay uncovered and are summarized
+later, so no turn is ever marked covered without appearing in a summary.
+
+A session that has a summary stays compact even when it dips below the trigger:
+otherwise recomputing elision from scratch each round would let the request
+balloon back to full size and shrink again on the next round.
+
+Original `agent.message` entries are never modified, so history, forks and
+manual inspection keep every detail that elision and summarization removed.
+
+## Configuration reload
+
+`config.toml` is re-read whenever its modification time or size changes. A
+broken edit keeps the previous configuration and logs a warning, so a typo
+cannot disable compaction. There is no restart requirement, and `/context-compact config`
+applies immediately.
 
 ## Source and checks
 
-See [contextcompact.go](contextcompact.go), [compact.go](compact.go),
-[count.go](count.go), [checkpoint.go](checkpoint.go) and [protocol.go](protocol.go).
-Run `GOWORK=off go test -race ./...` in this module; the token, protocol,
-compaction, configuration and fallback tests cover the local behavior.
+See [compact.go](compact.go), [summary.go](summary.go), [record.go](record.go),
+[config.go](config.go) and the deterministic core in
+[internal/engine](internal/engine). Run `GOWORK=off go test -race ./...` in this
+module. Set `COMPACT_FIXTURE` to a JSON export of stored session messages to run
+the real-history regressions in [internal/engine/realdata_test.go](internal/engine/realdata_test.go)
+and [realdata_test.go](realdata_test.go).

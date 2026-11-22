@@ -3,150 +3,124 @@ package contextcompact
 import (
 	"context"
 	"errors"
-	"reflect"
 	"testing"
 
 	"github.com/ingot-agent/sdk/interaction"
-	"github.com/ingot-agent/sdk/model"
+	"github.com/ingot-agent/sdk/logging"
 	"github.com/ingot-agent/sdk/operation"
 )
 
-type setupChannel struct {
-	request   interaction.Request
-	response  interaction.Response
-	onRequest func(interaction.Request)
+// answerInteraction returns a fixed interaction response.
+type answerInteraction struct {
+	values []interaction.Answer
+	err    error
+	fields []interaction.Field
 }
 
-func (c *setupChannel) Request(_ context.Context, request interaction.Request) (interaction.Response, error) {
-	c.request = request
-	if c.onRequest != nil {
-		c.onRequest(request)
+func (*answerInteraction) Emit(context.Context, interaction.Event) error { return nil }
+
+func (*answerInteraction) Set(context.Context, interaction.State) error { return nil }
+
+func (*answerInteraction) Clear(context.Context, string) error { return nil }
+
+func (a *answerInteraction) Request(_ context.Context, request interaction.Request) (interaction.Response, error) {
+	a.fields = request.Fields
+	if a.err != nil {
+		return interaction.Response{}, a.err
 	}
-	return c.response, nil
+	return interaction.Response{Values: a.values}, nil
 }
 
-func (*setupChannel) Emit(context.Context, interaction.Event) error { return nil }
-func (*setupChannel) Set(context.Context, interaction.State) error  { return nil }
-func (*setupChannel) Clear(context.Context, string) error           { return nil }
-
-func TestSetupUsesClosedProviderOptionsAndRejectsUnknownProvider(t *testing.T) {
-	scope := testStateScope{dir: writeTestConfig(t, Config{})}
-	active, err := normalizeConfigForProviders(Config{}, []string{"first", "second"})
+func newSetupTest(t *testing.T, cfg Config) (*setupOperation, *compactor, *answerInteraction) {
+	t.Helper()
+	dir := writeTestConfig(t, cfg)
+	loader, err := newConfigLoader(dir, discardLogger())
 	if err != nil {
 		t.Fatal(err)
 	}
-	channel := &setupChannel{response: interaction.Response{Values: []interaction.Answer{
-		{Name: "provider", Value: interaction.StringValue("missing")},
-	}}}
-	op := &setupOperation{scope: scope, providerSources: []model.ProviderSource{&setupProviderSource{names: []string{"first", "second"}}}, compactor: setupCompactor(active)}
-	_, err = op.Invoke(context.Background(), operation.Request{Interaction: channel})
-	if !errors.Is(err, ErrInvalidConfig) {
+	instance := &compactor{loader: loader, logger: discardLogger()}
+	return newSetupOperation(testStateScope{dir: dir}, nil, instance, loader), instance, &answerInteraction{}
+}
+
+func discardLogger() logging.Logger { return logging.Discard() }
+
+func TestSetupExposesOnlySixFields(t *testing.T) {
+	op, _, answer := newSetupTest(t, Config{})
+	if _, err := op.Invoke(context.Background(), operation.Request{Interaction: answer}); err != nil {
+		t.Fatal(err)
+	}
+	names := make([]string, 0, len(answer.fields))
+	for _, field := range answer.fields {
+		names = append(names, field.Name)
+	}
+	want := []string{"provider", "model", "trigger_tokens", "target_tokens", "protect_recent_tokens", "summary_max_tokens"}
+	if len(names) != len(want) {
+		t.Fatalf("fields = %v, want %v", names, want)
+	}
+	for i := range want {
+		if names[i] != want[i] {
+			t.Fatalf("fields = %v, want %v", names, want)
+		}
+	}
+}
+
+func TestSetupPersistsAndAppliesImmediately(t *testing.T) {
+	op, instance, answer := newSetupTest(t, Config{})
+	answer.values = []interaction.Answer{
+		{Name: "trigger_tokens", Value: interaction.IntegerValue(1234)},
+		{Name: "target_tokens", Value: interaction.IntegerValue(600)},
+		{Name: "protect_recent_tokens", Value: interaction.IntegerValue(300)},
+		{Name: "summary_max_tokens", Value: interaction.IntegerValue(512)},
+		{Name: "model", Value: interaction.StringValue("summary-model")},
+	}
+	if _, err := op.Invoke(context.Background(), operation.Request{Interaction: answer}); err != nil {
+		t.Fatal(err)
+	}
+	active := instance.loader.snapshot()
+	if active.triggerTokens != 1234 || active.targetTokens != 600 ||
+		active.protectRecentTokens != 300 || active.summaryMaxTokens != 512 {
+		t.Fatalf("active config = %#v", active)
+	}
+	if active.model != "summary-model" {
+		t.Fatalf("model = %q", active.model)
+	}
+	// Restart-equivalent load must agree with the in-memory snapshot.
+	persisted, _, err := loadConfig(op.scope.Dir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	normalized, err := normalizeConfig(persisted)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if normalized != active {
+		t.Fatalf("persisted = %#v, active = %#v", normalized, active)
+	}
+}
+
+func TestSetupRejectsInvalidCombination(t *testing.T) {
+	op, _, answer := newSetupTest(t, Config{})
+	answer.values = []interaction.Answer{
+		{Name: "trigger_tokens", Value: interaction.IntegerValue(1000)},
+		{Name: "target_tokens", Value: interaction.IntegerValue(1000)},
+	}
+	if _, err := op.Invoke(context.Background(), operation.Request{Interaction: answer}); !errors.Is(err, ErrInvalidConfig) {
 		t.Fatalf("error = %v, want ErrInvalidConfig", err)
 	}
-	provider := findSetupField(t, channel.request.Fields, "provider")
-	if provider.Kind != interaction.FieldChoice || len(provider.Options) != 3 || provider.Options[0].Value != "" || provider.Options[1].Value != "first" || provider.Options[2].Value != "second" {
-		t.Fatalf("provider field = %#v", provider)
+}
+
+func TestSetupPropagatesInteractionError(t *testing.T) {
+	op, _, answer := newSetupTest(t, Config{})
+	answer.err = errors.New("user cancelled")
+	if _, err := op.Invoke(context.Background(), operation.Request{Interaction: answer}); err == nil {
+		t.Fatal("expected an error")
 	}
-	stored, err := loadConfig(scope.Dir())
+	// A cancelled interaction must not persist anything.
+	persisted, _, err := loadConfig(op.scope.Dir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.ValueOf(stored).IsZero() {
-		t.Fatalf("stored = %#v, want empty", stored)
-	}
-}
-
-func TestSetupRefreshesProvidersAndRepairsRemovedSelection(t *testing.T) {
-	scope := testStateScope{dir: writeTestConfig(t, Config{Provider: "removed"})}
-	source := &setupProviderSource{}
-	op := &setupOperation{scope: scope, providerSources: []model.ProviderSource{source}, compactor: setupCompactor(normalizedConfig{})}
-	for _, selected := range []string{"", "added"} {
-		if selected != "" {
-			source.names = []string{selected}
-		}
-		channel := &setupChannel{
-			response: interaction.Response{Values: []interaction.Answer{{Name: "provider", Value: interaction.StringValue(selected)}}},
-			onRequest: func(request interaction.Request) {
-				field := findSetupField(t, request.Fields, "provider")
-				if field.Kind != interaction.FieldChoice || len(field.Options) != len(source.names)+1 {
-					t.Fatalf("provider options = %#v", field)
-				}
-				if selected == "" && field.Default != nil {
-					t.Fatalf("removed provider must not remain a choice default: %#v", field.Default)
-				}
-				if selected != "" && field.Options[1].Value != selected {
-					t.Fatalf("new provider absent from options: %#v", field)
-				}
-			},
-		}
-		if _, err := op.Invoke(context.Background(), operation.Request{Interaction: channel}); err != nil {
-			t.Fatal(err)
-		}
-		if running := op.compactor.config.Load(); running.provider != selected {
-			t.Fatalf("running provider = %q, want %q", running.provider, selected)
-		}
-		stored, err := loadConfig(scope.Dir())
-		if err != nil || stored.Provider != selected {
-			t.Fatalf("saved provider = %q, error = %v", stored.Provider, err)
-		}
-	}
-}
-
-func TestSetupRejectsProviderRemovedDuringInteraction(t *testing.T) {
-	for _, remaining := range [][]string{nil, {"other"}} {
-		scope := testStateScope{dir: writeTestConfig(t, Config{})}
-		source := &setupProviderSource{names: []string{"selected"}}
-		selected := "selected"
-		channel := &setupChannel{
-			response:  interaction.Response{Values: []interaction.Answer{{Name: "provider", Value: interaction.StringValue(selected)}}},
-			onRequest: func(interaction.Request) { source.names = remaining },
-		}
-		op := &setupOperation{scope: scope, providerSources: []model.ProviderSource{source}, compactor: setupCompactor(normalizedConfig{})}
-		if _, err := op.Invoke(context.Background(), operation.Request{Interaction: channel}); !errors.Is(err, ErrInvalidConfig) {
-			t.Fatalf("error = %v, want ErrInvalidConfig", err)
-		}
-		stored, err := loadConfig(scope.Dir())
-		if err != nil || stored.Provider != "" {
-			t.Fatalf("removed selection was saved: %#v, error = %v", stored, err)
-		}
-	}
-}
-
-func setupCompactor(configuration normalizedConfig) *compactor {
-	instance := &compactor{}
-	instance.config.Store(&configuration)
-	return instance
-}
-
-func findSetupField(t *testing.T, fields []interaction.Field, name string) interaction.Field {
-	t.Helper()
-	for _, field := range fields {
-		if field.Name == name {
-			return field
-		}
-	}
-	t.Fatalf("field %q not found", name)
-	return interaction.Field{}
-}
-
-func TestSetupShowsEffectiveDefaultWatermarks(t *testing.T) {
-	scope := testStateScope{dir: writeTestConfig(t, Config{})}
-	op := &setupOperation{scope: scope, compactor: setupCompactor(normalizedConfig{})}
-	channel := &setupChannel{onRequest: func(request interaction.Request) {
-		for _, test := range []struct {
-			name string
-			want int64
-		}{
-			{"trigger_input_tokens", 800000},
-			{"target_input_tokens", 250000},
-		} {
-			field := findSetupField(t, request.Fields, test.name)
-			if field.Default == nil || field.Default.Kind != interaction.ValueInteger || field.Default.Integer != test.want {
-				t.Fatalf("%s default = %#v; want %d", test.name, field.Default, test.want)
-			}
-		}
-	}}
-	if _, err := op.Invoke(context.Background(), operation.Request{Interaction: channel}); err != nil {
-		t.Fatal(err)
+	if persisted.TriggerTokens != 0 {
+		t.Fatalf("config changed on failure: %#v", persisted)
 	}
 }
