@@ -27,11 +27,19 @@ action = "ask"
 | `default_action` | `allow`、`ask`、`deny`；空字符串默认 `ask` |
 | `argument_display` | `full` 显示压缩 JSON 参数，`name-only` 只显示排序后的顶层参数名；空字符串默认 `full` |
 | `max_display_bytes` | 参数展示部分的 UTF-8 字节上限，默认 4096；0 用默认值，负数无效 |
-| `rules` | 以工具精确名称覆盖默认动作，不支持通配符、正则或参数匹配；同名规则重复无效 |
+| `rules` | 以工具名覆盖默认动作，支持结尾 `*` 的前缀匹配；不支持中间通配符、正则或参数匹配；同一模式重复无效 |
 
-上例给 `read_file` 永久免询问权限，是可选策略示例，插件缺省配置不含这些 allow 规则。`full` 会把参数值展示给宿主，可能包含敏感文本；`name-only` 隐藏参数值但也减少用户判断依据。超长展示会在 UTF-8 边界截断，并附截断标记；只限制展示，不改写实际 Call 参数。
+上例给 `read_file` 永久免询问权限，是可选策略示例，插件缺省配置不含这些 allow 规则。前缀规则示例：
+
+```toml
+[[rules]]
+tool = "mcp_github_*"
+action = "allow"
+````full` 会把参数值展示给宿主，可能包含敏感文本；`name-only` 隐藏参数值但也减少用户判断依据。超长展示会在 UTF-8 边界截断，并附截断标记；只限制展示，不改写实际 Call 参数。
 
 ## 审批流程
+
+规则匹配优先级依次为：精确工具名、最长的前缀规则、`default_action`。`*` 是前缀为空的全局规则，等价于 `default_action`，两者同时存在时以 `*` 规则为准。前缀匹配区分大小写，`mcp_github_*` 只匹配以 `mcp_github_` 开头的工具名，不匹配 `mcp_github` 本身（精确规则可单独添加）。这条规则让 [tool.mcp](../tool-mcp/README.md) 这类一次导出几十个工具的网关可以整体审批。
 
 `allow` 立即调用下游，`deny` 返回 `ErrApprovalDenied`。`ask` 用当前 `Invocation.Scope` 绑定 Channel，发出名为 `tool_approval`、级别为 warning 的交互，包含工具名、Call ID、参数展示和一个必填 `decision` choice：`allow`（Yes）或 `deny`（No）。
 

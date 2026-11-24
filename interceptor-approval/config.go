@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"sort"
 	"sync"
-	"unicode/utf8"
 
 	"github.com/pelletier/go-toml/v2"
 )
@@ -114,8 +113,8 @@ func normalizeConfig(cfg Config) (Config, error) {
 	}
 	rules := make(map[string]string, len(cfg.Rules))
 	for i, rule := range cfg.Rules {
-		if rule.Tool == "" || !utf8.ValidString(rule.Tool) {
-			return Config{}, fmt.Errorf("rules[%d].tool must be non-empty UTF-8: %w", i, ErrInvalidConfig)
+		if !validRuleTool(rule.Tool) {
+			return Config{}, fmt.Errorf("rules[%d].tool must be a tool name or a single trailing prefix wildcard: %w", i, ErrInvalidConfig)
 		}
 		if !validAction(rule.Action) {
 			return Config{}, fmt.Errorf("rules[%d].action is invalid: %w", i, ErrInvalidConfig)

@@ -107,7 +107,7 @@ The changed-plugin selection and matrix construction helpers are covered by
 standard-library unit tests in `scripts/tests/`.
 
 Python 3.11+ is needed for the validator's TOML parser (CI uses Python 3.12).
-CI uses Go 1.24.2; the race detector requires a supported C toolchain. In
+CI uses Go 1.26; the race detector requires a supported C toolchain. In
 PowerShell, set `$env:GOWORK = 'off'` before running the three Go commands;
 the inline environment syntax above is for a POSIX shell.
 

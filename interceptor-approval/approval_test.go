@@ -179,3 +179,63 @@ func TestResponseStringRejectsMalformedAnswers(t *testing.T) {
 		})
 	}
 }
+
+func TestApprovalPrefixRules(t *testing.T) {
+	normalized, err := normalizeConfig(Config{
+		DefaultAction: actionDeny,
+		Rules: []Rule{
+			{Tool: "mcp_github_*", Action: actionAllow},
+			{Tool: "mcp_github_delete_*", Action: actionAsk},
+			{Tool: "mcp_github_delete_repo", Action: actionDeny},
+			{Tool: "*", Action: actionAsk},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	configuration := prepareApprovalConfig(normalized)
+	cases := map[string]string{
+		"mcp_github_create_issue":  actionAllow,
+		"mcp_github_delete_repo":   actionDeny,
+		"mcp_github_delete_branch": actionAsk,
+		"mcp_filesystem_read":      actionAsk,
+	}
+	for name, want := range cases {
+		if got := actionFor(configuration, name); got != want {
+			t.Fatalf("actionFor(%q) = %q, want %q", name, got, want)
+		}
+	}
+}
+
+func TestApprovalPrefixRuleRejectsInteriorWildcard(t *testing.T) {
+	for _, tool := range []string{"a*b", "**", "mcp_*_delete"} {
+		if _, err := normalizeConfig(Config{Rules: []Rule{{Tool: tool, Action: actionAllow}}}); err == nil {
+			t.Fatalf("expected an error for %q", tool)
+		}
+	}
+	if _, err := normalizeConfig(Config{Rules: []Rule{{Tool: "*", Action: actionAllow}}}); err != nil {
+		t.Fatalf("the global wildcard should be valid: %v", err)
+	}
+}
+
+func TestApprovalPrefixRuleAvoidsInteraction(t *testing.T) {
+	exports, _, err := New(context.Background(), withState(t, Config{
+		DefaultAction: "deny",
+		Rules:         []Rule{{Tool: "mcp_github_*", Action: actionAllow}},
+	}, Dependencies{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var count int
+	next := terminal(&count)
+	result, err := exports.Interceptors[0].Invoke(context.Background(), tool.Invocation{Call: tool.Call{Name: "mcp_github_create_issue"}}, next)
+	if err != nil {
+		t.Fatalf("prefix allow failed: %v", err)
+	}
+	if text, ok := content.TextOnly(result.Content); !ok || text != "ok" || count != 1 {
+		t.Fatalf("result=%#v count=%d", result, count)
+	}
+	if _, err := exports.Interceptors[0].Invoke(context.Background(), tool.Invocation{Call: tool.Call{Name: "mcp_other"}}, next); !errors.Is(err, ErrApprovalDenied) {
+		t.Fatalf("unmatched tool error=%v", err)
+	}
+}

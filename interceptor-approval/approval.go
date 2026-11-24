@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"reflect"
 	"sort"
+	"strings"
 	"sync/atomic"
 	"unicode/utf8"
 
@@ -41,7 +42,10 @@ var (
 	ErrApprovalUnavailable = errors.New("tool approval unavailable")
 )
 
-// Rule overrides the configured default action for one exact tool name.
+// Rule overrides the configured default action for one tool name. A trailing
+// "*" matches every tool whose name starts with the preceding prefix, which
+// keeps a large generated tool set (for example an MCP gateway) configurable
+// without one rule per tool.
 type Rule struct {
 	Tool   string `toml:"tool"`
 	Action string `toml:"action"`
@@ -79,6 +83,14 @@ type approvalConfig struct {
 	display       string
 	maxDisplay    int
 	rules         map[string]string
+	// prefixes are prefix rules ordered from longest to shortest, so the most
+	// specific match wins.
+	prefixes []prefixRule
+}
+
+type prefixRule struct {
+	prefix string
+	action string
 }
 
 // New loads this Plugin's own configuration from its state scope. A missing
@@ -113,10 +125,60 @@ func New(ctx context.Context, deps Dependencies) (Exports, ingotabi.Cleanup, err
 
 func prepareApprovalConfig(config Config) *approvalConfig {
 	rules := make(map[string]string, len(config.Rules))
+	var prefixes []prefixRule
 	for _, rule := range config.Rules {
+		if prefix, ok := rulePrefix(rule.Tool); ok {
+			prefixes = append(prefixes, prefixRule{prefix: prefix, action: rule.Action})
+			continue
+		}
 		rules[rule.Tool] = rule.Action
 	}
-	return &approvalConfig{defaultAction: config.DefaultAction, display: config.ArgumentDisplay, maxDisplay: config.MaxDisplayBytes, rules: rules}
+	sort.Slice(prefixes, func(i, j int) bool {
+		if len(prefixes[i].prefix) != len(prefixes[j].prefix) {
+			return len(prefixes[i].prefix) > len(prefixes[j].prefix)
+		}
+		return prefixes[i].prefix < prefixes[j].prefix
+	})
+	return &approvalConfig{defaultAction: config.DefaultAction, display: config.ArgumentDisplay, maxDisplay: config.MaxDisplayBytes, rules: rules, prefixes: prefixes}
+}
+
+// rulePrefix reports whether a rule tool name is a prefix pattern and returns
+// its prefix. The empty prefix is the global "*" rule.
+func rulePrefix(tool string) (string, bool) {
+	if !strings.HasSuffix(tool, "*") {
+		return "", false
+	}
+	return strings.TrimSuffix(tool, "*"), true
+}
+
+// actionFor resolves the configured action for a tool name: an exact rule
+// wins, then the longest matching prefix rule, then the default action.
+func actionFor(configuration *approvalConfig, name string) string {
+	if override, ok := configuration.rules[name]; ok {
+		return override
+	}
+	for _, rule := range configuration.prefixes {
+		if strings.HasPrefix(name, rule.prefix) {
+			return rule.action
+		}
+	}
+	return configuration.defaultAction
+}
+
+// validRuleTool accepts an exact tool name or one trailing "*" prefix
+// wildcard. Interior wildcards are rejected rather than silently treated as
+// literal characters.
+func validRuleTool(tool string) bool {
+	if tool == "" || !utf8.ValidString(tool) {
+		return false
+	}
+	if !strings.Contains(tool, "*") {
+		return true
+	}
+	if strings.Count(tool, "*") != 1 || !strings.HasSuffix(tool, "*") {
+		return false
+	}
+	return true
 }
 
 func validAction(action string) bool {
@@ -132,10 +194,7 @@ func (a *approvalInterceptor) Invoke(ctx context.Context, invocation tool.Invoca
 	}
 	configuration := a.config.Load()
 	call := invocation.Call
-	action := configuration.defaultAction
-	if override, ok := configuration.rules[call.Name]; ok {
-		action = override
-	}
+	action := actionFor(configuration, call.Name)
 	switch action {
 	case actionAllow:
 		if next == nil {

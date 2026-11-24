@@ -26,6 +26,7 @@ use (
 	./skill-runtime
 	./tool-edit
 	./tool-image
+	./tool-mcp
 	./tool-runtime
 	./tool-shell
 	./tool-subagent

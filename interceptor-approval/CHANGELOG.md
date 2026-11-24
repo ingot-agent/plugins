@@ -16,6 +16,12 @@ All notable changes to this plugin are documented in this file.
   security fixes. This is a build requirement only; no contract, configuration
   or runtime behavior changed.
 
+### Added
+
+- Support prefix rules (`*` at the end of `rules[].tool`) so a generated tool
+  set such as an MCP gateway can be approved as a group. Exact names win, then
+  the longest matching prefix, then `default_action`.
+
 ### Changed
 
 - Apply approval policy updates to the running interceptor immediately and
