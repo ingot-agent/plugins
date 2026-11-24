@@ -86,7 +86,7 @@ func transientHTTP2Error(err error, depth int) bool {
 	}
 	if value.Kind() == reflect.Struct {
 		kind := value.Type()
-		stream := (kind.PkgPath() == "net/http" && kind.Name() == "http2StreamError") || (kind.PkgPath() == "golang.org/x/net/http2" && kind.Name() == "StreamError")
+		stream := (kind.PkgPath() == "net/http" && kind.Name() == "http2StreamError") || (kind.PkgPath() == "net/http/internal/http2" && kind.Name() == "StreamError") || (kind.PkgPath() == "golang.org/x/net/http2" && kind.Name() == "StreamError")
 		goaway := (kind.PkgPath() == "net/http" && kind.Name() == "http2GoAwayError") || (kind.PkgPath() == "golang.org/x/net/http2" && kind.Name() == "GoAwayError")
 		if stream || goaway {
 			field := "Code"

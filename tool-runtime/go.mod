@@ -3,7 +3,7 @@ module github.com/ingot-agent/plugins/tool-runtime
 go 1.26.0
 
 require (
-	github.com/ingot-agent/sdk v0.2.10
+	github.com/ingot-agent/sdk v0.2.22
 	github.com/pelletier/go-toml/v2 v2.2.4
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
 )
@@ -11,6 +11,6 @@ require (
 require github.com/dlclark/regexp2 v1.12.0 // indirect
 
 require (
-	github.com/ingot-agent/ingot-abi v0.1.0
+	github.com/ingot-agent/ingot-abi v0.1.1
 	golang.org/x/text v0.27.0 // indirect
 )

@@ -2,7 +2,14 @@
 
 All notable changes to this plugin are documented in this file.
 
-## Unreleased
+## 0.2.0 - 2026-11-24
+
+### Build
+
+- Require Go 1.26.0 or newer. Go 1.24 and Go 1.25 are both out of support, so
+  the previous 1.24 floor advertised a toolchain line that no longer receives
+  security fixes. This is a build requirement only; no contract, configuration
+  or runtime behavior changed.
 
 - Require Go 1.26.0 or newer. Go 1.24 and Go 1.25 are both out of support, so
   the previous 1.24 floor advertised a toolchain line that no longer receives
@@ -47,6 +54,11 @@ dependency.
 
 ### Fixed
 
+- Recognise the HTTP/2 stream error type used by Go 1.27, which moved the
+  transport to `net/http/internal/http2` and renamed the type from
+  `http2StreamError` to `StreamError`. Retry classification matched the old
+  private type names only, so a stream reset after partial output was treated as
+  permanent and no longer retried. Builds on Go 1.26 are unaffected.
 - Accept tool-result images in Complete and Stream requests. Keep text and call
   IDs in tool messages, and attach labeled images as user messages after each
   consecutive group of tool results without mutating SDK history.
