@@ -24,8 +24,9 @@ a Core release or another plugin's tag does not release this module.
    first and update the module dependency before tagging the plugin.
 8. Verify intended compositions as well as isolated module tests. In particular,
    check the Core profile and this repository's `collections.toml` separately:
-   both currently pin `v0.1.0` modules and do not automatically follow branch
-   changes or new plugin tags. Updating those recipes requires explicit review.
+   both pin exact released modules and do not automatically follow branch
+   changes or new plugin tags, so moving them to a new release line is an
+   explicit review step rather than a consequence of tagging.
    [Complete local recipes](docs/recipes.md) provide three graph/build baselines
    and business acceptance steps. Their local SDK/ABI replacements must be
    removed for a released-input check: execute from an isolated directory with

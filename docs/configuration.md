@@ -7,20 +7,20 @@ argument, or provide a secret store.
 ## Match the installed plugin version
 
 The activation matrix and module-group commands below describe the current
-plugin source. Core's shipped profiles still pin plugin `v0.1.0`, whose model
-configuration and Operation names differ:
+plugin source and the `v0.2.0` release line. Plugin `v0.1.0` modules, shipped
+before this line, used different Operation names and never applied model
+configuration live:
 
 | Installed plugins | Browser configuration Operations | Activation |
 |---|---|---|
-| Profile's released `v0.1.0` modules | Group `configuration`, names `model.openai-compatible.config`, `model.runtime.config`, `agent.default.config`, `app.backend.config` | Follow `restart_required`; provider changes require restart to rebuild the provider directory |
-| Current checkout described by this branch | `/model-openai-compatible config`, `/model-runtime config`, `/agent-default config`, `/app-webui config` | The model/agent Operations publish live settings; changed WebUI server settings require restart |
+| Profile's released `v0.2.0` modules, and current checkout | Groups `model-openai-compatible`, `model-runtime`, `agent-default`, `app-webui`, each with local name `config` | The model/agent Operations publish live settings; changed WebUI server settings require restart |
+| Older `v0.1.0` modules | Group `configuration`, names `model.openai-compatible.config`, `model.runtime.config`, `agent.default.config`, `app.backend.config` | Follow `restart_required`; provider changes require restart to rebuild the provider directory |
 
-For a new `v0.1.0` Runtime, configure **one provider first**, run
-`ingot restart <runtime>`, then configure the model-runtime default provider and
-model, and restart again when requested. Set an explicit default before adding
-more providers: the older runtime can fail startup with multiple providers and
-no default. Discover the actual Operation definitions in the browser rather
-than assuming names or activation behavior from another module version.
+For a new Runtime, configure **one provider first**, then configure the
+model-runtime default provider and model. Set an explicit default before adding
+more providers: a runtime can fail startup with multiple providers and no
+default. Discover the actual Operation definitions in the browser rather than
+assuming names or activation behavior from another module version.
 Use the configuration Operation's `restart_required` result here. Core's
 `runtime show` flag describes Image/binding drift and does not detect whether
 a plugin has saved settings that require restarting its existing Image.
