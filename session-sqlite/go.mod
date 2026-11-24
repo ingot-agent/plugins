@@ -1,6 +1,6 @@
 module github.com/ingot-agent/plugins/session-sqlite
 
-go 1.24.0
+go 1.26.0
 
 require (
 	github.com/ingot-agent/ingot-abi v0.1.0

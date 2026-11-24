@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Require Go 1.26.0 or newer. Go 1.24 and Go 1.25 are both out of support, so
+  the previous 1.24 floor advertised a toolchain line that no longer receives
+  security fixes. This is a build requirement only; no contract, configuration
+  or runtime behavior changed.
+
 - Initial `logger.standard` module implementing `logging.Logger` from the
   optional SDK contract.
 - Level filtering (`debug`, `info`, `warn`, `error`), `text` and `json`

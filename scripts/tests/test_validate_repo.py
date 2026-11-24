@@ -23,12 +23,12 @@ class WorkspaceValidationTests(unittest.TestCase):
             return errors
 
     def test_go_version_without_use_is_valid(self) -> None:
-        self.assertEqual(self.validate("go 1.24.2\n"), [])
+        self.assertEqual(self.validate("go 1.26.0\n"), [])
 
     def test_first_level_plugin_use_block_is_valid(self) -> None:
         self.assertEqual(
             self.validate(
-                "go 1.24.2\n\nuse (\n\t./tool-edit\n\t./tool-shell\n)\n",
+                "go 1.26.0\n\nuse (\n\t./tool-edit\n\t./tool-shell\n)\n",
                 ("tool-edit", "tool-shell"),
             ),
             [],
@@ -36,7 +36,7 @@ class WorkspaceValidationTests(unittest.TestCase):
 
     def test_parent_external_nested_and_unknown_paths_are_rejected(self) -> None:
         errors = self.validate(
-            "go 1.24.2\n\nuse (\n"
+            "go 1.26.0\n\nuse (\n"
             "\t../ingot\n"
             "\tD:/external/plugin\n"
             "\t./group/tool-shell\n"
@@ -48,7 +48,7 @@ class WorkspaceValidationTests(unittest.TestCase):
 
     def test_duplicate_use_is_rejected(self) -> None:
         errors = self.validate(
-            "go 1.24.2\nuse ./tool-shell\nuse ./tool-shell\n",
+            "go 1.26.0\nuse ./tool-shell\nuse ./tool-shell\n",
             ("tool-shell",),
         )
         self.assertEqual(len(errors), 1)
@@ -57,7 +57,7 @@ class WorkspaceValidationTests(unittest.TestCase):
     def test_sibling_contract_replacements_are_valid(self) -> None:
         self.assertEqual(
             self.validate(
-                "go 1.24.2\nuse ./tool-shell\n"
+                "go 1.26.0\nuse ./tool-shell\n"
                 "replace github.com/ingot-agent/sdk => ../sdk\n"
                 "replace github.com/ingot-agent/ingot-abi => ../ingot-abi\n",
                 ("tool-shell",),
@@ -74,11 +74,11 @@ class WorkspaceValidationTests(unittest.TestCase):
             "replace github.com/ingot-agent/sdk => github.com/example/sdk v1.0.0",
         ):
             with self.subTest(directive=directive):
-                self.assertEqual(len(self.validate("go 1.24.2\n" + directive + "\n")), 1)
+                self.assertEqual(len(self.validate("go 1.26.0\n" + directive + "\n")), 1)
 
     def test_duplicate_contract_replacement_is_rejected(self) -> None:
         errors = self.validate(
-            "go 1.24.2\n"
+            "go 1.26.0\n"
             "replace github.com/ingot-agent/sdk => ../sdk\n"
             "replace github.com/ingot-agent/sdk => ../sdk\n"
         )

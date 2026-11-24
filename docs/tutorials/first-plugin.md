@@ -13,7 +13,7 @@ SDK `v0.2.10`、ABI `v0.1.0`；它们的独立编译与完整组合验证是两�
 
 ## 1. 准备目录和工具
 
-需要 Go 1.24.2 或更新版本、当前 Core CLI，以及并排的 `plugins`、`sdk`、
+需要 Go 1.26.0 或更新版本、当前 Core CLI，以及并排的 `plugins`、`sdk`、
 `ingot-abi` 源码。Core 安装/编译见
 [使用指南](https://github.com/ingot-agent/ingot/blob/main/docs/USAGE.md)。
 不要把教程模块放进官方 plugins 仓库顶层：它们是独立第三方模块，目录安排如下。
@@ -53,7 +53,7 @@ Builder 会另外从工作目录向上查找 `go.work` 中的本地 replacement�
 ```go
 module example.com/ingot/tool-greet
 
-go 1.24.2
+go 1.26.0
 
 require (
     github.com/ingot-agent/ingot-abi v0.1.0
@@ -223,7 +223,7 @@ replacement。具备对应平台 race/C 工具链时再运行 `GOWORK=off go tes
 ```go
 module example.com/ingot/demo-host
 
-go 1.24.2
+go 1.26.0
 
 require (
     github.com/ingot-agent/ingot-abi v0.1.0
@@ -329,7 +329,7 @@ func run(ctx context.Context, runtime tool.Runtime) error {
 <!-- tutorial-file: go.work -->
 
 ```go
-go 1.24.2
+go 1.26.0
 
 use (
     ./tool-greet

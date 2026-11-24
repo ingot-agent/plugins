@@ -181,8 +181,8 @@ def validate_workspace(
     if in_use_block:
         errors.append("go.work: unterminated use block")
 
-    if len(go_versions) != 1 or go_versions[0][1] != "1.24.2":
-        errors.append("go.work must declare exactly one Go version: go 1.24.2")
+    if len(go_versions) != 1 or go_versions[0][1] != "1.26.0":
+        errors.append("go.work must declare exactly one Go version: go 1.26.0")
 
     plugin_names = {plugin.name for plugin in plugins}
     seen_use_paths: set[str] = set()

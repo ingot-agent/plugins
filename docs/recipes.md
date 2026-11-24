@@ -59,11 +59,11 @@ work/
     .ingot/                # 本页专用 Managed Home
 ```
 
-需要 Go 1.24.2+ 和当前 Core CLI。完整构建第一次需要联网下载 Go 依赖，
+需要 Go 1.26.0+ 和当前 Core CLI。完整构建第一次需要联网下载 Go 依赖，
 模型 API Key 不参与解析和构建。先在 `recipe-lab/go.work` 保存：
 
 ```go
-go 1.24.2
+go 1.26.0
 
 use ../ingot-agent
 
