@@ -85,7 +85,7 @@ func (t *mcpTool) Invoke(ctx context.Context, invocation tool.Invocation) (tool.
 		// A transport-level failure means the session may be dead. Retire it so
 		// the next call reconnects instead of failing forever, and record the
 		// outage for backoff and mcp_status.
-		if runtime := t.platform.runtimeFor(t.server); runtime.invalidate(held) {
+		if runtime := t.platform.runtimeFor(t.server); runtime.invalidate(held, err) {
 			stderr := held.conn.stderr.String()
 			if stderr != "" {
 				t.platform.logger.Warn(ctx, "MCP server closed its transport",

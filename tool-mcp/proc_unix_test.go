@@ -140,3 +140,51 @@ func TestCleanupTerminatesChildrenImmediately(t *testing.T) {
 	}
 	waitForProcessExit(t, pid)
 }
+
+// TestCleanupIsPromptDuringHandshake covers shutdown while a handshake is still
+// running: Cleanup must terminate that child itself instead of waiting for the
+// connect timeout, and must not return while it is still alive.
+func TestCleanupIsPromptDuringHandshake(t *testing.T) {
+	dir := t.TempDir()
+	pidFile := filepath.Join(dir, "slow-child.pid")
+	script := filepath.Join(dir, "silent.sh")
+	body := "#!/bin/sh\necho $$ > " + pidFile + "\nexec sleep 120\n"
+	if err := os.WriteFile(script, []byte(body), 0o700); err != nil {
+		t.Fatalf("write script: %v", err)
+	}
+	config, err := normalizeConfig(Config{Servers: []ServerConfig{{
+		Name:                   "silent",
+		Transport:              transportStdio,
+		Command:                script,
+		ConnectTimeoutSeconds:  60,
+		ShutdownTimeoutSeconds: 1,
+	}}})
+	if err != nil {
+		t.Fatalf("normalizeConfig: %v", err)
+	}
+	instance := newPlatform(t.TempDir(), ingotabiNone(), discardLogger(), nil, config)
+
+	handshake := make(chan struct{})
+	go func() {
+		defer close(handshake)
+		_, _ = instance.acquire(context.Background(), "silent")
+	}()
+	pid := waitForPIDFile(t, pidFile)
+
+	start := time.Now()
+	instance.closeAll()
+	elapsed := time.Since(start)
+	if elapsed > 10*time.Second {
+		t.Fatalf("cleanup waited %s for a hung handshake", elapsed)
+	}
+	// Cleanup must not return while the child is alive.
+	if processExists(pid) {
+		_ = syscall.Kill(pid, syscall.SIGKILL)
+		t.Fatalf("child %d was still alive when cleanup returned", pid)
+	}
+	select {
+	case <-handshake:
+	case <-time.After(30 * time.Second):
+		t.Fatal("the handshake never returned")
+	}
+}

@@ -76,7 +76,7 @@ func TestInvalidateRetiresDeadSession(t *testing.T) {
 	runtime := &serverRuntime{name: "demo"}
 	held := newLease(&connection{}, nil)
 	runtime.session = held
-	if !runtime.invalidate(held) {
+	if !runtime.invalidate(held, errors.New("connection reset")) {
 		t.Fatal("the live session should have been detached")
 	}
 	if runtime.session != nil {
@@ -85,10 +85,23 @@ func TestInvalidateRetiresDeadSession(t *testing.T) {
 	if held.acquireRef() {
 		t.Fatal("a retired lease must not accept new users")
 	}
+	// The failure is recorded so the next call backs off instead of re-dialling
+	// on every call, and status reports the outage.
+	runtime.mu.Lock()
+	failures, retryAt, lastError := runtime.failures, runtime.retryAt, runtime.lastError
+	runtime.mu.Unlock()
+	if failures != 1 || retryAt.IsZero() || lastError == "" {
+		t.Fatalf("failure state not recorded: failures=%d retryAt=%v lastError=%q", failures, retryAt, lastError)
+	}
+	status := runtime.status(serverStatus{Name: "demo"})
+	if status.Status != "backoff" || status.Connected || status.ConsecutiveErrors != 1 {
+		t.Fatalf("status = %#v", status)
+	}
+
 	// The call that held the lease still releases it; a retired lease closes the
 	// connection at that point.
 	held.release()
-	if runtime.invalidate(held) {
+	if runtime.invalidate(held, errors.New("connection reset")) {
 		t.Fatal("a detached session must not be reported as live")
 	}
 }

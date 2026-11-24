@@ -314,3 +314,40 @@ func platformOf(t *testing.T, exports Exports) *platform {
 	t.Fatal("no exported tool exposes the platform")
 	return nil
 }
+
+// TestSlotResizeDoesNotExceedTheLimit covers a configuration change that lowers
+// max_concurrent_calls while calls are running: the limiter must not be
+// replaced by a second one, which would allow holders plus new callers to exceed
+// the configured limit.
+func TestSlotResizeDoesNotExceedTheLimit(t *testing.T) {
+	runtime := &serverRuntime{name: "demo"}
+	releaseWide, err := runtime.acquireSlot(context.Background(), 4)
+	if err != nil {
+		t.Fatalf("acquireSlot: %v", err)
+	}
+
+	granted := make(chan struct{})
+	go func() {
+		release, err := runtime.acquireSlot(context.Background(), 1)
+		if err == nil {
+			release()
+			close(granted)
+		}
+	}()
+
+	select {
+	case <-granted:
+		t.Fatal("a lowered limit was bypassed by a second limiter")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	releaseWide()
+	select {
+	case <-granted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the waiting call never proceeded")
+	}
+	if runtime.slotInUse != 0 {
+		t.Fatalf("limiter state leaked: in use = %d", runtime.slotInUse)
+	}
+}

@@ -3,6 +3,7 @@ package toolmcp
 import (
 	"context"
 	"fmt"
+	"os/exec"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -37,9 +38,9 @@ type platform struct {
 	mu         sync.Mutex
 	servers    map[string]*serverRuntime
 	discoverMu sync.Mutex
-	// background tracks abandoned handshakes that are still closing their
-	// transport, so Cleanup can wait for the child processes to disappear.
-	background sync.WaitGroup
+	// children holds every live child process, including one whose handshake is
+	// still running, so Cleanup can terminate it instead of leaving it orphaned.
+	children map[*exec.Cmd]struct{}
 }
 
 func newPlatform(stateDir string, httpClient ingotabi.Optional[httpx.Client], logger logging.Logger, observer observation.Consumer, config Config) *platform {
@@ -49,6 +50,7 @@ func newPlatform(stateDir string, httpClient ingotabi.Optional[httpx.Client], lo
 		logger:      logger,
 		observation: observer,
 		servers:     make(map[string]*serverRuntime),
+		children:    make(map[*exec.Cmd]struct{}),
 	}
 	instance.setConfig(config)
 	return instance
@@ -58,6 +60,41 @@ func (p *platform) setConfig(config Config) {
 	normalized := config
 	p.config.Store(&normalized)
 	p.generation.Add(1)
+}
+
+// registerChild records a child process that Cleanup may need to terminate.
+func (p *platform) registerChild(command *exec.Cmd) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.closed.Load() {
+		return false
+	}
+	p.children[command] = struct{}{}
+	return true
+}
+
+// unregisterChild drops the registration once the child is gone or the
+// connection owns it.
+func (p *platform) unregisterChild(command *exec.Cmd) {
+	p.mu.Lock()
+	delete(p.children, command)
+	p.mu.Unlock()
+}
+
+// waitForChildren waits, within a bound, until every registered child is gone.
+// Registration is removed by whoever finishes with the process, so this joins
+// abandoned handshakes without a second lifecycle mechanism.
+func (p *platform) waitForChildren(deadline time.Duration) {
+	expired := time.Now().Add(deadline)
+	for {
+		p.mu.Lock()
+		remaining := len(p.children)
+		p.mu.Unlock()
+		if remaining == 0 || time.Now().After(expired) {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 }
 
 // currentGeneration identifies the configuration a decision was made against.
@@ -124,31 +161,31 @@ func (p *platform) markStale() {
 	}
 }
 
-// closeAll terminates every session and waits, within a bound, for abandoned
+// closeAll terminates every session and waits, within a bound, for in-flight
 // handshakes to finish terminating their child processes. It is the instance
 // Cleanup, so it must not rely on a later lease release.
 func (p *platform) closeAll() {
-	p.closed.Store(true)
 	p.mu.Lock()
+	p.closed.Store(true)
 	runtimes := make([]*serverRuntime, 0, len(p.servers))
 	for _, runtime := range p.servers {
 		runtimes = append(runtimes, runtime)
+	}
+	children := make([]*exec.Cmd, 0, len(p.children))
+	for command := range p.children {
+		children = append(children, command)
 	}
 	p.mu.Unlock()
 	for _, runtime := range runtimes {
 		runtime.close()
 	}
-
-	done := make(chan struct{})
-	go func() {
-		p.background.Wait()
-		close(done)
-	}()
-	select {
-	case <-done:
-	case <-time.After(shutdownJoinTimeout):
-		// A transport that never returns must not block shutdown forever.
+	// A handshake may still be inside Connect; terminate its child directly
+	// instead of waiting for its connect timeout.
+	for _, command := range children {
+		killProcessGroup(command)
 	}
+
+	p.waitForChildren(shutdownJoinTimeout)
 }
 
 // serverStatus is the secret-free connection state reported by mcp_status.
@@ -199,7 +236,11 @@ type serverRuntime struct {
 
 	mu      sync.Mutex
 	session *lease
-	slots   chan struct{}
+	// slotInUse counts in-flight calls; slotNotify is closed when a slot frees.
+	// A dynamic count lets a changed max_concurrent_calls take effect for later
+	// calls without replacing a limiter that is already in use.
+	slotInUse  int
+	slotNotify chan struct{}
 
 	connectMu sync.Mutex
 
@@ -214,22 +255,38 @@ type serverRuntime struct {
 // servers are single-threaded, so this bound is a correctness aid rather than
 // only a load limit.
 func (r *serverRuntime) acquireSlot(ctx context.Context, limit int) (func(), error) {
-	if limit < 1 {
-		limit = 1
-	}
-	r.mu.Lock()
-	if r.slots == nil || cap(r.slots) != limit {
-		r.slots = make(chan struct{}, limit)
-	}
-	slots := r.slots
-	r.mu.Unlock()
+	for {
+		r.mu.Lock()
+		if r.slotInUse < limit {
+			r.slotInUse++
+			r.mu.Unlock()
+			return r.releaseSlot, nil
+		}
+		if r.slotNotify == nil {
+			r.slotNotify = make(chan struct{})
+		}
+		freed := r.slotNotify
+		r.mu.Unlock()
 
-	select {
-	case slots <- struct{}{}:
-		return func() { <-slots }, nil
-	case <-ctx.Done():
-		return nil, ctx.Err()
+		select {
+		case <-freed:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
 	}
+}
+
+// releaseSlot frees one concurrency slot and wakes every waiter.
+func (r *serverRuntime) releaseSlot() {
+	r.mu.Lock()
+	if r.slotInUse > 0 {
+		r.slotInUse--
+	}
+	if r.slotNotify != nil {
+		close(r.slotNotify)
+		r.slotNotify = nil
+	}
+	r.mu.Unlock()
 }
 
 func (r *serverRuntime) markStale() {
@@ -428,7 +485,7 @@ func (r *serverRuntime) acquire(ctx context.Context, p *platform, server ServerC
 // invalidate reports that a live session is unusable after a transport failure,
 // so the next call reconnects and the backoff and status state reflect the
 // outage. Without this a crashed server would stay "connected" forever.
-func (r *serverRuntime) invalidate(handle *lease) bool {
+func (r *serverRuntime) invalidate(handle *lease, cause error) bool {
 	r.mu.Lock()
 	attached := r.session == handle
 	if attached {
@@ -436,6 +493,11 @@ func (r *serverRuntime) invalidate(handle *lease) bool {
 	}
 	r.mu.Unlock()
 	handle.retire()
+	if attached && cause != nil {
+		// Without this a server that dies mid-call would be re-dialled on every
+		// call with no backoff, and status would keep reporting no failures.
+		r.recordFailure(cause)
+	}
 	return attached
 }
 

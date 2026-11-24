@@ -38,6 +38,7 @@ type connection struct {
 	session   *mcp.ClientSession
 	command   *exec.Cmd
 	stderr    *ringBuffer
+	platform  *platform
 	closeOnce sync.Once
 	closeErr  error
 }
@@ -59,6 +60,9 @@ func (c *connection) Close() error {
 			}
 		} else {
 			killProcessGroup(c.command)
+		}
+		if c.command != nil && c.platform != nil {
+			c.platform.unregisterChild(c.command)
 		}
 		c.closeErr = errors.Join(closeErrors...)
 	})
@@ -104,15 +108,27 @@ func (p *platform) dialStdio(ctx context.Context, client *mcp.Client, server Ser
 	command.Stderr = stderr
 	configureProcess(command)
 
+	if !p.registerChild(command) {
+		return nil, fmt.Errorf("connect to stdio server %q: plugin is shutting down", server.Name)
+	}
 	transport := &mcp.CommandTransport{
 		Command:           command,
 		TerminateDuration: time.Duration(server.ShutdownTimeoutSeconds) * time.Second,
 	}
-	session, err := connectBounded(ctx, client, transport, p, func() { killProcessGroup(command) })
+	session, abandoned, err := connectBounded(ctx, client, transport, func() {
+		killProcessGroup(command)
+		p.unregisterChild(command)
+	})
 	if err != nil {
+		// On abandonment the cleanup goroutine owns the registration; releasing
+		// it here would let Cleanup return while the child is still being torn
+		// down.
+		if !abandoned {
+			p.unregisterChild(command)
+		}
 		return nil, fmt.Errorf("connect to stdio server %q: %w", server.Name, err)
 	}
-	return &connection{session: session, command: command, stderr: stderr}, nil
+	return &connection{session: session, command: command, stderr: stderr, platform: p}, nil
 }
 
 // connectBounded performs the transport handshake but does not make the caller
@@ -125,9 +141,8 @@ func connectBounded(
 	ctx context.Context,
 	client *mcp.Client,
 	transport mcp.Transport,
-	p *platform,
 	onAbandon func(),
-) (*mcp.ClientSession, error) {
+) (*mcp.ClientSession, bool, error) {
 	type outcome struct {
 		session *mcp.ClientSession
 		err     error
@@ -141,15 +156,9 @@ func connectBounded(
 
 	select {
 	case result := <-results:
-		return result.session, result.err
+		return result.session, false, result.err
 	case <-ctx.Done():
-		if p != nil {
-			p.background.Add(1)
-		}
 		go func() {
-			if p != nil {
-				defer p.background.Done()
-			}
 			result := <-results
 			if result.session != nil {
 				_ = result.session.Close()
@@ -158,7 +167,7 @@ func connectBounded(
 				onAbandon()
 			}
 		}()
-		return nil, fmt.Errorf("handshake did not complete within %s: %w",
+		return nil, true, fmt.Errorf("handshake did not complete within %s: %w",
 			time.Since(started).Round(10*time.Millisecond), ctx.Err())
 	}
 }
@@ -179,7 +188,7 @@ func (p *platform) dialHTTP(ctx context.Context, client *mcp.Client, server Serv
 		DisableStandaloneSSE: true,
 		MaxEventSize:         maxEventBytes,
 	}
-	session, err := connectBounded(ctx, client, transport, p, nil)
+	session, _, err := connectBounded(ctx, client, transport, nil)
 	if err != nil {
 		return nil, fmt.Errorf("connect to http server %q: %w", server.Name, err)
 	}
