@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.2.0 - 2026-11-24
+
+### Build
 
 - Require Go 1.26.0 or newer. Go 1.24 and Go 1.25 are both out of support, so
   the previous 1.24 floor advertised a toolchain line that no longer receives

@@ -6,9 +6,9 @@
 最后说明如何把同一个工具加入浏览器 Agent。
 
 教程面向当前 `>=0.3.0 <0.4.0` Builder 构造协议。工具和宿主的 Go 模块固定
-SDK `v0.2.10`、ABI `v0.1.0`；它们的独立编译与完整组合验证是两项检查。
+SDK `v0.2.22`、ABI `v0.1.1`；它们的独立编译与完整组合验证是两项检查。
 完整组合使用当前本地 `tool-runtime`、SDK 和 ABI checkout，不能据此宣布旧
-`tool-runtime/v0.1.0` 具有当前分支的接口。版本选择见
+`tool-runtime/v0.2.0` 具有当前分支的接口。版本选择见
 [SDK 迁移说明](https://github.com/ingot-agent/sdk/blob/main/docs/MIGRATIONS.md)。
 
 ## 1. 准备目录和工具
@@ -56,8 +56,8 @@ module example.com/ingot/tool-greet
 go 1.26.0
 
 require (
-    github.com/ingot-agent/ingot-abi v0.1.0
-    github.com/ingot-agent/sdk v0.2.10
+    github.com/ingot-agent/ingot-abi v0.1.1
+    github.com/ingot-agent/sdk v0.2.22
 )
 ```
 
@@ -226,8 +226,8 @@ module example.com/ingot/demo-host
 go 1.26.0
 
 require (
-    github.com/ingot-agent/ingot-abi v0.1.0
-    github.com/ingot-agent/sdk v0.2.10
+    github.com/ingot-agent/ingot-abi v0.1.1
+    github.com/ingot-agent/sdk v0.2.22
 )
 ```
 

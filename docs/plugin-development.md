@@ -61,7 +61,7 @@ func New(ctx context.Context, deps Dependencies) (Exports, ingotabi.Cleanup, err
 This is a construction skeleton, not a complete agent or application. Add the
 capabilities the component actually provides and consumes. There is no `Config`
 argument; the older three-argument signature is rejected by the current Builder.
-Use the ABI version supported by Core (currently `v0.1.0`) and check the
+Use the ABI version supported by Core (currently `v0.1.1`) and check the
 [current manifest reference](https://github.com/ingot-agent/ingot/blob/main/docs/FILE_FORMATS.md).
 
 ## Typed capabilities
