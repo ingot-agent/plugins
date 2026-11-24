@@ -26,6 +26,8 @@ ingot start web
 
 当前面向可信的本机单用户环境，没有登录、多租户隔离或公网部署保护。HTTP API 能创建执行、修改会话、调用配置 Operation 和响应审批；请保持回环监听，不要直接暴露至局域网或互联网。Workspace 绑定不提供文件系统或网络沙箱。
 
+用手机通过端口转发（如 `ssh -L 7316:127.0.0.1:7316`）或局域网地址打开 `http://<host>:7316` 时，浏览器把页面视为非安全上下文，`navigator.clipboard` 等只在安全上下文暴露的 API 不可用，复制按钮只会提示失败。Turn 提交的 requestId 因此不依赖 `crypto.randomUUID`：优先使用它，缺失时回退到在不安全上下文同样可用的 `crypto.getRandomValues`。
+
 ## 工作区能力
 
 - 应用正常启动时在插件 state 目录下创建 `workspace/` 作为默认工作区，并通过

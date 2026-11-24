@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import { command, request } from '../api'
 import type { Attachment, Interaction, InteractionState, Message, ModelSelectionSnapshot, OperationInvocation, Session, Snapshot, Turn } from '../protocol'
@@ -27,6 +27,7 @@ const selection = (revision: string, model: string): ModelSelectionSnapshot => (
 })
 
 beforeEach(() => { setActivePinia(createPinia()); vi.resetAllMocks() })
+afterEach(() => { vi.unstubAllGlobals() })
 
 it('associates an interaction delivered before its runtime submission snapshot', () => {
   const runtime = useRuntime()
@@ -228,6 +229,17 @@ describe('runtime request and event ordering', () => {
     await expect(runtime.send('s', 'hello', [])).rejects.toThrow('Connection lost')
     expect(command).toHaveBeenCalledTimes(1)
     expect(runtime.turns).toEqual({})
+  })
+
+  it('submits over plain HTTP where crypto.randomUUID is unavailable', async () => {
+    const real = globalThis.crypto
+    vi.stubGlobal('crypto', { getRandomValues: (bytes: Uint8Array) => real.getRandomValues(bytes) })
+    const runtime = useRuntime()
+    vi.mocked(command).mockResolvedValueOnce(turnSnapshot({ id: 'q', status: 'queued', started: false, persisted: false, sdkTurnId: undefined }))
+    await runtime.send('s', 'hello', [])
+    const request = vi.mocked(command).mock.calls[0][2] as { requestId: string }
+    expect(request.requestId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/)
+    expect(runtime.queued('s')).toHaveLength(1)
   })
 
   it('reuses an uncertain request ID on explicit retry and starts a new ID after acceptance', async () => {

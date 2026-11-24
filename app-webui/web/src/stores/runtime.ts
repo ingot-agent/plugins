@@ -4,6 +4,7 @@ import { APIError, command, errorMessage, isAbort, request, segment } from '../a
 import { subscribe } from '../sse'
 import { acceptTurn, bootstrapTurns, indexById, reduceOperation, reduceTurn } from '../state'
 import { equalInteractionValue } from '../forms'
+import { newRequestId } from '../ids'
 import { parseContextUsage } from '../usage'
 import type { Attachment, ContextUsage, Followup, FollowupAnchor, Interaction, InteractionState, LiveTurn, Message, ModelSelection, ModelSelectionSnapshot, Notice, Operation, OperationInvocation, Part, Session, Snapshot, TraceEvent, Turn, TurnQueue, WebEvent, WorkspaceSelection } from '../protocol'
 
@@ -470,7 +471,7 @@ export const useRuntime = defineStore('runtime', () => {
     const signature = JSON.stringify({ input, attachments: owned })
     let submission = uncertainSubmissions.get(sessionId)
     if (!submission || submission.signature !== signature) {
-      submission = { signature, requestId: crypto.randomUUID() }
+      submission = { signature, requestId: newRequestId() }
       uncertainSubmissions.set(sessionId, submission)
     }
     let result: Turn
