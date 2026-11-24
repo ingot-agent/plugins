@@ -2,244 +2,245 @@ package contextcompact
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"unicode/utf8"
+	"time"
 
-	"github.com/ingot-agent/sdk/content"
+	"github.com/ingot-agent/plugins/context-compact/internal/engine"
 	"github.com/ingot-agent/sdk/contextwindow"
+	"github.com/ingot-agent/sdk/logging"
 	"github.com/ingot-agent/sdk/model"
+	"github.com/ingot-agent/sdk/observation"
 	"github.com/ingot-agent/sdk/usage"
 )
 
-func (r *compactor) Compact(ctx context.Context, input contextwindow.CompactionRequest) (contextwindow.CompactionResult, error) {
-	snapshot := &compactor{model: r.model, counter: r.counter, resolver: r.resolver, interactions: r.interactions,
-		logger: r.logger, store: r.store, cfg: *r.config.Load(), gates: r.gates}
-	return snapshot.compact(ctx, input)
-}
+// selectionLabel is used for telemetry when the request carries no explicit
+// provider or model yet.
+const unselectedLabel = "(unresolved)"
 
-func (r *compactor) compact(ctx context.Context, input contextwindow.CompactionRequest) (contextwindow.CompactionResult, error) {
+var _ contextwindow.Compactor = (*compactor)(nil)
+
+// Compact prepares a bounded message context for one model invocation.
+//
+// The flow is linear and has exactly one error path, for a structurally invalid
+// history. Everything else degrades:
+//
+//  1. measure the request and apply the previous summary, if it still matches
+//  2. shrink deterministically until it fits (elision, then drops)
+//  3. summarize whatever step 2 dropped, best effort
+//  4. persist the new summary and publish an estimate
+//
+// Step 3 and 4 can fail without affecting the result of step 2, which is why a
+// summarizer outage costs recall rather than the whole turn.
+func (r *compactor) Compact(ctx context.Context, input contextwindow.CompactionRequest) (contextwindow.CompactionResult, error) {
 	if ctx == nil {
 		return contextwindow.CompactionResult{}, fmt.Errorf("nil context: %w", ErrInvalidRequest)
 	}
 	if err := ctx.Err(); err != nil {
 		return contextwindow.CompactionResult{}, err
 	}
-	if input.SessionID == "" || input.RootSessionID == "" || !utf8.ValidString(string(input.SessionID)) || !utf8.ValidString(string(input.RootSessionID)) {
-		return contextwindow.CompactionResult{}, fmt.Errorf("root and current session identities are required: %w", ErrInvalidRequest)
-	}
-	request := cloneRequest(input.Invocation)
-	layout, err := inspectRequest(request, r.cfg.recentRounds)
+	cfg := r.loader.load()
+
+	layout, err := engine.Inspect(input.Invocation)
 	if err != nil {
 		return contextwindow.CompactionResult{}, err
 	}
-	if _, err := canonicalRequestBytes(request); err != nil {
-		return contextwindow.CompactionResult{}, fmt.Errorf("canonicalize invocation: %w: %w", ErrInvalidRequest, err)
-	}
+
 	release, err := r.gates.acquire(ctx, string(input.SessionID))
 	if err != nil {
 		return contextwindow.CompactionResult{}, err
 	}
 	defer release()
 
-	identity, err := r.countRequest(ctx, request, nil)
-	if err != nil {
-		return contextwindow.CompactionResult{}, err
-	}
-	// Reuse the counter's or resolver's defaults when the summarizer inherits this
-	// provider. A different summary provider may have its own default model.
-	summaryBase := cloneRequest(request)
-	if summaryBase.Provider == "" {
-		summaryBase.Provider = identity.Provider
-	}
-	if summaryBase.Model == "" && (r.cfg.provider == "" || r.cfg.provider == identity.Provider) {
-		summaryBase.Model = identity.Model
-	}
-	policy, err := r.policyDigest(summaryBase, identity)
-	if err != nil {
-		return contextwindow.CompactionResult{}, err
-	}
-	provider, modelName := r.summarySelection(summaryBase)
-	chain, err := r.loadChain(ctx, input.SessionID, policy, provider, modelName, layout)
-	if err != nil {
-		return contextwindow.CompactionResult{}, err
-	}
-	messages, current, err := r.materializedTokens(ctx, request, layout, chain, identity)
-	if err != nil {
-		return contextwindow.CompactionResult{}, err
-	}
-	compactHistory := current >= r.cfg.triggerInputTokens
-	budget := &callBudget{limit: r.cfg.maxSummaryPasses, rootSessionID: input.RootSessionID, currentSessionID: input.SessionID}
-	expandedEnd := 0
+	previous, coveredRounds := r.loadRecord(ctx, input.SessionID, layout)
+	started := time.Now()
 
-	for {
-		if err := ctx.Err(); err != nil {
-			return contextwindow.CompactionResult{}, err
-		}
-		memory, stateTokens, err := r.memoryTokens(ctx, request, chain, identity)
-		if err != nil {
-			return contextwindow.CompactionResult{}, err
-		}
-		rollup := memory >= r.cfg.memoryTriggerTokens || stateTokens >= r.cfg.stateTriggerTokens
-		if !rollup && (!compactHistory || current <= r.cfg.targetInputTokens) {
-			r.publishContext(ctx, input.SessionID, current, identity)
-			return contextwindow.CompactionResult{Messages: cloneMessages(messages), Changed: chain.lastSequence != 0}, nil
-		}
-		var checkpoint persistedCheckpoint
-		var next chainState
-		if rollup {
-			checkpoint, next, err = r.prepareRollup(ctx, summaryBase, policy, layout, chain, budget)
-		} else {
-			var end int
-			_, end, err = r.selectSource(ctx, request, identity, layout, chain.covered)
-			if err == nil {
-				checkpoint, next, err = r.prepareSegment(ctx, summaryBase, policy, layout, chain, max(end, expandedEnd), budget)
-			}
-		}
-		if err != nil {
-			return contextwindow.CompactionResult{}, err
-		}
-		next.maxSequence = checkpoint.Sequence
-		candidate, candidateTokens, err := r.materializedTokens(ctx, request, layout, next, identity)
-		if err != nil {
-			return contextwindow.CompactionResult{}, err
-		}
-		if candidateTokens >= current {
-			// A short old round may cost more to summarize than to retain. Try
-			// including the next complete round before declaring it uncompactable.
-			if !rollup {
-				for _, round := range layout.rounds {
-					if round.start == checkpoint.CoveredMessages && !containsMedia(layout.conversation[round.start:round.end]) {
-						expandedEnd = round.end
-						break
-					}
-				}
-				if expandedEnd > checkpoint.CoveredMessages {
-					continue
-				}
-			}
-			return contextwindow.CompactionResult{}, fmt.Errorf("summary did not reduce input tokens: %w", ErrContextUncompactable)
-		}
-		memory, stateTokens, err = r.memoryTokens(ctx, request, next, identity)
-		if err != nil {
-			return contextwindow.CompactionResult{}, err
-		}
-		if rollup {
-			if memory > r.cfg.memoryTargetTokens || stateTokens > r.cfg.stateTargetTokens {
-				return contextwindow.CompactionResult{}, fmt.Errorf("rollup did not reach memory and state token targets: %w", ErrContextUncompactable)
-			}
-		}
-		if err := ctx.Err(); err != nil {
-			return contextwindow.CompactionResult{}, err
-		}
-		if err := r.appendCheckpoint(ctx, input.SessionID, checkpoint); err != nil {
-			return contextwindow.CompactionResult{}, err
-		}
-		chain, messages, current = next, candidate, candidateTokens
-		expandedEnd = 0
+	materialized := r.materialize(layout, previous, coveredRounds)
+	before := engine.TokensOf(materialized) + layout.ToolsTokens
+	result := compactionResult{
+		messages: materialized,
+		tokens:   before,
+		coverage: coveredRounds,
 	}
+	// A session with a summary has already been compacted, so it stays compact:
+	// recomputing elision from scratch every round would otherwise let the
+	// request balloon back to its full size as soon as it dips below the
+	// trigger, and the next round would shrink it again.
+	if before > cfg.triggerTokens || coveredRounds > 0 {
+		result = r.compactToTarget(ctx, input, layout, previous, coveredRounds, cfg)
+	}
+
+	r.publishContext(ctx, input.SessionID, result.tokens, r.countResult(input, layout, cfg))
+	r.logCompaction(ctx, input, cfg, result, before, time.Since(started))
+	return contextwindow.CompactionResult{Messages: result.messages, Changed: result.changed}, nil
 }
 
-func (r *compactor) prepareSegment(ctx context.Context, request model.Request, policy string, layout messageLayout, chain chainState, end int, budget *callBudget) (persistedCheckpoint, chainState, error) {
-	output, provider, modelName, err := r.summarizeSegment(ctx, request, chain.state, layout.conversation[chain.covered:end], budget)
-	if err != nil {
-		return persistedCheckpoint{}, chainState{}, err
-	}
-	digest, err := messageDigest(layout.conversation[:end])
-	if err != nil {
-		return persistedCheckpoint{}, chainState{}, err
-	}
-	checkpoint := persistedCheckpoint{
-		Sequence: chain.maxSequence + 1, ParentSequence: chain.lastSequence, Mode: checkpointModeSegment,
-		PolicyDigest: policy, CoveredMessages: end, SourceDigest: digest, Summary: output.Summary,
-		BaseRevision: chain.revision, Revision: chain.revision + 1, Operations: cloneOperations(output.Operations),
-		Provider: provider, Model: modelName,
-	}
-	next, err := extendChain(chain, checkpoint)
-	return checkpoint, next, err
+// compressionResult is the internal outcome of one Compact call.
+type compactionResult struct {
+	messages []model.Message
+	tokens   int64
+	coverage int
+	dropped  int
+	elided   int
+	changed  bool
+	summary  summaryOutcome
+	degraded string
 }
 
-func (r *compactor) prepareRollup(ctx context.Context, request model.Request, policy string, layout messageLayout, chain chainState, budget *callBudget) (persistedCheckpoint, chainState, error) {
-	summaries := make([]string, len(chain.active))
-	for i, checkpoint := range chain.active {
-		summaries[i] = checkpoint.Summary
+// materialize builds the request with the summary replacing the rounds it
+// covers.
+func (r *compactor) materialize(layout engine.Layout, previous record, coveredRounds int) []model.Message {
+	sub := layout.FromRound(coveredRounds)
+	messages := make([]model.Message, 0, len(layout.System)+1+len(layout.Conversation))
+	messages = append(messages, layout.System...)
+	messages = append(messages, summaryPreamble(previous)...)
+	for _, round := range sub.Rounds {
+		messages = append(messages, sub.Messages(round)...)
 	}
-	output, provider, modelName, err := r.summarizeRollup(ctx, request, chain.state, summaries, budget)
+	messages = append(messages, sub.Tail()...)
+	return messages
+}
+
+// compactToTarget applies the deterministic ladder, then summarizes whatever it
+// had to remove.
+func (r *compactor) compactToTarget(
+	ctx context.Context,
+	input contextwindow.CompactionRequest,
+	layout engine.Layout,
+	previous record,
+	coveredRounds int,
+	cfg normalizedConfig,
+) compactionResult {
+	sub := layout.FromRound(coveredRounds)
+	preamble := summaryPreamble(previous)
+	shrink := engine.Shrink(sub, engine.Config{
+		TargetTokens:        cfg.targetTokens,
+		ProtectRecentTokens: cfg.protectRecentTokens,
+		Preamble:            preamble,
+	})
+
+	result := compactionResult{
+		messages: shrink.Messages,
+		tokens:   shrink.Tokens + layout.ToolsTokens,
+		coverage: coveredRounds,
+		dropped:  len(shrink.Dropped),
+		elided:   shrink.Elided,
+		changed:  len(shrink.Dropped) > 0 || shrink.Elided > 0 || coveredRounds > 0,
+	}
+	if shrink.Uncompactable {
+		result.degraded = "uncompactable"
+	}
+	if len(shrink.Dropped) == 0 {
+		return result
+	}
+
+	outcome := r.summarize(ctx, input, previous, shrink.Dropped, layout, cfg)
+	result.summary = outcome
+	if !outcome.OK {
+		result.degraded = outcome.Reason
+		return result
+	}
+
+	// Fold the new summary back in and shrink again: replacing the dropped
+	// rounds with prose usually frees enough room to restore some rounds to a
+	// shallower elision level. Coverage is committed only for rounds that were
+	// actually summarized.
+	// Coverage advances only over the rounds the summary actually describes.
+	// When the request budget could not fit every dropped round, the rest stay
+	// uncovered and are summarized by a later compaction, so no round is ever
+	// marked as covered without appearing in a summary.
+	nextCovered := coveredRounds + outcome.CoveredRounds
+	if nextCovered > coveredRounds+len(shrink.Dropped) {
+		nextCovered = coveredRounds + len(shrink.Dropped)
+	}
+	if nextCovered <= coveredRounds {
+		result.degraded = "no_rounds_covered"
+		return result
+	}
+	next := record{
+		Version:         recordVersion,
+		CoveredMessages: layout.Rounds[nextCovered-1].End,
+		Summary:         outcome.Summary,
+		Notes:           outcome.Notes,
+		Provider:        outcome.Provider,
+		Model:           outcome.Model,
+	}
+	digest, err := conversationDigest(layout.Conversation[:next.CoveredMessages])
 	if err != nil {
-		return persistedCheckpoint{}, chainState{}, err
+		r.logger.Warn(ctx, "digest summarized messages", logging.String("session", string(input.SessionID)), logging.Err(err))
+		return result
 	}
-	digest, err := messageDigest(layout.conversation[:chain.covered])
-	if err != nil {
-		return persistedCheckpoint{}, chainState{}, err
+	next.CoveredDigest = digest
+
+	retry := engine.Shrink(layout.FromRound(nextCovered), engine.Config{
+		TargetTokens:        cfg.targetTokens,
+		ProtectRecentTokens: cfg.protectRecentTokens,
+		Preamble:            summaryPreamble(next),
+	})
+	if retry.Tokens+layout.ToolsTokens <= cfg.targetTokens {
+		result.messages = retry.Messages
+		result.tokens = retry.Tokens + layout.ToolsTokens
+		result.coverage = nextCovered
+		result.dropped = len(retry.Dropped)
+		result.elided = retry.Elided
+		result.changed = true
+		if len(retry.Dropped) > 0 {
+			// The summary freed less room than the drops consumed. Those extra
+			// rounds stay unsummarized for this call and are covered next time;
+			// progress is monotone because drops are always oldest first.
+			result.degraded = "partially_summarized"
+		}
 	}
-	retained := cloneState(chain.state)
-	if err := applyOperations(retained, output.Operations); err != nil {
-		return persistedCheckpoint{}, chainState{}, err
-	}
-	checkpoint := persistedCheckpoint{
-		Sequence: chain.maxSequence + 1, ParentSequence: chain.lastSequence, Mode: checkpointModeRollup,
-		PolicyDigest: policy, CoveredMessages: chain.covered, SourceDigest: digest, Summary: output.Summary,
-		BaseRevision: chain.revision, Revision: chain.revision + 1, Operations: cloneOperations(output.Operations),
-		StateSnapshot: stateSnapshot(retained), Provider: provider, Model: modelName,
-	}
-	next, err := extendChain(chain, checkpoint)
-	return checkpoint, next, err
+
+	r.appendRecord(ctx, input.SessionID, next, previous)
+	return result
 }
 
-func (r *compactor) materializedTokens(ctx context.Context, base model.Request, layout messageLayout, chain chainState, identity usage.CountResult) ([]model.Message, int64, error) {
-	messages, err := materializeMessages(layout, chain)
-	if err != nil {
-		return nil, 0, err
+// logCompaction records one structured line per compaction so a degradation is
+// visible without reading provider errors.
+func (r *compactor) logCompaction(
+	ctx context.Context,
+	input contextwindow.CompactionRequest,
+	cfg normalizedConfig,
+	result compactionResult,
+	before int64,
+	elapsed time.Duration,
+) {
+	attrs := []logging.Attr{
+		logging.String("session", string(input.SessionID)),
+		logging.Int("before_tokens", before),
+		logging.Int("after_tokens", result.tokens),
+		logging.Int("target_tokens", cfg.targetTokens),
+		logging.Int("dropped_rounds", int64(result.dropped)),
+		logging.Int("elided_rounds", int64(result.elided)),
+		logging.Int("covered_rounds", int64(result.coverage)),
 	}
-	request := cloneRequest(base)
-	request.Messages = messages
-	count, err := r.countRequest(ctx, request, &identity)
-	return messages, count.InputTokens, err
+	if result.summary.OK && result.summary.Summary != "" {
+		attrs = append(attrs, logging.String("summary", "ok"))
+	}
+	if result.degraded != "" {
+		attrs = append(attrs, logging.String("degraded", result.degraded))
+	}
+	if correlation, ok := observation.CorrelationFromContext(ctx); ok && correlation.TurnID != "" {
+		attrs = append(attrs,
+			logging.String("turn", string(correlation.TurnID)),
+			logging.Int("round", int64(correlation.RoundIndex)),
+		)
+	}
+	if result.tokens > cfg.targetTokens && result.degraded == "" {
+		attrs = append(attrs, logging.String("degraded", "target_missed"))
+	}
+	r.logger.Info(ctx, "context compaction", attrs...)
 }
 
-// Recent rounds are a selection preference, never a checkpoint validity boundary.
-func (r *compactor) selectSource(ctx context.Context, request model.Request, identity usage.CountResult, layout messageLayout, covered int) (int, int, error) {
-	if covered >= layout.completeEnd || !isRoundBoundary(layout, covered) {
-		return 0, 0, fmt.Errorf("no complete round remains: %w", ErrContextUncompactable)
+// countResult describes the estimator identity for the published snapshot.
+func (r *compactor) countResult(input contextwindow.CompactionRequest, layout engine.Layout, cfg normalizedConfig) usage.CountResult {
+	provider := input.Invocation.Provider
+	if provider == "" {
+		provider = unselectedLabel
 	}
-	limit := layout.eligibleEnd
-	if covered >= limit {
-		limit = layout.completeEnd
+	modelName := input.Invocation.Model
+	if modelName == "" {
+		modelName = unselectedLabel
 	}
-	end := covered
-	for _, round := range layout.rounds {
-		if round.start < covered {
-			continue
-		}
-		if round.end > limit || containsMedia(layout.conversation[round.start:round.end]) {
-			break
-		}
-		end = round.end
-		count, err := r.countMessages(ctx, request, layout.conversation[covered:end], identity)
-		if err != nil {
-			return 0, 0, err
-		}
-		if count >= r.cfg.summaryChunkTokens {
-			break
-		}
-	}
-	if end == covered {
-		return 0, 0, fmt.Errorf("no eligible text round remains: %w", ErrContextUncompactable)
-	}
-	return covered, end, nil
-}
-
-func containsMedia(messages []model.Message) bool {
-	for _, message := range messages {
-		for _, part := range message.Content {
-			if part.Kind != content.KindText {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-func jsonMessages(messages []model.Message) ([]byte, error) {
-	return json.Marshal(projectMessages(messages))
+	return usage.CountResult{Accuracy: usage.AccuracyEstimate, Source: engine.EstimatorSource, Provider: provider, Model: modelName}
 }
