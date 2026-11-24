@@ -5,7 +5,7 @@
 - `host`（包 `./host`）依赖 ABI `state.Scope`，持有进程内的 `EventHub`，导出 `appbackend.Runtime`、全局 `interaction.Channel`、显式作用域的 `interaction.ExecutionBinder` 和 `observation.Observer`。该组件不依赖 Agent，因此 Agent 可以使用这些能力而不会在组件图中形成环。
 - `app`（包 `./app`）是没有能力导出的图叶节点，持有 HTTP 服务器、Controller、Agent 状态的展示投影，以及保留的 Operation 结果。它依赖 host 的 `appbackend.Runtime`、`agent.History`、`session.Store`、`session.Manager`、`session.Query`、`workspace.Manager`、`workspace.Resolver`，以及 ABI `invocation.Invocation`、`lifecycle.Controller` 和 `state.Scope`。必须提供 `agent.Runtime` 和 `agent.Control`。`asset.Store` 与 `modelselection.Controller` 是可选依赖；文件路径和图片作为同一个 Input 提交给 Agent。Operation 通过 `[]operation.Operation` 收集；应用自身另外注册 `/app-webui config`。
 
-模块要求 Go 1.24.2，并固定依赖已发布的 SDK v0.2.19，使用 SendMessage/Control、Turn.Inputs 和原子批量 Append。运行时需组合支持这些接口的 agent-default、session-sqlite 与 WebUI。独立模块检查无需本地 SDK 工作区；测试使用的 agent-default 固定到包含 Round 输入实现的提交版本。独立插件消息仍可使用 context.input。插件没有主程序，应由 Ingot Builder 组合成 Runtime Image。
+模块要求 Go 1.26.0，并固定依赖已发布的 SDK v0.2.19，使用 SendMessage/Control、Turn.Inputs 和原子批量 Append。运行时需组合支持这些接口的 agent-default、session-sqlite 与 WebUI。独立模块检查无需本地 SDK 工作区；测试使用的 agent-default 固定到包含 Round 输入实现的提交版本。独立插件消息仍可使用 context.input。插件没有主程序，应由 Ingot Builder 组合成 Runtime Image。
 
 ## 启动 Web UI
 

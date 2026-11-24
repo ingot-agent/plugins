@@ -82,7 +82,7 @@ jobs:
         if: ${{ matrix.run_tests }}
         uses: actions/setup-go@v5
         with:
-          go-version: '1.24.2'
+          go-version: '1.26.0'
           cache: false
 
       - name: Tidy, vet, and test plugin module

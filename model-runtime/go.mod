@@ -1,6 +1,6 @@
 module github.com/ingot-agent/plugins/model-runtime
 
-go 1.24.2
+go 1.26.0
 
 require (
 	github.com/ingot-agent/ingot-abi v0.1.0
