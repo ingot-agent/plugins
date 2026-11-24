@@ -49,6 +49,11 @@ dependency.
 
 ### Fixed
 
+- Recognise the HTTP/2 stream error type used by Go 1.27, which moved the
+  transport to `net/http/internal/http2` and renamed the type from
+  `http2StreamError` to `StreamError`. Retry classification matched the old
+  private type names only, so a stream reset after partial output was treated as
+  permanent and no longer retried. Builds on Go 1.26 are unaffected.
 - Accept tool-result images in Complete and Stream requests. Keep text and call
   IDs in tool messages, and attach labeled images as user messages after each
   consecutive group of tool results without mutating SDK history.

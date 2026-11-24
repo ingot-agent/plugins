@@ -66,6 +66,11 @@ dependency.
 
 ### Fixed
 
+- Recognise the HTTP/2 stream error type used by Go 1.27, which moved the
+  transport to `net/http/internal/http2` and renamed the type from
+  `http2StreamError` to `StreamError`. Retry classification matched the old
+  private type names only, so a stream reset after partial output was treated as
+  permanent and no longer retried. Builds on Go 1.26 are unaffected.
 - Accept image-only and mixed text/image tool outputs in Complete and Stream
   requests as native `function_call_output` content arrays, preserving content
   order, call IDs, image validation, and the existing text-only wire format.
