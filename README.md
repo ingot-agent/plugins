@@ -23,16 +23,18 @@ ingot up -d -- web
 # Open http://127.0.0.1:7316/
 ```
 
-The shipped `v0.1.0` profiles use configuration Operations named
-`model.openai-compatible.config` and `model.runtime.config`, under the
-`configuration` group. Add one provider, run `ingot restart`, configure the
-default provider/model, then restart again when requested. Current plugin
-source uses `/model-openai-compatible config` and `/model-runtime config` with
-live activation instead. See the version-specific
+The shipped `v0.2.0` profiles use configuration Operations named
+`/model-openai-compatible config` and `/model-runtime config`, under the
+`model-openai-compatible` and `model-runtime` groups. Add one provider,
+configure the default provider/model, then follow each Operation's
+`restart_required` result. These modules can apply provider and default changes
+live. Plugin `v0.1.0` modules, which shipped before this release line, used
+`model.openai-compatible.config` and `model.runtime.config` under the
+`configuration` group and required a restart instead. See the version-specific
 [configuration walkthrough](docs/configuration.md) and [browser host reference](app-webui/README.md).
 
 Core's default profile and this repository's [collection](collections.toml)
-select **11 modules at exact `v0.1.0` versions**, not every module in this
+select **11 modules at exact `v0.2.0` versions**, not every module in this
 checkout. They include the browser, shell and question tools, but omit file-editing,
 subagent and skill tools, interceptors, context compaction, usage counting and
 Responses. Core's minimal profile selects 9 modules, omits shell and question

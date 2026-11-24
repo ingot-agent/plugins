@@ -7,9 +7,10 @@
 [Core 文件参考](https://github.com/ingot-agent/ingot/blob/main/docs/FILE_FORMATS.md)
 维护；本页负责具体插件组合、配置及使用边界。
 
-Core 的发布 profile 和本仓库 Collection 仍固定 `v0.1.0`。本页当前源码包含
-之后的能力变化，`tool-subagent` 也不能假定已有相同版本的公开 tag。不要把
-下面所有 `path` 简单换成 `version = "v0.1.0"` 后视为等价组合。
+Core 的发布 profile 和本仓库 Collection 现固定 `v0.2.0`（七个子模块首次发布的版本为
+`v0.1.0`，且都不在本页的组合之中）。本页当前源码包含之后的能力变化，`tool-subagent`
+也不能假定已有相同版本的公开 tag。不要把下面所有 `path` 简单换成已发布版本号后视为
+等价组合。
 
 ## 选择与完整顺序
 
