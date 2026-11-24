@@ -4,7 +4,10 @@ import (
 	"context"
 	"sync"
 
+	ingotabi "github.com/ingot-agent/ingot-abi"
+	"github.com/ingot-agent/sdk/httpx"
 	"github.com/ingot-agent/sdk/interaction"
+	"github.com/ingot-agent/sdk/logging"
 )
 
 // testScope is a minimal state.Scope for tests.
@@ -18,6 +21,9 @@ type scriptedChannel struct {
 	mu       sync.Mutex
 	answers  map[string]interaction.Value
 	requests []interaction.Request
+	// duringRequest runs while the host is supposedly collecting the answer,
+	// which is where a concurrent configuration write happens.
+	duringRequest func()
 }
 
 func newScriptedChannel(answers map[string]interaction.Value) *scriptedChannel {
@@ -27,7 +33,11 @@ func newScriptedChannel(answers map[string]interaction.Value) *scriptedChannel {
 func (c *scriptedChannel) Request(_ context.Context, request interaction.Request) (interaction.Response, error) {
 	c.mu.Lock()
 	c.requests = append(c.requests, request)
+	hook := c.duringRequest
 	c.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
 	response := interaction.Response{}
 	for _, field := range request.Fields {
 		value, ok := c.answers[field.Name]
@@ -52,3 +62,11 @@ func objectValue(entries map[string]interaction.Value) interaction.Value {
 	}
 	return interaction.ObjectValue(list)
 }
+
+// ingotabiNone is a typed empty HTTP capability for platform construction in
+// tests that never use the http transport.
+func ingotabiNone() ingotabi.Optional[httpx.Client] {
+	return ingotabi.None[httpx.Client]()
+}
+
+func discardLogger() logging.Logger { return logging.Discard() }

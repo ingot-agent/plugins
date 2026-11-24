@@ -146,6 +146,8 @@ MCP server 的 `inputSchema` 在发现阶段归一化为 Draft 2020-12：
 - 失败退避：连续失败按 1s 起指数退避、上限 60s；退避期内快速失败并回传
   剩余时间，不发起网络请求。
 - 调用不自动重试：MCP 调用可能有副作用，且 `tool.Tool` 契约不保证错误时无副作用。
+- 建连失败按 `connect_timeout_seconds` 立即上报：握手超时后调用方马上拿到错误，
+  进程树的清理在后台完成，不让 SDK 关闭子进程的两段等待拖长模型侧延迟。
 - stdio 进程放在独立进程组；正常关闭走“关 stdin → 等待 → `SIGTERM` → `SIGKILL`”，
   关闭失败时再对仍存活的进程组补一次 `SIGKILL`，避免 `npx`/`uvx` 派生的子进程变成
   孤儿；Windows 使用 `taskkill /T` 尽力而为。

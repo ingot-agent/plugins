@@ -70,6 +70,24 @@ func runHelperServer() error {
 		}, nil
 	})
 
+	server.AddTool(&mcp.Tool{
+		Name:        "progress",
+		Description: "Reports one progress notification before answering.",
+		InputSchema: map[string]any{"type": "object"},
+	}, func(ctx context.Context, request *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		if token := request.Params.GetProgressToken(); token != nil {
+			if err := request.Session.NotifyProgress(ctx, &mcp.ProgressNotificationParams{
+				ProgressToken: token,
+				Progress:      1,
+				Total:         2,
+				Message:       "halfway",
+			}); err != nil {
+				return nil, err
+			}
+		}
+		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "done"}}}, nil
+	})
+
 	imagePayload := []byte("png-payload")
 	server.AddTool(&mcp.Tool{
 		Name:        "image",
@@ -184,7 +202,7 @@ func TestDiscoveryAndInvocation(t *testing.T) {
 	exports, cleanup = gateway(t, dir)
 	defer cleanup()
 
-	want := []string{"mcp_helper_echo", "mcp_helper_fail", "mcp_helper_image", statusToolName}
+	want := []string{"mcp_helper_echo", "mcp_helper_fail", "mcp_helper_image", "mcp_helper_progress", statusToolName}
 	if got := toolNames(exports.Tools); !equalStrings(got, want) {
 		t.Fatalf("tools = %v, want %v", got, want)
 	}

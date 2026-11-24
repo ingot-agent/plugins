@@ -135,3 +135,102 @@ func TestAcquireSlotHonoursCancellation(t *testing.T) {
 		t.Fatal("expected a cancellation error")
 	}
 }
+
+func TestIdleTimeoutEvictsTheSession(t *testing.T) {
+	dir := t.TempDir()
+	if err := saveConfig(dir, helperConfig(t)); err != nil {
+		t.Fatalf("saveConfig: %v", err)
+	}
+	exports, cleanup := gateway(t, dir)
+	runDiscovery(t, exports)
+	cleanup()
+
+	config := helperConfig(t)
+	config.Servers[0].IdleTimeoutSeconds = 1
+	config, err := normalizeConfig(config)
+	if err != nil {
+		t.Fatalf("normalizeConfig: %v", err)
+	}
+	instance := newPlatform(dir, ingotabiNone(), discardLogger(), nil, config)
+	defer instance.closeAll()
+
+	first, err := instance.acquire(context.Background(), "helper")
+	if err != nil {
+		t.Fatalf("first acquire: %v", err)
+	}
+	time.Sleep(1100 * time.Millisecond)
+
+	second, err := instance.acquire(context.Background(), "helper")
+	if err != nil {
+		t.Fatalf("second acquire: %v", err)
+	}
+	if first == second {
+		t.Fatal("an idle session should have been replaced")
+	}
+}
+
+func TestStatusReportsBackoffWithoutNetwork(t *testing.T) {
+	config, err := normalizeConfig(Config{Servers: []ServerConfig{{
+		Name: "demo", Command: "true",
+	}}})
+	if err != nil {
+		t.Fatalf("normalizeConfig: %v", err)
+	}
+	instance := newPlatform(t.TempDir(), ingotabiNone(), discardLogger(), nil, config)
+	instance.runtimeFor("demo").recordFailure(errors.New("boom"))
+
+	statuses := instance.statuses()
+	if len(statuses) != 1 {
+		t.Fatalf("statuses = %#v", statuses)
+	}
+	if statuses[0].Status != "backoff" {
+		t.Fatalf("status = %q", statuses[0].Status)
+	}
+	if statuses[0].Connected {
+		t.Fatal("a failed server must not report as connected")
+	}
+}
+
+func TestStatusesReportDisabledServers(t *testing.T) {
+	config, err := normalizeConfig(Config{Servers: []ServerConfig{{
+		Name: "demo", Command: "true", Enabled: boolPointer(false),
+	}}})
+	if err != nil {
+		t.Fatalf("normalizeConfig: %v", err)
+	}
+	instance := newPlatform(t.TempDir(), ingotabiNone(), discardLogger(), nil, config)
+	statuses := instance.statuses()
+	if len(statuses) != 1 || statuses[0].Status != "disabled" {
+		t.Fatalf("statuses = %#v", statuses)
+	}
+}
+
+func TestMarkStaleForcesReconnectOnNextUse(t *testing.T) {
+	dir := t.TempDir()
+	if err := saveConfig(dir, helperConfig(t)); err != nil {
+		t.Fatalf("saveConfig: %v", err)
+	}
+	exports, cleanup := gateway(t, dir)
+	runDiscovery(t, exports)
+	cleanup()
+
+	instance := newPlatform(dir, ingotabiNone(), discardLogger(), nil, helperConfig(t))
+	defer instance.closeAll()
+
+	first, err := instance.acquire(context.Background(), "helper")
+	if err != nil {
+		t.Fatalf("first acquire: %v", err)
+	}
+	instance.markStale()
+	second, err := instance.acquire(context.Background(), "helper")
+	if err != nil {
+		t.Fatalf("second acquire: %v", err)
+	}
+	if first == second {
+		t.Fatal("a stale session must be replaced")
+	}
+	// The replaced session was closed, so its transport no longer serves calls.
+	if _, err := first.session.ListTools(context.Background(), nil); err == nil {
+		t.Fatal("the stale session should be closed")
+	}
+}

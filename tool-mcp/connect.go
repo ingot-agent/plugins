@@ -99,12 +99,52 @@ func (p *platform) dialStdio(ctx context.Context, client *mcp.Client, server Ser
 		Command:           command,
 		TerminateDuration: time.Duration(server.ShutdownTimeoutSeconds) * time.Second,
 	}
-	session, err := client.Connect(ctx, transport, nil)
+	session, err := connectBounded(ctx, client, transport, func() { killProcessGroup(command) })
 	if err != nil {
-		killProcessGroup(command)
 		return nil, fmt.Errorf("connect to stdio server %q: %w", server.Name, err)
 	}
 	return &connection{session: session, command: command, stderr: stderr}, nil
+}
+
+// connectBounded performs the transport handshake but does not make the caller
+// wait for post-mortem cleanup. The SDK escalates a failed handshake with two
+// shutdown waits, so a synchronous failure would report connect_timeout plus
+// twice the shutdown timeout. When the deadline expires the caller gets the
+// context error immediately and a background goroutine finishes closing the
+// transport and terminating the process tree.
+func connectBounded(
+	ctx context.Context,
+	client *mcp.Client,
+	transport mcp.Transport,
+	onAbandon func(),
+) (*mcp.ClientSession, error) {
+	type outcome struct {
+		session *mcp.ClientSession
+		err     error
+	}
+	started := time.Now()
+	results := make(chan outcome, 1)
+	go func() {
+		session, err := client.Connect(ctx, transport, nil)
+		results <- outcome{session: session, err: err}
+	}()
+
+	select {
+	case result := <-results:
+		return result.session, result.err
+	case <-ctx.Done():
+		go func() {
+			result := <-results
+			if result.session != nil {
+				_ = result.session.Close()
+			}
+			if onAbandon != nil {
+				onAbandon()
+			}
+		}()
+		return nil, fmt.Errorf("handshake did not complete within %s: %w",
+			time.Since(started).Round(10*time.Millisecond), ctx.Err())
+	}
 }
 
 func (p *platform) dialHTTP(ctx context.Context, client *mcp.Client, server ServerConfig, maxEventBytes int) (*connection, error) {
@@ -123,7 +163,7 @@ func (p *platform) dialHTTP(ctx context.Context, client *mcp.Client, server Serv
 		DisableStandaloneSSE: true,
 		MaxEventSize:         maxEventBytes,
 	}
-	session, err := client.Connect(ctx, transport, nil)
+	session, err := connectBounded(ctx, client, transport, nil)
 	if err != nil {
 		return nil, fmt.Errorf("connect to http server %q: %w", server.Name, err)
 	}
