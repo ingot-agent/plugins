@@ -71,6 +71,19 @@ func runHelperServer() error {
 	})
 
 	server.AddTool(&mcp.Tool{
+		Name:        "slow",
+		Description: "Answers after a short delay.",
+		InputSchema: map[string]any{"type": "object"},
+	}, func(ctx context.Context, _ *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		select {
+		case <-time.After(400 * time.Millisecond):
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "slow-done"}}}, nil
+	})
+
+	server.AddTool(&mcp.Tool{
 		Name:        "progress",
 		Description: "Reports one progress notification before answering.",
 		InputSchema: map[string]any{"type": "object"},
@@ -202,7 +215,7 @@ func TestDiscoveryAndInvocation(t *testing.T) {
 	exports, cleanup = gateway(t, dir)
 	defer cleanup()
 
-	want := []string{"mcp_helper_echo", "mcp_helper_fail", "mcp_helper_image", "mcp_helper_progress", statusToolName}
+	want := []string{"mcp_helper_echo", "mcp_helper_fail", "mcp_helper_image", "mcp_helper_progress", "mcp_helper_slow", statusToolName}
 	if got := toolNames(exports.Tools); !equalStrings(got, want) {
 		t.Fatalf("tools = %v, want %v", got, want)
 	}

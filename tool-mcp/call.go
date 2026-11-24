@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/ingot-agent/sdk/logging"
 	"github.com/ingot-agent/sdk/tool"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -56,10 +57,14 @@ func (t *mcpTool) Invoke(ctx context.Context, invocation tool.Invocation) (tool.
 	}
 	defer release()
 
-	session, err := t.platform.acquire(ctx, t.server)
+	held, err := t.platform.acquire(ctx, t.server)
 	if err != nil {
 		return tool.Result{}, err
 	}
+	// The lease keeps the connection alive even if this call outlives a
+	// reconfiguration that retires the session.
+	defer held.release()
+
 	timeout := time.Duration(server.CallTimeoutSeconds) * time.Second
 	callCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -72,10 +77,21 @@ func (t *mcpTool) Invoke(ctx context.Context, invocation tool.Invocation) (tool.
 		params.SetProgressToken(invocation.Call.ID)
 	}
 
-	result, err := session.session.CallTool(callCtx, params)
+	result, err := held.conn.session.CallTool(callCtx, params)
 	if err != nil {
 		if callCtx.Err() != nil {
 			return tool.Result{}, fmt.Errorf("tool.mcp: call %q on server %q interrupted: %w", t.wireName, t.server, callCtx.Err())
+		}
+		// A transport-level failure means the session may be dead. Retire it so
+		// the next call reconnects instead of failing forever, and record the
+		// outage for backoff and mcp_status.
+		if runtime := t.platform.runtimeFor(t.server); runtime.invalidate(held) {
+			stderr := held.conn.stderr.String()
+			if stderr != "" {
+				t.platform.logger.Warn(ctx, "MCP server closed its transport",
+					logging.String("server", t.server),
+					logging.String("stderr", sanitizeMessage(redactSecrets(server, stderr))))
+			}
 		}
 		return tool.Result{}, fmt.Errorf("tool.mcp: call %q on server %q failed: %w", t.wireName, t.server, err)
 	}

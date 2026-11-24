@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/ingot-agent/sdk/content"
+	"github.com/ingot-agent/sdk/logging"
 	"github.com/ingot-agent/sdk/observation"
 	"github.com/ingot-agent/sdk/tool"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -22,6 +23,14 @@ const (
 
 	stderrRingBytes   = 8 << 10
 	errorMessageLimit = 512
+
+	// shutdownJoinTimeout bounds how long Cleanup waits for an abandoned
+	// handshake to finish terminating its child process tree.
+	shutdownJoinTimeout = 25 * time.Second
+
+	// redactionMinimumLength is the shortest configured value treated as a
+	// secret when scrubbing server-controlled text.
+	redactionMinimumLength = 4
 )
 
 // connection is one live MCP session plus the resources it owns.
@@ -99,7 +108,7 @@ func (p *platform) dialStdio(ctx context.Context, client *mcp.Client, server Ser
 		Command:           command,
 		TerminateDuration: time.Duration(server.ShutdownTimeoutSeconds) * time.Second,
 	}
-	session, err := connectBounded(ctx, client, transport, func() { killProcessGroup(command) })
+	session, err := connectBounded(ctx, client, transport, p, func() { killProcessGroup(command) })
 	if err != nil {
 		return nil, fmt.Errorf("connect to stdio server %q: %w", server.Name, err)
 	}
@@ -116,6 +125,7 @@ func connectBounded(
 	ctx context.Context,
 	client *mcp.Client,
 	transport mcp.Transport,
+	p *platform,
 	onAbandon func(),
 ) (*mcp.ClientSession, error) {
 	type outcome struct {
@@ -133,7 +143,13 @@ func connectBounded(
 	case result := <-results:
 		return result.session, result.err
 	case <-ctx.Done():
+		if p != nil {
+			p.background.Add(1)
+		}
 		go func() {
+			if p != nil {
+				defer p.background.Done()
+			}
 			result := <-results
 			if result.session != nil {
 				_ = result.session.Close()
@@ -163,7 +179,7 @@ func (p *platform) dialHTTP(ctx context.Context, client *mcp.Client, server Serv
 		DisableStandaloneSSE: true,
 		MaxEventSize:         maxEventBytes,
 	}
-	session, err := connectBounded(ctx, client, transport, nil)
+	session, err := connectBounded(ctx, client, transport, p, nil)
 	if err != nil {
 		return nil, fmt.Errorf("connect to http server %q: %w", server.Name, err)
 	}
@@ -182,7 +198,7 @@ func (p *platform) httpClient(server ServerConfig) (*http.Client, error) {
 		headers[name] = value
 	}
 	client := &http.Client{
-		Transport: &headerRoundTripper{base: p.roundTripper(), headers: headers},
+		Transport: &headerRoundTripper{base: p.roundTripper(server, p.logger), headers: headers},
 		CheckRedirect: func(request *http.Request, via []*http.Request) error {
 			if len(via) >= 3 {
 				return errors.New("too many redirects")
@@ -218,13 +234,33 @@ func (t *headerRoundTripper) RoundTrip(request *http.Request) (*http.Response, e
 		return nil, fmt.Errorf("unsupported scheme %q", request.URL.Scheme)
 	}
 	if len(t.headers) == 0 {
-		return t.base.RoundTrip(request)
+		response, err := t.base.RoundTrip(request)
+		return t.verifySameOrigin(request, response, err)
 	}
 	clone := request.Clone(request.Context())
 	for name, value := range t.headers {
 		clone.Header.Set(name, value)
 	}
-	return t.base.RoundTrip(clone)
+	response, err := t.base.RoundTrip(clone)
+	return t.verifySameOrigin(clone, response, err)
+}
+
+// verifySameOrigin fails closed when a lower layer followed a redirect. It is
+// defense in depth for a composed host HTTP capability that may have its own
+// redirect policy.
+func (t *headerRoundTripper) verifySameOrigin(
+	request *http.Request,
+	response *http.Response,
+	err error,
+) (*http.Response, error) {
+	if err != nil || response == nil || response.Request == nil || response.Request.URL == nil {
+		return response, err
+	}
+	if response.Request.URL.Host != request.URL.Host {
+		response.Body.Close()
+		return nil, fmt.Errorf("redirect from %q to %q rejected", request.URL.Host, response.Request.URL.Host)
+	}
+	return response, nil
 }
 
 type roundTripperFunc func(*http.Request) (*http.Response, error)
@@ -233,14 +269,22 @@ func (f roundTripperFunc) RoundTrip(request *http.Request) (*http.Response, erro
 	return f(request)
 }
 
-// roundTripper selects the injected host HTTP capability when one is
-// composed, so that proxy, timeout, and diagnostics policy stay centralized.
-func (p *platform) roundTripper() http.RoundTripper {
-	if p.http.Valid && p.http.Value != nil {
+// roundTripper selects the transport for one server. A composed host HTTP
+// capability is used so that proxy, timeout and diagnostics policy stay
+// centralized, except when the server carries configured headers: the injected
+// client owns its own redirect loop, which could forward those credentials to
+// another host, so such a server uses the plugin's redirect-controlled
+// transport instead. HTTPS_PROXY and NO_PROXY still apply there.
+func (p *platform) roundTripper(server ServerConfig, logger logging.Logger) http.RoundTripper {
+	if p.http.Valid && p.http.Value != nil && len(server.Headers) == 0 {
 		client := p.http.Value
 		return roundTripperFunc(func(request *http.Request) (*http.Response, error) {
 			return client.Do(request.Context(), request)
 		})
+	}
+	if p.http.Valid && p.http.Value != nil && len(server.Headers) > 0 {
+		logger.Debug(context.Background(), "using the plugin transport for a server with configured headers",
+			logging.String("server", server.Name))
 	}
 	return http.DefaultTransport
 }
@@ -255,6 +299,10 @@ func (p *platform) emitProgress(ctx context.Context, server string, request *mcp
 	if message == "" {
 		return
 	}
+	// Progress text is server-controlled and unbounded; it goes to the
+	// observation stream, so it is flattened and capped like any other
+	// diagnostic string.
+	message = sanitizeMessage(message)
 	if request.Params.Total > 0 {
 		message = fmt.Sprintf("%s (%.0f/%.0f)", message, request.Params.Progress, request.Params.Total)
 	}

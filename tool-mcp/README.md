@@ -96,7 +96,7 @@ enabled_tools = ["search_*"]
 | `servers[].max_concurrent_calls` | `4` | 同时在途调用上限，范围 `[1, 64]` |
 | `servers[].connect_timeout_seconds` | `30` | 建连与握手预算 |
 | `servers[].call_timeout_seconds` | `120` | 单次 `tools/call` 预算 |
-| `servers[].shutdown_timeout_seconds` | `5` | 关闭 stdin 后等待退出的时间 |
+| `servers[].shutdown_timeout_seconds` | `5` | 关闭 stdin 后等待退出的时间，范围 `[1, 10]` |
 | `servers[].idle_timeout_seconds` | `0` | 空闲多久后断开；`0` 表示常驻 |
 
 未知字段、非法枚举、重复名字、非 loopback 明文 HTTP、URL 内嵌凭据一律拒绝，
@@ -143,18 +143,29 @@ MCP server 的 `inputSchema` 在发现阶段归一化为 Draft 2020-12：
 ## 连接与进程管理
 
 - 懒连接：首次调用才建连；同一 server 的并发建连会被合并。
+- 连接按引用计数管理：配置变更或空闲回收只把连接标记为退休，等最后一个在途调用
+  释放后才关闭，因此重配置不会中断已开始的调用。
+- Cleanup 会强制结束连接并（在有限时间内）等待后台清理，避免留下孤儿子进程。
 - 失败退避：连续失败按 1s 起指数退避、上限 60s；退避期内快速失败并回传
   剩余时间，不发起网络请求。
+- 传输层失败会立即让该连接退休并记入退避，因此子进程崩溃后下一次调用会重连，
+  而不是永远复用死连接。
+- 建连期间配置被并发修改时，新连接直接丢弃并返回可重试错误，不会安装用旧配置
+  建立的连接。
 - 调用不自动重试：MCP 调用可能有副作用，且 `tool.Tool` 契约不保证错误时无副作用。
 - 建连失败按 `connect_timeout_seconds` 立即上报：握手超时后调用方马上拿到错误，
   进程树的清理在后台完成，不让 SDK 关闭子进程的两段等待拖长模型侧延迟。
 - stdio 进程放在独立进程组；正常关闭走“关 stdin → 等待 → `SIGTERM` → `SIGKILL`”，
   关闭失败时再对仍存活的进程组补一次 `SIGKILL`，避免 `npx`/`uvx` 派生的子进程变成
   孤儿；Windows 使用 `taskkill /T` 尽力而为。
-- stderr 由常驻 reader 排空到 8 KiB 环形缓冲，防止管道写满导致 server 卡死；
-  内容不并入工具结果，只在发现失败时以截断形式出现在 `mcp_status` 的诊断字段里。
+- stderr 由常驻 reader 排空到 8 KiB 环形缓冲，防止管道写满导致 server 卡死。
+  内容不进入工具结果、快照或 `mcp_status`；仅在诊断日志里以脱敏后的截断形式出现，
+  因为 server 常把凭据打进 stderr。
 - http 使用 Streamable HTTP；默认不建立 standalone SSE 流，也不由传输层重试。
   跨主机重定向被拒绝，事件大小受 `max_result_bytes` 约束。
+- 配了 header 的 server 会使用插件自带的、受重定向策略约束的传输，而不是注入的
+  `httpx.Client`：后者的重定向循环会把自定义 header 带到别的主机。代理仍可通过
+  `HTTPS_PROXY`/`NO_PROXY` 生效。
 
 ## Operation
 
@@ -167,13 +178,17 @@ MCP server 的 `inputSchema` 在发现阶段归一化为 Draft 2020-12：
 `KEY=` 或纯 `${VAR}` 引用；沿用已存值时不显示明文。每个 server 有一个
 `secrets_action` 选择：
 
-- `keep`：保留该 server 已存的 `env`/`headers`，提交的对应条目被忽略；
+- `keep`：保留该 server 已存的 `env`/`headers`；若该名字还没有已存值（例如刚
+  改名），则采用本次提交的条目，并丢弃空值条目——表单把已存值显示为空白，空值
+  表示“未修改”，绝不会写入一个空密钥；
 - `replace`：用提交的条目整体替换，提交空列表即清空。
+
+`env` 与 `headers` 字段标记为敏感字段，宿主不应把它们写进草稿、摘要或遥测。
 
 提交后依次执行：校验候选配置 → 重读磁盘检测交互期间的并发修改
 （不一致返回 `ErrConfigConflict`）→ 原子写入 → 发布到后续调用 → 标记现有连接
-在下次使用时重连 → 按 `refresh_now` 立即发现。重连由下一次调用触发；如果那一刻
-另一个调用正在使用同一连接，它会失败，需要在下一轮重试。
+在下次使用时重连 → 按 `refresh_now` 立即发现。重连由下一次调用触发；已经开始的
+调用继续使用原连接完成，不会被重配置打断。
 
 输出包含 `restart_required`、`restart_reasons`、`added`、`removed`、
 每个 server 的 `status`/`tools`/`rejected`/`schema_bytes`，以及

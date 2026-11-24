@@ -40,6 +40,7 @@ const (
 	maxToolsPerServer  = 512
 	maxResultByteLimit = 16 << 20
 	maxConfigTimeout   = 3600
+	maxShutdownTimeout = 10
 )
 
 var (
@@ -342,8 +343,11 @@ func normalizeLimits(server *ServerConfig) error {
 	if server.ShutdownTimeoutSeconds == 0 {
 		server.ShutdownTimeoutSeconds = defaultShutdownTimeSecond
 	}
-	if server.ShutdownTimeoutSeconds < 1 || server.ShutdownTimeoutSeconds > 60 {
-		return fmt.Errorf("server %q: shutdown_timeout_seconds must be within [1, 60]: %w", server.Name, ErrInvalidConfig)
+	// The transport escalates with two waits of this duration, and Cleanup must
+	// be able to join that work, so the range is bounded.
+	if server.ShutdownTimeoutSeconds < 1 || server.ShutdownTimeoutSeconds > maxShutdownTimeout {
+		return fmt.Errorf("server %q: shutdown_timeout_seconds must be within [1, %d]: %w",
+			server.Name, maxShutdownTimeout, ErrInvalidConfig)
 	}
 	if server.IdleTimeoutSeconds < 0 || server.IdleTimeoutSeconds > 86400 {
 		return fmt.Errorf("server %q: idle_timeout_seconds must be within [0, 86400]: %w", server.Name, ErrInvalidConfig)

@@ -334,7 +334,7 @@ func (c *countingHTTPClient) Do(ctx context.Context, request *http.Request) (*ht
 func TestHTTPClientUsesInjectedCapability(t *testing.T) {
 	injected := &countingHTTPClient{}
 	instance := newPlatform(t.TempDir(), ingotabi.Some[httpx.Client](injected), discardLogger(), nil, Config{})
-	transport := instance.roundTripper()
+	transport := instance.roundTripper(ServerConfig{Name: "remote"}, discardLogger())
 	request, err := http.NewRequest(http.MethodGet, "https://example.test/mcp", nil)
 	if err != nil {
 		t.Fatalf("new request: %v", err)
@@ -344,5 +344,49 @@ func TestHTTPClientUsesInjectedCapability(t *testing.T) {
 	}
 	if injected.requests != 1 {
 		t.Fatalf("the injected HTTP capability was used %d times", injected.requests)
+	}
+}
+
+// TestHeadersBypassInjectedCapability is the credential-leak guard: the injected
+// client owns its own redirect policy, so a server with configured headers uses
+// the plugin's redirect-controlled transport instead.
+func TestHeadersBypassInjectedCapability(t *testing.T) {
+	injected := &countingHTTPClient{}
+	instance := newPlatform(t.TempDir(), ingotabi.Some[httpx.Client](injected), discardLogger(), nil, Config{})
+	server := ServerConfig{Name: "remote", Headers: map[string]string{"X-Api-Key": "secret"}}
+	if _, ok := instance.roundTripper(server, discardLogger()).(roundTripperFunc); ok {
+		t.Fatal("a server with configured headers must not delegate to the injected client")
+	}
+	if _, err := instance.httpClient(server); err != nil {
+		t.Fatalf("httpClient: %v", err)
+	}
+	if injected.requests != 0 {
+		t.Fatalf("the injected client was used %d times", injected.requests)
+	}
+}
+
+// TestHeaderRoundTripperRejectsCrossHostResponse covers a lower layer that
+// followed a redirect on its own.
+func TestHeaderRoundTripperRejectsCrossHostResponse(t *testing.T) {
+	request, err := http.NewRequest(http.MethodGet, "https://mcp.example.com/mcp", nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	redirected, err := http.NewRequest(http.MethodGet, "https://evil.example.com/mcp", nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	transport := &headerRoundTripper{
+		base: roundTripperFunc(func(*http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       http.NoBody,
+				Request:    redirected,
+			}, nil
+		}),
+		headers: map[string]string{"X-Api-Key": "secret"},
+	}
+	if _, err := transport.RoundTrip(request); err == nil {
+		t.Fatal("a response fetched from another host must be rejected")
 	}
 }

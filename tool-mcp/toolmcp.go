@@ -105,15 +105,18 @@ func New(ctx context.Context, deps Dependencies) (Exports, ingotabi.Cleanup, err
 	}
 
 	tools := buildTools(ctx, instance, config, snapshot, logger)
+	// exportedNames is the tool set this image actually exposes. Operations
+	// compare discovery against it, not against the file they read at
+	// invocation start, so restart_required describes the running image.
+	exportedNames := make([]string, 0, len(tools))
+	for _, entry := range tools {
+		exportedNames = append(exportedNames, entry.Definition().Name)
+	}
 	if config.exposeStatusTool() {
 		if hasToolName(tools, statusToolName) {
 			logger.Warn(ctx, "an MCP tool already uses the status tool name; mcp_status is not exported")
 		} else {
-			exported := make([]string, 0, len(tools))
-			for _, entry := range tools {
-				exported = append(exported, entry.Definition().Name)
-			}
-			tools = append(tools, &statusTool{platform: instance, snapshot: snapshot, exported: exported})
+			tools = append(tools, &statusTool{platform: instance, snapshot: snapshot, exported: exportedNames})
 		}
 	}
 	sort.Slice(tools, func(i, j int) bool {
@@ -121,8 +124,8 @@ func New(ctx context.Context, deps Dependencies) (Exports, ingotabi.Cleanup, err
 	})
 
 	operations := []operation.Operation{
-		&setupOperation{platform: instance},
-		&refreshOperation{platform: instance},
+		&setupOperation{platform: instance, exported: exportedNames},
+		&refreshOperation{platform: instance, exported: exportedNames},
 	}
 
 	cleanup := func(context.Context) error {

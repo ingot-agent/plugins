@@ -40,12 +40,10 @@ func (p *platform) discover(ctx context.Context, config Config, previous *Snapsh
 	total := 0
 	for _, server := range config.enabledServers() {
 		if err := ctx.Err(); err != nil {
-			snapshot.Servers = append(snapshot.Servers, ServerSnapshot{
-				Name:      server.Name,
-				Transport: server.Transport,
-				Status:    serverStatusSkipped,
-				Error:     "discovery interrupted by cancellation",
-			})
+			// Cancellation must not delete a working tool set: retain what the
+			// previous snapshot exported for this server.
+			snapshot.Servers = append(snapshot.Servers, retainPrevious(server, previous,
+				serverStatusSkipped, "discovery interrupted by cancellation"))
 			continue
 		}
 
@@ -58,23 +56,15 @@ func (p *platform) discover(ctx context.Context, config Config, previous *Snapsh
 			Rejected:  rejected,
 		}
 		if failure != "" {
-			serverSnapshot.Status = serverStatusError
-			serverSnapshot.Error = failure
 			// A transient outage must not silently delete a working tool set.
 			// Retain the previous entry for the same server and transport so a
 			// later restart keeps the tools the user already approved.
-			if prior, ok := previous.server(server.Name); ok && prior.Transport == server.Transport {
-				serverSnapshot.Tools = prior.Tools
-				serverSnapshot.Rejected = prior.Rejected
-				serverSnapshot.ToolCount = prior.ToolCount
-				serverSnapshot.SchemaBytes = prior.SchemaBytes
-				serverSnapshot.Error += " (retaining the previous tool set)"
-				for _, retained := range prior.Tools {
-					taken[retained.ModelName] = true
-				}
-				total += len(prior.Tools)
+			retained := retainPrevious(server, previous, serverStatusError, failure)
+			for _, tool := range retained.Tools {
+				taken[tool.ModelName] = true
 			}
-			snapshot.Servers = append(snapshot.Servers, serverSnapshot)
+			total += len(retained.Tools)
+			snapshot.Servers = append(snapshot.Servers, retained)
 			continue
 		}
 		if total+len(tools) > config.MaxToolsTotal {
@@ -129,11 +119,14 @@ func (p *platform) discoverServer(ctx context.Context, server ServerConfig, conf
 
 	remoteTools, err := listAllTools(listCtx, connection.session)
 	if err != nil {
-		message := sanitizeMessage(err.Error())
+		// Child stderr can echo injected credentials, so it is logged redacted
+		// and never written to the snapshot, an Operation result, or the model.
 		if stderr := connection.stderr.String(); stderr != "" {
-			message += " (stderr: " + sanitizeMessage(stderr) + ")"
+			p.logger.Warn(ctx, "MCP server wrote to stderr during discovery",
+				logging.String("server", server.Name),
+				logging.String("stderr", sanitizeMessage(redactSecrets(server, stderr))))
 		}
-		return nil, nil, message
+		return nil, nil, sanitizeMessage(err.Error())
 	}
 
 	tools := make([]discoveredTool, 0, len(remoteTools))
@@ -225,4 +218,25 @@ func assignModelName(prefix, server, wireName string, taken map[string]bool) (st
 		}
 	}
 	return "", false
+}
+
+// retainPrevious builds a server snapshot that keeps the previous tool set. It
+// is used whenever discovery could not produce an authoritative answer, so an
+// outage or a cancellation cannot silently delete tools.
+func retainPrevious(server ServerConfig, previous *Snapshot, status, message string) ServerSnapshot {
+	entry := ServerSnapshot{
+		Name:      server.Name,
+		Transport: server.Transport,
+		Status:    status,
+		Error:     message,
+		Tools:     []ToolSnapshot{},
+	}
+	if prior, ok := previous.server(server.Name); ok && prior.Transport == server.Transport {
+		entry.Tools = prior.Tools
+		entry.Rejected = prior.Rejected
+		entry.ToolCount = prior.ToolCount
+		entry.SchemaBytes = prior.SchemaBytes
+		entry.Error += " (retaining the previous tool set)"
+	}
+	return entry
 }

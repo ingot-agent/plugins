@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	ingotabi "github.com/ingot-agent/ingot-abi"
 	"github.com/ingot-agent/sdk/content"
@@ -84,7 +85,17 @@ func TestProgressNotificationsBecomeToolProgress(t *testing.T) {
 		t.Fatalf("result = %q", text)
 	}
 
-	progress := consumer.progress()
+	// MCP progress notifications are independent of the response, so a
+	// notification may be delivered just after the call returns.
+	var progress []tool.Progress
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		progress = consumer.progress()
+		if len(progress) > 0 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 	if len(progress) == 0 {
 		t.Fatal("no progress notification was forwarded")
 	}

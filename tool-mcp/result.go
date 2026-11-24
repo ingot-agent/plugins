@@ -89,6 +89,10 @@ func mapCallResult(server string, result *mcp.CallToolResult, maxBytes int) tool
 			if name == "" {
 				name = value.URI
 			}
+			if len(value.URI) > remaining {
+				truncated = true
+				continue
+			}
 			parts = append(parts, content.URI(content.KindFile, value.MIMEType, name, value.URI))
 			remaining -= len(value.URI)
 			lastWasText = false

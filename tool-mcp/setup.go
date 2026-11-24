@@ -3,6 +3,7 @@ package toolmcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
 	"regexp"
@@ -28,6 +29,8 @@ var referenceOnlyPattern = regexp.MustCompile(`^[^A-Za-z0-9]*(\$\{[A-Za-z_][A-Za
 // scope, and publishes a new immutable snapshot to live tool calls.
 type setupOperation struct {
 	platform *platform
+	// exported is the tool set this image exposes, captured at construction.
+	exported []string
 }
 
 var _ operation.Operation = (*setupOperation)(nil)
@@ -165,12 +168,18 @@ func (o *setupOperation) Invoke(ctx context.Context, request operation.Request) 
 	}
 
 	snapshot := previous
-	var discoveryErr error
 	if refreshNow {
-		snapshot, discoveryErr = discoverAndSave(ctx, o.platform, normalized, previous)
+		discovered, discoveryErr := discoverAndSave(ctx, o.platform, normalized, previous)
 		if discoveryErr != nil {
+			if errors.Is(discoveryErr, ErrConfigConflict) || errors.Is(discoveryErr, context.Canceled) ||
+				errors.Is(discoveryErr, context.DeadlineExceeded) {
+				return operation.Result{}, fmt.Errorf("tool.mcp.config: %w", discoveryErr)
+			}
 			o.platform.logger.Warn(ctx, "MCP tool snapshot could not be persisted",
 				logging.String("error", sanitizeMessage(discoveryErr.Error())))
+		}
+		if discovered != nil {
+			snapshot = discovered
 		}
 	}
 	if snapshot == nil {
@@ -178,7 +187,7 @@ func (o *setupOperation) Invoke(ctx context.Context, request operation.Request) 
 	}
 
 	added, removed := diffOrEmpty(previous, snapshot)
-	reasons := restartReasons(previous, snapshot, normalized, added, removed)
+	reasons := restartReasons(snapshot, normalized, added, removed, o.exported)
 	output, err := json.Marshal(setupOutput{
 		RestartRequired: len(reasons) > 0,
 		RestartReasons:  reasons,
@@ -214,16 +223,19 @@ func (o *setupOperation) commitConfig(ctx context.Context, current, next Config)
 
 // restartReasons explains why a restart is or is not required. An empty result
 // means the running image already matches the persisted configuration.
-func restartReasons(previous, next *Snapshot, config Config, added, removed []string) []string {
+// restartReasons explains why the running image does not match the persisted
+// configuration. The authoritative comparison is the tool set this image
+// exports, not the file read at invocation start.
+func restartReasons(snapshot *Snapshot, config Config, added, removed, exported []string) []string {
 	reasons := []string{}
-	if len(added) > 0 || len(removed) > 0 {
-		reasons = append(reasons, fmt.Sprintf("exported tool set changed: +%d -%d", len(added), len(removed)))
-	}
-	if previous == nil && len(next.toolNames()) > 0 {
-		reasons = append(reasons, "no previous tool snapshot existed")
+	discovered := snapshot.toolNames()
+	if !equalStringSets(exported, discovered) {
+		reasons = append(reasons, fmt.Sprintf(
+			"the running image exports %d tools; discovery found %d (+%d -%d)",
+			len(exported), len(discovered), len(added), len(removed)))
 	}
 	hash, err := config.configHash()
-	if err == nil && previous != nil && previous.ConfigHash != "" && previous.ConfigHash != hash {
+	if err == nil && snapshot.ConfigHash != "" && snapshot.ConfigHash != hash {
 		reasons = append(reasons, "stored tool snapshot was produced by a different configuration")
 	}
 	return reasons
@@ -239,6 +251,13 @@ func serverFields() []interaction.Field {
 			Element:     &interaction.Field{Name: "entry", Kind: interaction.FieldString},
 		}
 	}
+	// Environment and header entries carry credentials, so the host must treat
+	// them as sensitive even though the values are already masked here.
+	secretList := func(name, label, description string) interaction.Field {
+		field := stringList(name, label, description)
+		field.Sensitive = true
+		return field
+	}
 	return []interaction.Field{
 		{Name: "name", Label: "Name", Description: "Stable server identifier used in tool names.", Kind: interaction.FieldString, Required: true},
 		{Name: "transport", Label: "Transport", Kind: interaction.FieldChoice, Required: true, Options: []interaction.Option{
@@ -249,10 +268,10 @@ func serverFields() []interaction.Field {
 		{Name: "command", Label: "Command", Description: "stdio executable, for example npx.", Kind: interaction.FieldString},
 		stringList("args", "Arguments", "One command argument per entry."),
 		{Name: "cwd", Label: "Working directory", Description: "Absolute path; empty uses the Runtime working directory.", Kind: interaction.FieldString},
-		stringList("env", "Environment", "KEY=VALUE entries. A value may reference ${ENV_VAR}."),
+		secretList("env", "Environment", "KEY=VALUE entries. A value may reference ${ENV_VAR}."),
 		stringList("inherit_env", "Inherited environment", "Host variables forwarded to the server in addition to the safe default set."),
 		{Name: "url", Label: "Endpoint URL", Description: "Streamable HTTP endpoint.", Kind: interaction.FieldString},
-		stringList("headers", "Headers", "NAME=VALUE entries. A value may reference ${ENV_VAR}."),
+		secretList("headers", "Headers", "NAME=VALUE entries. A value may reference ${ENV_VAR}."),
 		stringList("enabled_tools", "Enabled tools", "Tool name patterns; a trailing * matches a prefix. Defaults to *."),
 		stringList("disabled_tools", "Disabled tools", "Patterns removed after enabled_tools is applied."),
 		{Name: "secrets_action", Label: "Environment and headers", Kind: interaction.FieldChoice, Required: true, Options: []interaction.Option{
@@ -386,7 +405,13 @@ func parseServerValue(value interaction.Value, current Config) (ServerConfig, er
 		if previous, ok := current.server(strings.TrimSpace(server.Name)); ok {
 			server.Env = previous.Env
 			server.Headers = previous.Headers
+			break
 		}
+		// Nothing is stored for this name, so "keep" would otherwise discard
+		// what the user just submitted. Values left blank by the masked form are
+		// omitted instead of being stored as empty strings.
+		server.Env = withoutEmptyValues(env)
+		server.Headers = withoutEmptyValues(headers)
 	case secretActionReplace:
 		server.Env = env
 		server.Headers = headers
@@ -403,6 +428,26 @@ func parseServerValue(value interaction.Value, current Config) (ServerConfig, er
 		server.URL, server.Headers = "", nil
 	}
 	return server, nil
+}
+
+// withoutEmptyValues drops entries whose value is empty. The configuration form
+// shows stored values as blank, so a blank entry means "unchanged", never
+// "replace the secret with an empty string".
+func withoutEmptyValues(values map[string]string) map[string]string {
+	if len(values) == 0 {
+		return nil
+	}
+	result := make(map[string]string, len(values))
+	for key, value := range values {
+		if value == "" {
+			continue
+		}
+		result[key] = value
+	}
+	if len(result) == 0 {
+		return nil
+	}
+	return result
 }
 
 // parseAssignments parses KEY=VALUE entries. A missing '=' is an error rather

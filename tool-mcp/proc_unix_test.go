@@ -108,3 +108,35 @@ func TestConfigureProcessSetsProcessGroup(t *testing.T) {
 		t.Fatalf("SysProcAttr = %#v", command.SysProcAttr)
 	}
 }
+
+// TestCleanupTerminatesChildrenImmediately covers shutdown: Cleanup must end the
+// child process tree itself instead of waiting for in-flight leases to be
+// released, because the Runtime process is about to exit.
+func TestCleanupTerminatesChildrenImmediately(t *testing.T) {
+	dir := t.TempDir()
+	pidFile := filepath.Join(dir, "child.pid")
+	script := filepath.Join(dir, "server.sh")
+	body := "#!/bin/sh\necho $$ > " + pidFile + "\nsleep 120 &\nwait\n"
+	if err := os.WriteFile(script, []byte(body), 0o700); err != nil {
+		t.Fatalf("write wrapper: %v", err)
+	}
+	config, err := normalizeConfig(Config{Servers: []ServerConfig{{
+		Name: "server", Transport: transportStdio, Command: script,
+		ConnectTimeoutSeconds: 1, ShutdownTimeoutSeconds: 1,
+	}}})
+	if err != nil {
+		t.Fatalf("normalizeConfig: %v", err)
+	}
+	instance := newPlatform(t.TempDir(), ingotabiNone(), discardLogger(), nil, config)
+
+	// Force a live child without completing the handshake.
+	go func() { _, _ = instance.acquire(context.Background(), "server") }()
+	pid := waitForPIDFile(t, pidFile)
+
+	start := time.Now()
+	instance.closeAll()
+	if elapsed := time.Since(start); elapsed > 20*time.Second {
+		t.Fatalf("cleanup took %s", elapsed)
+	}
+	waitForProcessExit(t, pid)
+}

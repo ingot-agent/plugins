@@ -28,10 +28,18 @@ type platform struct {
 	observation observation.Consumer
 
 	config atomic.Pointer[Config]
+	// generation advances on every configuration publication, so a connection
+	// dialled with an older configuration is never installed.
+	generation atomic.Uint64
+	// closed is set by Cleanup; late dials observe it and close their session.
+	closed atomic.Bool
 
 	mu         sync.Mutex
 	servers    map[string]*serverRuntime
 	discoverMu sync.Mutex
+	// background tracks abandoned handshakes that are still closing their
+	// transport, so Cleanup can wait for the child processes to disappear.
+	background sync.WaitGroup
 }
 
 func newPlatform(stateDir string, httpClient ingotabi.Optional[httpx.Client], logger logging.Logger, observer observation.Consumer, config Config) *platform {
@@ -49,6 +57,27 @@ func newPlatform(stateDir string, httpClient ingotabi.Optional[httpx.Client], lo
 func (p *platform) setConfig(config Config) {
 	normalized := config
 	p.config.Store(&normalized)
+	p.generation.Add(1)
+}
+
+// currentGeneration identifies the configuration a decision was made against.
+func (p *platform) currentGeneration() uint64 { return p.generation.Load() }
+
+// acquireForDial returns the server configuration and generation to dial with,
+// or an error while shutting down.
+func (p *platform) acquireForDial(name string) (ServerConfig, uint64, Config, error) {
+	if p.closed.Load() {
+		return ServerConfig{}, 0, Config{}, fmt.Errorf("tool.mcp: plugin is shutting down")
+	}
+	config := p.currentConfig()
+	server, ok := config.server(name)
+	if !ok {
+		return ServerConfig{}, 0, Config{}, fmt.Errorf("MCP server %q is not configured", name)
+	}
+	if !server.enabled() {
+		return ServerConfig{}, 0, Config{}, fmt.Errorf("MCP server %q is disabled", name)
+	}
+	return server, p.currentGeneration(), config, nil
 }
 
 func (p *platform) currentConfig() Config {
@@ -70,22 +99,19 @@ func (p *platform) runtimeFor(name string) *serverRuntime {
 	return created
 }
 
-// acquire returns a live session for the named server, connecting when
-// necessary.
-func (p *platform) acquire(ctx context.Context, name string) (*connection, error) {
-	config := p.currentConfig()
-	server, ok := config.server(name)
-	if !ok {
-		return nil, fmt.Errorf("MCP server %q is not configured", name)
+// acquire returns a live session lease for the named server, connecting when
+// necessary. The caller must release the lease when the call finishes.
+func (p *platform) acquire(ctx context.Context, name string) (*lease, error) {
+	server, generation, config, err := p.acquireForDial(name)
+	if err != nil {
+		return nil, err
 	}
-	if !server.enabled() {
-		return nil, fmt.Errorf("MCP server %q is disabled", name)
-	}
-	return p.runtimeFor(name).acquire(ctx, p, server, config.MaxResultBytes)
+	return p.runtimeFor(name).acquire(ctx, p, server, generation, config.MaxResultBytes)
 }
 
-// markStale forces every live session to reconnect on its next use. In-flight
-// calls keep their session; later calls observe the new configuration.
+// markStale retires every live session. A session still used by an in-flight
+// call is closed when that call releases it, so reconfiguration never aborts a
+// call that already started; later calls connect with the new configuration.
 func (p *platform) markStale() {
 	p.mu.Lock()
 	runtimes := make([]*serverRuntime, 0, len(p.servers))
@@ -98,8 +124,11 @@ func (p *platform) markStale() {
 	}
 }
 
-// closeAll terminates every session. It is the instance Cleanup.
+// closeAll terminates every session and waits, within a bound, for abandoned
+// handshakes to finish terminating their child processes. It is the instance
+// Cleanup, so it must not rely on a later lease release.
 func (p *platform) closeAll() {
+	p.closed.Store(true)
 	p.mu.Lock()
 	runtimes := make([]*serverRuntime, 0, len(p.servers))
 	for _, runtime := range p.servers {
@@ -108,6 +137,17 @@ func (p *platform) closeAll() {
 	p.mu.Unlock()
 	for _, runtime := range runtimes {
 		runtime.close()
+	}
+
+	done := make(chan struct{})
+	go func() {
+		p.background.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(shutdownJoinTimeout):
+		// A transport that never returns must not block shutdown forever.
 	}
 }
 
@@ -158,8 +198,7 @@ type serverRuntime struct {
 	name string
 
 	mu      sync.Mutex
-	session *connection
-	stale   bool
+	session *lease
 	slots   chan struct{}
 
 	connectMu sync.Mutex
@@ -195,56 +234,135 @@ func (r *serverRuntime) acquireSlot(ctx context.Context, limit int) (func(), err
 
 func (r *serverRuntime) markStale() {
 	r.mu.Lock()
-	r.stale = true
+	handle := r.session
+	r.session = nil
 	r.mu.Unlock()
+	if handle != nil {
+		handle.retire()
+	}
 }
 
 func (r *serverRuntime) close() {
 	r.mu.Lock()
-	session := r.session
+	handle := r.session
 	r.session = nil
-	r.stale = false
 	r.mu.Unlock()
-	if session != nil {
-		_ = session.Close()
+	if handle != nil {
+		handle.forceClose()
 	}
 }
 
-// acquire returns the live session, connecting at most once concurrently.
-func (r *serverRuntime) acquire(ctx context.Context, p *platform, server ServerConfig, maxEventBytes int) (*connection, error) {
-	r.mu.Lock()
-	if r.session != nil {
-		if !r.stale && !r.idleExpired(server) {
-			session := r.session
+// lease is one in-flight use of a session. Retiring a session marks it
+// unusable for new callers; the underlying connection is closed only after the
+// last lease is released.
+type lease struct {
+	conn *connection
+	// onIdle runs when the last lease goes away while the session stays live,
+	// which is the only correct moment to start measuring idleness.
+	onIdle func()
+
+	mu      sync.Mutex
+	refs    int
+	retired bool
+}
+
+func newLease(conn *connection, onIdle func()) *lease {
+	return &lease{conn: conn, onIdle: onIdle, refs: 1}
+}
+
+// inUse reports whether a call currently holds this session.
+func (l *lease) inUse() bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.refs > 0
+}
+
+func (l *lease) acquireRef() bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.retired {
+		return false
+	}
+	l.refs++
+	return true
+}
+
+// release drops one use and closes the connection once it is retired and
+// unused.
+func (l *lease) release() {
+	l.mu.Lock()
+	l.refs--
+	idle := l.refs <= 0
+	closable := idle && l.retired
+	l.mu.Unlock()
+	switch {
+	case closable:
+		_ = l.conn.Close()
+	case idle && l.onIdle != nil:
+		l.onIdle()
+	}
+}
+
+// forceClose terminates the connection immediately, even while calls still
+// hold a lease. Only instance cleanup uses it: at shutdown there is no later
+// release to wait for.
+func (l *lease) forceClose() {
+	l.mu.Lock()
+	l.retired = true
+	l.mu.Unlock()
+	_ = l.conn.Close()
+}
+
+// retire makes the session unusable for new callers.
+func (l *lease) retire() {
+	l.mu.Lock()
+	l.retired = true
+	last := l.refs <= 0
+	l.mu.Unlock()
+	if last {
+		_ = l.conn.Close()
+	}
+}
+
+// acquire returns a lease on the live session, connecting at most once
+// concurrently. The caller must release the lease; that is what allows a
+// retired session to be closed without interrupting an in-flight call.
+func (r *serverRuntime) acquire(ctx context.Context, p *platform, server ServerConfig, generation uint64, maxEventBytes int) (*lease, error) {
+	for {
+		r.mu.Lock()
+		handle := r.session
+		retryBlocked := handle == nil && !r.retryAt.IsZero() && time.Now().Before(r.retryAt)
+		if handle != nil && !r.idleExpired(server) && handle.acquireRef() {
 			r.lastUsed = time.Now()
 			r.calls++
 			r.mu.Unlock()
-			return session, nil
+			return handle, nil
 		}
-		stale := r.session
-		r.session = nil
-		r.stale = false
-		r.mu.Unlock()
-		_ = stale.Close()
-	} else {
-		if !r.retryAt.IsZero() && time.Now().Before(r.retryAt) {
+		if handle != nil {
+			// Idle or retired: detach it so the next caller connects.
+			r.session = nil
+		}
+		if retryBlocked {
 			err := r.backoffErrorLocked()
 			r.mu.Unlock()
 			return nil, err
 		}
 		r.mu.Unlock()
+		if handle != nil {
+			handle.retire()
+		}
+		break
 	}
 
 	r.connectMu.Lock()
 	defer r.connectMu.Unlock()
 
 	r.mu.Lock()
-	if r.session != nil && !r.stale {
-		session := r.session
+	if handle := r.session; handle != nil && handle.acquireRef() {
 		r.lastUsed = time.Now()
 		r.calls++
 		r.mu.Unlock()
-		return session, nil
+		return handle, nil
 	}
 	r.mu.Unlock()
 
@@ -252,7 +370,7 @@ func (r *serverRuntime) acquire(ctx context.Context, p *platform, server ServerC
 	connectCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	session, err := p.dial(connectCtx, server, maxEventBytes)
+	connection, err := p.dial(connectCtx, server, maxEventBytes)
 	if err != nil {
 		r.recordFailure(err)
 		p.logger.Warn(connectCtx, "MCP server connection failed",
@@ -262,24 +380,74 @@ func (r *serverRuntime) acquire(ctx context.Context, p *platform, server ServerC
 		return nil, err
 	}
 
+	// A configuration published while this dial was running makes the new
+	// connection already obsolete: it was built from superseded settings. Check
+	// before publishing it so no concurrent caller can observe it.
+	if p.currentGeneration() != generation {
+		_ = connection.Close()
+		return nil, fmt.Errorf("MCP server %q: configuration changed during connect; retry the call", server.Name)
+	}
+	if p.closed.Load() {
+		_ = connection.Close()
+		return nil, fmt.Errorf("tool.mcp: plugin is shutting down")
+	}
+
+	handle := newLease(connection, r.markIdle)
+
 	r.mu.Lock()
-	r.session = session
-	r.stale = false
+	previous := r.session
+	r.session = handle
 	r.failures = 0
 	r.retryAt = time.Time{}
 	r.lastError = ""
 	r.lastUsed = time.Now()
 	r.calls++
 	r.mu.Unlock()
+	if previous != nil {
+		previous.retire()
+	}
+
+	// Cleanup may have run between the check above and the publication; the
+	// runtime would then never close this connection, so close it here.
+	if p.closed.Load() {
+		r.mu.Lock()
+		if r.session == handle {
+			r.session = nil
+		}
+		r.mu.Unlock()
+		handle.forceClose()
+		return nil, fmt.Errorf("tool.mcp: plugin is shutting down")
+	}
 
 	p.logger.Info(ctx, "MCP server connected",
 		logging.String("server", server.Name),
 		logging.String("transport", server.Transport))
-	return session, nil
+	return handle, nil
+}
+
+// invalidate reports that a live session is unusable after a transport failure,
+// so the next call reconnects and the backoff and status state reflect the
+// outage. Without this a crashed server would stay "connected" forever.
+func (r *serverRuntime) invalidate(handle *lease) bool {
+	r.mu.Lock()
+	attached := r.session == handle
+	if attached {
+		r.session = nil
+	}
+	r.mu.Unlock()
+	handle.retire()
+	return attached
+}
+
+// markIdle records that the last holder of the live session finished its call.
+func (r *serverRuntime) markIdle() {
+	r.mu.Lock()
+	r.lastUsed = time.Now()
+	r.mu.Unlock()
 }
 
 func (r *serverRuntime) idleExpired(server ServerConfig) bool {
-	if server.IdleTimeoutSeconds <= 0 || r.session == nil {
+	if server.IdleTimeoutSeconds <= 0 || r.session == nil || r.session.inUse() {
 		return false
 	}
 	return time.Since(r.lastUsed) > time.Duration(server.IdleTimeoutSeconds)*time.Second

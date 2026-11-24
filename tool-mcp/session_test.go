@@ -2,14 +2,17 @@ package toolmcp
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
 	"time"
 
 	ingotabi "github.com/ingot-agent/ingot-abi"
+	"github.com/ingot-agent/sdk/content"
 	"github.com/ingot-agent/sdk/httpx"
 	"github.com/ingot-agent/sdk/logging"
+	"github.com/ingot-agent/sdk/tool"
 )
 
 func testPlatform(t *testing.T, config Config) *platform {
@@ -158,12 +161,14 @@ func TestIdleTimeoutEvictsTheSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first acquire: %v", err)
 	}
+	first.release()
 	time.Sleep(1100 * time.Millisecond)
 
 	second, err := instance.acquire(context.Background(), "helper")
 	if err != nil {
 		t.Fatalf("second acquire: %v", err)
 	}
+	defer second.release()
 	if first == second {
 		t.Fatal("an idle session should have been replaced")
 	}
@@ -224,13 +229,88 @@ func TestMarkStaleForcesReconnectOnNextUse(t *testing.T) {
 	instance.markStale()
 	second, err := instance.acquire(context.Background(), "helper")
 	if err != nil {
+		first.release()
 		t.Fatalf("second acquire: %v", err)
 	}
 	if first == second {
 		t.Fatal("a stale session must be replaced")
 	}
-	// The replaced session was closed, so its transport no longer serves calls.
-	if _, err := first.session.ListTools(context.Background(), nil); err == nil {
-		t.Fatal("the stale session should be closed")
+	// The retired session stays open until its last lease is released, then its
+	// transport stops serving calls.
+	first.release()
+	if _, err := first.conn.session.ListTools(context.Background(), nil); err == nil {
+		t.Fatal("the retired session should be closed after its last release")
 	}
+	second.release()
+}
+
+// TestReconfigurationDoesNotAbortInFlightCalls is the reason sessions are
+// leased: retiring a session during a configuration change must not fail a call
+// that is already running, because the model cannot tell whether its side
+// effects happened.
+func TestReconfigurationDoesNotAbortInFlightCalls(t *testing.T) {
+	dir := t.TempDir()
+	if err := saveConfig(dir, helperConfig(t)); err != nil {
+		t.Fatalf("saveConfig: %v", err)
+	}
+	exports, cleanup := gateway(t, dir)
+	runDiscovery(t, exports)
+	cleanup()
+
+	exports, cleanup = gateway(t, dir)
+	defer cleanup()
+
+	var slow tool.Tool
+	for _, candidate := range exports.Tools {
+		if candidate.Definition().Name == "mcp_helper_slow" {
+			slow = candidate
+		}
+	}
+	if slow == nil {
+		t.Fatalf("tools = %v", toolNames(exports.Tools))
+	}
+
+	type outcome struct {
+		result tool.Result
+		err    error
+	}
+	finished := make(chan outcome, 1)
+	go func() {
+		result, err := slow.Invoke(context.Background(), tool.Invocation{
+			Call: tool.Call{ID: "slow-1", Name: "mcp_helper_slow", Arguments: json.RawMessage(`{}`)},
+		})
+		finished <- outcome{result: result, err: err}
+	}()
+
+	// Retire the live session while the call is in flight.
+	time.Sleep(100 * time.Millisecond)
+	platformOf(t, exports).markStale()
+
+	select {
+	case got := <-finished:
+		if got.err != nil {
+			t.Fatalf("an in-flight call was aborted by reconfiguration: %v", got.err)
+		}
+		if text, ok := content.TextOnly(got.result.Content); !ok || text != "slow-done" {
+			t.Fatalf("result = %q", text)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the in-flight call never finished")
+	}
+}
+
+// platformOf recovers the plugin's platform from its exported tools. It is the
+// test-only seam for behaviours that are not reachable through tool.Tool.
+func platformOf(t *testing.T, exports Exports) *platform {
+	t.Helper()
+	for _, entry := range exports.Tools {
+		switch value := entry.(type) {
+		case *mcpTool:
+			return value.platform
+		case *statusTool:
+			return value.platform
+		}
+	}
+	t.Fatal("no exported tool exposes the platform")
+	return nil
 }

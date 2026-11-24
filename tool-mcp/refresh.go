@@ -99,17 +99,34 @@ func discoverAndSave(ctx context.Context, p *platform, config Config, previous *
 	p.discoverMu.Lock()
 	defer p.discoverMu.Unlock()
 
+	generation := p.currentGeneration()
 	snapshot := p.discover(ctx, config, previous)
-	if err := saveSnapshot(p.stateDir, snapshot); err != nil {
+	if err := p.commitSnapshot(ctx, snapshot, generation); err != nil {
 		return snapshot, err
 	}
 	return snapshot, nil
+}
+
+// commitSnapshot persists a discovery result only while it still describes the
+// published configuration. Cancellation must terminate the task rather than
+// commit partial state, and a configuration published during discovery
+// invalidates both the work and the caller's report about it.
+func (p *platform) commitSnapshot(ctx context.Context, snapshot *Snapshot, generation uint64) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if p.currentGeneration() != generation {
+		return ErrConfigConflict
+	}
+	return saveSnapshot(p.stateDir, snapshot)
 }
 
 // refreshOperation re-runs discovery with the current configuration and
 // reports whether the exported tool set changed.
 type refreshOperation struct {
 	platform *platform
+	// exported is the tool set this image exposes, captured at construction.
+	exported []string
 }
 
 var _ operation.Operation = (*refreshOperation)(nil)
@@ -142,12 +159,12 @@ func (o *refreshOperation) Invoke(ctx context.Context, request operation.Request
 	config := o.platform.currentConfig()
 	snapshot, err := discoverAndSave(ctx, o.platform, config, previous)
 	if err != nil {
-		return operation.Result{}, fmt.Errorf("tool.mcp.refresh: persist snapshot: %w", err)
+		return operation.Result{}, fmt.Errorf("tool.mcp.refresh: %w", err)
 	}
 	added, removed := diffOrEmpty(previous, snapshot)
 
 	output, err := json.Marshal(refreshOutput{
-		RestartRequired: len(added) > 0 || len(removed) > 0,
+		RestartRequired: !equalStringSets(snapshot.toolNames(), o.exported),
 		Added:           added,
 		Removed:         removed,
 		Servers:         buildServerReports(snapshot),

@@ -138,3 +138,32 @@ func expandServer(server ServerConfig) (ServerConfig, error) {
 	}
 	return expanded, nil
 }
+
+// redactSecrets removes configured secret values from server-controlled text
+// such as child stderr, which often echoes credentials. Values shorter than
+// redactionMinimumLength are skipped so that redaction cannot mangle unrelated
+// text.
+func redactSecrets(server ServerConfig, text string) string {
+	if text == "" {
+		return ""
+	}
+	secrets := make([]string, 0, len(server.Env)+len(server.Headers))
+	for _, raw := range server.Env {
+		if value, err := expandVariables(raw); err == nil {
+			secrets = append(secrets, value)
+		}
+	}
+	for _, raw := range server.Headers {
+		if value, err := expandVariables(raw); err == nil {
+			secrets = append(secrets, value)
+		}
+	}
+	result := text
+	for _, secret := range secrets {
+		if len(secret) < redactionMinimumLength {
+			continue
+		}
+		result = strings.ReplaceAll(result, secret, "[redacted]")
+	}
+	return result
+}
