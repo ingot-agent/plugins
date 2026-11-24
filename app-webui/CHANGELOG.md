@@ -6,6 +6,9 @@
   `logging.Logger` (`Optional[logging.Logger]`) instead of `log/slog`.
 - Integrated clipboard uploads, file previews and retry status with SendMessage
   scheduling and revision-ordered runtime projections.
+- Derive turn submission request IDs from `crypto.getRandomValues` when
+  `crypto.randomUUID` is unavailable, so sending works in insecure contexts such
+  as a phone opening `http://<LAN-IP>:7316` or older iOS Safari/Chrome builds.
 
 - Moved scheduling and authoritative results to Agent SendMessage/Control; restored ordered multi-input progress across refresh and reconnect.
 
