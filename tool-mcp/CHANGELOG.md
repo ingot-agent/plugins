@@ -18,4 +18,9 @@
   never opens it automatically, requires an explicit confirmation and enforces an
   encrypted scheme. Completion notifications reach the owning Session as an
   event. Server-provided text is markdown-escaped before it is rendered.
+- Forward `TZ`, the XDG base directories, proxy variables and custom
+  certificate authorities to MCP servers by default. A server behind a proxy or
+  a corporate CA previously failed with a connection error that never mentioned
+  the real cause. Credentials stay withheld; `inherit_env` and `env` remain the
+  explicit ways to pass anything else.
 - Require Go 1.26, matching the repository build floor.

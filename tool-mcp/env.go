@@ -12,6 +12,7 @@ import (
 // host process to a third-party executable, so anything else must be listed
 // explicitly in the server's inherit_env.
 var defaultEnvAllowlist = []string{
+	// Process basics every executable needs.
 	"PATH",
 	"HOME",
 	"TMPDIR",
@@ -22,6 +23,7 @@ var defaultEnvAllowlist = []string{
 	"LOGNAME",
 	"SHELL",
 	"TERM",
+	"TZ",
 	"SystemRoot",
 	"SystemDrive",
 	"COMSPEC",
@@ -30,6 +32,27 @@ var defaultEnvAllowlist = []string{
 	"APPDATA",
 	"LOCALAPPDATA",
 	"USERPROFILE",
+	"XDG_CONFIG_HOME",
+	"XDG_CACHE_HOME",
+	"XDG_DATA_HOME",
+
+	// Network reachability. A server that cannot see the proxy configuration
+	// fails with a connection error that says nothing about the real cause.
+	// These describe infrastructure, not credentials, so forwarding them is
+	// safe and withholding them breaks working setups.
+	"HTTP_PROXY",
+	"HTTPS_PROXY",
+	"ALL_PROXY",
+	"NO_PROXY",
+	"http_proxy",
+	"https_proxy",
+	"all_proxy",
+	"no_proxy",
+
+	// Custom certificate authorities, which corporate networks require.
+	"SSL_CERT_FILE",
+	"SSL_CERT_DIR",
+	"NODE_EXTRA_CA_CERTS",
 }
 
 func allowedByDefault(name string) bool {
