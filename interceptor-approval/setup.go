@@ -80,7 +80,7 @@ func (o *setupOperation) Invoke(ctx context.Context, request operation.Request) 
 			{Name: "default_action", Label: "Default action", Kind: interaction.FieldChoice, Required: true, Options: actionOptions, Default: stringValue(actionDefault)},
 			{Name: "argument_display", Label: "Argument display", Kind: interaction.FieldChoice, Required: true, Options: displayOptions, Default: stringValue(displayDefault)},
 			{Name: "max_display_bytes", Label: "Max display bytes", Kind: interaction.FieldInteger, Default: &interaction.Value{Kind: interaction.ValueInteger, Integer: displayDefaultBytes}},
-			{Name: "rules", Label: "Rules", Description: "Per-tool overrides of the default action.", Kind: interaction.FieldList, Default: &rulesDefault, Element: &interaction.Field{Name: "rule", Kind: interaction.FieldObject, Fields: []interaction.Field{
+			{Name: "rules", Label: "Rules", Description: "Per-tool overrides of the default action. A trailing * matches a tool-name prefix.", Kind: interaction.FieldList, Default: &rulesDefault, Element: &interaction.Field{Name: "rule", Kind: interaction.FieldObject, Fields: []interaction.Field{
 				{Name: "tool", Label: "Tool", Kind: interaction.FieldString, Required: true},
 				{Name: "action", Label: "Action", Kind: interaction.FieldChoice, Required: true, Options: actionOptions},
 			}}},

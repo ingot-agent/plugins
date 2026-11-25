@@ -87,6 +87,7 @@ Additional or distinct state includes:
 | [skill-runtime](../skill-runtime/README.md) | Skills in the plugin scope, plus the embedded built-in skill; no `config` Operation |
 | [tool-image](../tool-image/README.md) | Images in the injected asset store; fixed limits, no private configuration or state files |
 | [tool-subagent](../tool-subagent/README.md) | Injected child-management capability; no private configuration Operation |
+| [tool-mcp](../tool-mcp/README.md) | `config.toml` (server connections, filters, limits), `snapshot.json` (the cached tool view that construction reads) and `discovery/` (the working directory of discovery processes); two Operations, `config` and `refresh` |
 
 Use Operations for validated, coherent configuration updates. Direct edits to
 `config.toml` or `subagents.toml` do not trigger live reload: stop the Runtime
@@ -98,17 +99,21 @@ it does not restore state or undo external tool effects.
 
 ## Activation boundaries
 
-The current catalog has **21 modules, 17 with configuration Operations**:
+The current catalog has **23 modules**. Every configurable module exposes a
+local `config` Operation; `tool-mcp` additionally exposes `refresh`.
 
 | Activation | Modules / settings |
 |---|---|
 | Saved changes apply to later calls without restart | `agent-default`, `asset-local`, `context-compact`, `http-default`, `interceptor-approval`, `interceptor-script`, `logger-standard`, `model-openai-compatible`, `model-openai-responses`, `model-runtime`, `prompt-default`, `tool-ask`, `tool-edit`, `tool-runtime`, `tool-shell` |
+| Saved connection settings apply without restart, exported tool set does not | `tool-mcp`: timeouts, concurrency, filters, secrets and the status tool apply to later calls, but tool definitions are a construction-time snapshot, so the returned `restart_required` is decided by whether discovery changed the exported tool set. Each Session gets its own MCP session, created lazily on first call and working in that Session's workspace |
 | Changed settings require restart | `app-webui`: listener, replay/subscriber buffers, heartbeat, Operation retention and asset-upload limit |
 | No configuration Operation | `session-sqlite`, `skill-runtime`, `tool-image`, `tool-subagent` |
 | Saved changes apply to later calls without restart | `agent-default` child definitions in `subagents.toml`, managed by `/agent-default subagents` independently of `/agent-default config` |
 
-The 17 live Operations return `restart_required:false` after persistence and
-publication. Existing calls keep captured settings; later calls use the update.
+Live Operations return `restart_required:false` after persistence and
+publication. `tool-mcp` reports `true` when the discovered tool set differs from
+the one this image exports, because the standard tool runtime freezes tool
+definitions at construction. Existing calls keep captured settings; later calls use the update.
 Subagent configuration updates preserve accepted child tasks, including their
 prompts, tools, and lifecycle support when new child creation is disabled.
 WebUI compares saved values with active startup values and reports the actual

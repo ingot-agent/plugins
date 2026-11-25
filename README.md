@@ -13,7 +13,7 @@ an independent Go module, subject to the same Builder rules as third-party plugi
 ## Start using the plugins
 
 Install Core using its [installation guide](https://github.com/ingot-agent/ingot/blob/main/docs/USAGE.md).
-Building an image requires Go 1.24.2 or newer; running an already-built image
+Building an image requires Go 1.26 or newer; running an already-built image
 requires neither Go nor this checkout.
 
 ```sh
@@ -83,6 +83,7 @@ dependencies, operations/tools, state, defaults and limitations.
 | [tool-ask](tool-ask/README.md) | `tool.ask` | Structured questions through Interaction |
 | [tool-edit](tool-edit/README.md) | `tool.edit` | File editing, reading and searching |
 | [tool-image](tool-image/README.md) | `tool.image` | Local image viewing through immutable image assets |
+| [tool-mcp](tool-mcp/README.md) | `tool.mcp` | MCP client gateway exporting remote server tools |
 | [tool-runtime](tool-runtime/README.md) | `tool.runtime` | Lookup, JSON schema validation and interception |
 | [tool-shell](tool-shell/README.md) | `tool.shell` | Session-workspace shell execution |
 | [tool-subagent](tool-subagent/README.md) | `tool.subagent` | Child-agent discovery, creation and control |
