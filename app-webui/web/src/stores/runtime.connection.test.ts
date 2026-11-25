@@ -133,3 +133,13 @@ it('ignores a state response that arrives after disconnect', async () => {
   expect(runtime.turns.web.status).toBe('running')
   expect(subscribe).toHaveBeenCalledTimes(1)
 })
+
+it('applies a default workspace change pushed by the config operation', async () => {
+  await vi.advanceTimersByTimeAsync(0)
+  expect(runtime.defaultWorkspace).toBe('')
+  runtime.receive(5, { type: 'workspace.updated', data: { defaultPath: '/srv/agent-work' } })
+  expect(runtime.defaultWorkspace).toBe('/srv/agent-work')
+  // The event carries server state only; it must not disturb Session bookkeeping.
+  expect(runtime.cursor).toBe(5)
+  expect(runtime.sessions).toHaveLength(0)
+})

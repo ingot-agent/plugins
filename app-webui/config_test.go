@@ -42,3 +42,28 @@ func TestConfigRejectsInvalidOperationAndAssetLimits(t *testing.T) {
 		}
 	}
 }
+
+func TestConfigDefaultWorkspaceMustBeAbsolute(t *testing.T) {
+	if _, err := (Config{Backend: BackendConfig{DefaultWorkspace: "relative/workspace"}}).Normalize(); !errors.Is(err, ErrInvalidConfig) {
+		t.Fatalf("relative default workspace error = %v, want ErrInvalidConfig", err)
+	}
+	cfg, err := (Config{Backend: BackendConfig{DefaultWorkspace: "/srv/agent-work"}}).Normalize()
+	if err != nil || cfg.DefaultWorkspace != "/srv/agent-work" {
+		t.Fatalf("absolute default workspace = %#v, %v", cfg, err)
+	}
+}
+
+func TestConfigRoundTripsDefaultWorkspace(t *testing.T) {
+	dir := t.TempDir()
+	want := Config{Backend: BackendConfig{DefaultWorkspace: "/srv/agent-work"}}
+	if err := SaveConfig(dir, want); err != nil {
+		t.Fatal(err)
+	}
+	got, err := LoadConfig(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Backend.DefaultWorkspace != want.Backend.DefaultWorkspace {
+		t.Fatalf("default workspace = %q, want %q", got.Backend.DefaultWorkspace, want.Backend.DefaultWorkspace)
+	}
+}

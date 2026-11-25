@@ -6,6 +6,8 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -162,7 +164,7 @@ func TestAppConfigOperationUsesInteractionAndPersists(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if channel.request.Name != "config" || len(channel.request.Fields) != 7 || channel.request.Fields[0].Default.String != "127.0.0.1:7000" {
+	if channel.request.Name != "config" || len(channel.request.Fields) != 8 || channel.request.Fields[0].Default.String != "127.0.0.1:7000" {
 		t.Fatalf("interaction request = %#v", channel.request)
 	}
 	stored, err := appbackend.LoadConfig(dir)
@@ -327,7 +329,7 @@ func TestOperationHTTPInteractionAndRefreshRetention(t *testing.T) {
 		t.Fatalf("session scope = %q", got)
 	}
 	bound, err := a.sessions.Get(context.Background(), metadata.ID)
-	if err != nil || bound.Workspace != a.defaultWorkspace {
+	if err != nil || bound.Workspace != a.defaultWorkspace() {
 		t.Fatalf("operation session workspace = %#v, %v", bound, err)
 	}
 	var pending appbackend.PendingInteraction
@@ -440,5 +442,90 @@ func TestOperationRetentionCancellationAndPreflightErrors(t *testing.T) {
 	}
 	if snapshot := waitOperation(t, a, third, true); snapshot.Status != "canceled" || snapshot.Error.Code != "canceled" {
 		t.Fatalf("cancellation = %#v", snapshot)
+	}
+}
+
+// TestDefaultWorkspaceConfigAppliesWithoutRestart covers the whole point of the
+// setting: a saved path is used by the next conversation in the same process.
+func TestDefaultWorkspaceConfigAppliesWithoutRestart(t *testing.T) {
+	dir := writeTestConfig(t, appbackend.Config{})
+	active, err := (&appbackend.Config{}).Normalize()
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings := &workspaceState{}
+	settings.set(filepath.Join(dir, defaultWorkspaceDirectory))
+	var published []string
+	op := &configOperation{
+		scope: testStateScope{dir: dir}, active: active, workspaces: settings,
+		publish: func(state appbackend.WorkspaceState) { published = append(published, state.DefaultPath) },
+	}
+	target := filepath.Join(t.TempDir(), "projects", "agent")
+
+	channel := &testInteractionChannel{response: interaction.Response{Values: []interaction.Answer{
+		{Name: "default_workspace", Value: interaction.StringValue("  " + target + "  ")},
+	}}}
+	result, err := op.Invoke(context.Background(), operation.Request{Input: json.RawMessage(`{}`), Interaction: channel})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := settings.get(); got != target {
+		t.Fatalf("effective workspace = %q, want %q", got, target)
+	}
+	if len(published) != 1 || published[0] != target {
+		t.Fatalf("published workspaces = %#v, want [%q]", published, target)
+	}
+	if info, err := os.Stat(target); err != nil || !info.IsDir() {
+		t.Fatalf("configured workspace was not created: %#v, %v", info, err)
+	}
+	stored, err := appbackend.LoadConfig(dir)
+	if err != nil || stored.Backend.DefaultWorkspace != target {
+		t.Fatalf("stored config = %#v, error = %v", stored, err)
+	}
+	if !strings.Contains(string(result.Output), `"restart_required":false`) {
+		t.Fatalf("workspace-only change requires restart: %s", result.Output)
+	}
+	if !strings.Contains(string(result.Output), `"default_workspace":"`+target+`"`) {
+		t.Fatalf("output = %s", result.Output)
+	}
+
+	// Clearing the field returns to the built-in workspace inside the state scope.
+	channel = &testInteractionChannel{response: interaction.Response{Values: []interaction.Answer{
+		{Name: "default_workspace", Value: interaction.StringValue("")},
+	}}}
+	if _, err := op.Invoke(context.Background(), operation.Request{Input: json.RawMessage(`{}`), Interaction: channel}); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := settings.get(), filepath.Join(dir, defaultWorkspaceDirectory); got != want {
+		t.Fatalf("built-in workspace = %q, want %q", got, want)
+	}
+	if len(published) != 2 || published[1] != filepath.Join(dir, defaultWorkspaceDirectory) {
+		t.Fatalf("published workspaces = %#v", published)
+	}
+	stored, err = appbackend.LoadConfig(dir)
+	if err != nil || stored.Backend.DefaultWorkspace != "" {
+		t.Fatalf("stored config after clearing = %#v, error = %v", stored, err)
+	}
+}
+
+// TestInvalidDefaultWorkspaceIsRejectedWithoutSaving keeps a typo from reaching
+// the configuration file, where it would break the next startup.
+func TestInvalidDefaultWorkspaceIsRejectedWithoutSaving(t *testing.T) {
+	dir := writeTestConfig(t, appbackend.Config{Backend: appbackend.BackendConfig{Address: "127.0.0.1:7000"}})
+	settings := &workspaceState{}
+	settings.set(filepath.Join(dir, defaultWorkspaceDirectory))
+	op := &configOperation{scope: testStateScope{dir: dir}, workspaces: settings}
+	channel := &testInteractionChannel{response: interaction.Response{Values: []interaction.Answer{
+		{Name: "default_workspace", Value: interaction.StringValue("relative/path")},
+	}}}
+	if _, err := op.Invoke(context.Background(), operation.Request{Input: json.RawMessage(`{}`), Interaction: channel}); !errors.Is(err, appbackend.ErrInvalidConfig) {
+		t.Fatalf("relative path error = %v, want ErrInvalidConfig", err)
+	}
+	stored, err := appbackend.LoadConfig(dir)
+	if err != nil || stored.Backend.DefaultWorkspace != "" {
+		t.Fatalf("invalid path was saved: %#v, %v", stored, err)
+	}
+	if got := settings.get(); got != filepath.Join(dir, defaultWorkspaceDirectory) {
+		t.Fatalf("effective workspace changed on a rejected save: %q", got)
 	}
 }

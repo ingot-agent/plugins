@@ -26,7 +26,7 @@ func TestFollowupLifecycleAndSessionVisibility(t *testing.T) {
 		{Role: model.RoleUser, Content: content.FromText("Explain this")},
 		{Role: model.RoleAssistant, Content: content.FromText("A detailed answer")},
 	}
-	source, err := a.sessions.Create(context.Background(), "main", workspace.Binding{Root: a.defaultWorkspace})
+	source, err := a.sessions.Create(context.Background(), "main", workspace.Binding{Root: a.defaultWorkspace()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,7 +125,7 @@ func TestSessionTokensAndServerResolvedTurnIdentity(t *testing.T) {
 	a := testApplication(t)
 	ctx := context.Background()
 	store := a.sessions.(*defaultSessionController).store.(*testStore)
-	main, err := a.sessions.Create(ctx, "main", workspace.Binding{Root: a.defaultWorkspace})
+	main, err := a.sessions.Create(ctx, "main", workspace.Binding{Root: a.defaultWorkspace()})
 	if err != nil {
 		t.Fatal(err)
 	}

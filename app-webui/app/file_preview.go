@@ -52,7 +52,7 @@ func (a *application) resolveFile(ctx context.Context, input fileRequest) (strin
 		(runtime.GOOS != "windows" && len(path) > 1 && path[1] == ':') {
 		return "", fmt.Errorf("file path must belong to this Runtime host: %w", errInvalidLocalFile)
 	}
-	root := a.defaultWorkspace
+	root := a.defaultWorkspace()
 	if input.SessionID != "" {
 		item, err := a.sessions.Get(ctx, session.ID(input.SessionID))
 		if err != nil {

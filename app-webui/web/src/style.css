@@ -110,6 +110,9 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
 .session-icon { flex-shrink: 0; color: var(--muted); opacity: .7; }
 .session-row .session-menu-trigger { position: absolute; right: 4px; width: 25px; height: 25px; opacity: 0; }
 .session-row:hover .session-menu-trigger, .session-row:focus-within .session-menu-trigger, .session-row:has(.router-link-active) .session-menu-trigger { opacity: 1; }
+.group-toggle { display: flex; align-items: center; gap: 8px; width: 100%; margin: 1px 0 3px; padding: 9px 12px 9px 34px; border: 0; border-radius: 7px; background: transparent; color: var(--muted); font-size: 12px; text-align: left; transition: color .15s, background .15s; }
+.group-toggle:hover { color: var(--ink); background: var(--hover); }
+.group-toggle svg { flex-shrink: 0; }
 .nav-empty { font-size: 12px; color: var(--muted); padding: 28px 13px; line-height: 1.7; }
 .nav-footer { margin-top: auto; padding: 14px 14px 10px; }
 .nav-bottom-link { display: flex; align-items: center; gap: 10px; border: 0; border-radius: 7px; padding: 10px; font-size: 12px; color: var(--muted); text-align: left; }

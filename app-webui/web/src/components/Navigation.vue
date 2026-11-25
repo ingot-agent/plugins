@@ -2,12 +2,13 @@
 import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
-import { Search, Plus, Archive, Settings2, MessageSquare, Folder, PanelLeftClose } from 'lucide-vue-next'
+import { Search, Plus, Archive, Settings2, MessageSquare, Folder, PanelLeftClose, ChevronDown, ChevronUp } from 'lucide-vue-next'
 import { useRuntime } from '../stores/runtime'
-import { useRelativeTime, workspaceBasename } from '../time'
+import { useRelativeTime } from '../time'
+import { GROUP_SESSION_LIMIT, groupSessions, isGroupCollapsed, visibleGroupSessions } from '../sessionGroups'
+import type { SessionGroup, GroupView } from '../sessionGroups'
 import Brand from './Brand.vue'
 import SessionMenu from './SessionMenu.vue'
-import type { Session } from '../protocol'
 const emit = defineEmits<{ navigate: []; settings: []; collapse: [] }>()
 const { t } = useI18n()
 const router = useRouter()
@@ -20,30 +21,24 @@ const sessions = computed(() => runtime.orderedSessions.filter(session =>
   session.title.toLocaleLowerCase().includes(search.value.toLocaleLowerCase()) ||
   (session.workspace || '').toLocaleLowerCase().includes(search.value.toLocaleLowerCase())))
 const hasPending = (id: string) => Object.values(runtime.interactions).some(item => item.scope?.agent?.sessionId === id)
-function startInWorkspace(group: Group) {
+function startInWorkspace(group: SessionGroup) {
   void router.push({ path: "/new", query: { workspace: group.key } })
   emit("navigate")
 }
 
-// Group sessions by workspace root, preserving most-recent session order.
-// Sessions without a binding collapse under a single "no workspace" group.
-interface Group { key: string; label: string; sessions: Session[] }
-const groups = computed<Group[]>(() => {
-  const ordered: Group[] = []
-  const byKey = new Map<string, Group>()
-  for (const session of sessions.value) {
-    const key = session.workspace || ''
-    const label = key ? workspaceBasename(key) : t('unnamedWorkspace')
-    let group = byKey.get(key)
-    if (!group) {
-      group = { key, label, sessions: [] }
-      byKey.set(key, group)
-      ordered.push(group)
-    }
-    group.sessions.push(session)
-  }
-  return ordered
-})
+const groups = computed(() => groupSessions(sessions.value, t('unnamedWorkspace')))
+const filtering = computed(() => search.value.trim().length > 0)
+// Explicit user choices win over the defaults; a group nobody touched folds
+// itself once it grows past the limit, unless the open conversation lives there.
+const groupOverrides = ref<Map<string, boolean>>(new Map())
+const view = computed<GroupView>(() => ({ overrides: groupOverrides.value, filtering: filtering.value, activeSessionId: runtime.activeSession || undefined }))
+const collapsed = (group: SessionGroup) => isGroupCollapsed(group, view.value)
+const visibleSessions = (group: SessionGroup) => visibleGroupSessions(group, view.value)
+function toggleGroup(group: SessionGroup) {
+  const next = new Map(groupOverrides.value)
+  next.set(group.key, collapsed(group))
+  groupOverrides.value = next
+}
 </script>
 <template>
   <nav class="navigation" :aria-label="t('conversations')">
@@ -59,7 +54,7 @@ const groups = computed<Group[]>(() => {
           <Folder :size="15" /><span class="truncate">{{ group.label }}</span>
           <button v-if="group.key" class="icon-button workspace-new-button" :aria-label="t('newInWorkspace')" :title="t('newInWorkspace')" @click.stop="startInWorkspace(group)"><Plus :size="14" /></button>
         </div>
-        <div v-for="session in group.sessions" :key="session.id" class="session-row">
+        <div v-for="session in visibleSessions(group)" :key="session.id" class="session-row">
           <RouterLink :to="'/sessions/' + encodeURIComponent(session.id)" class="session-link" @click="$emit('navigate')">
             <span v-if="runtime.running(session.id).length" class="activity-dot" />
             <span v-else-if="hasPending(session.id)" class="pending-dot" />
@@ -69,6 +64,17 @@ const groups = computed<Group[]>(() => {
           </RouterLink>
           <SessionMenu :session="session" />
         </div>
+        <button
+          v-if="!filtering && group.sessions.length > GROUP_SESSION_LIMIT"
+          type="button"
+          class="group-toggle"
+          :aria-expanded="!collapsed(group)"
+          @click="toggleGroup(group)"
+        >
+          <ChevronUp v-if="!collapsed(group)" :size="14" />
+          <ChevronDown v-else :size="14" />
+          <span>{{ collapsed(group) ? t('showMoreSessions', { count: group.sessions.length - GROUP_SESSION_LIMIT }) : t('showFewerSessions') }}</span>
+        </button>
       </template>
       <p v-if="!groups.length" class="nav-empty">{{ t(search ? 'noMatches' : 'emptySessions') }}</p>
     </div>

@@ -47,7 +47,7 @@ func (a *application) handleSelectFiles(w http.ResponseWriter, r *http.Request) 
 	}
 	initial := request.InitialPath
 	if initial == "" {
-		initial = a.defaultWorkspace
+		initial = a.defaultWorkspace()
 	}
 	initial, err := canonicalWorkspaceRoot(initial)
 	if err != nil {

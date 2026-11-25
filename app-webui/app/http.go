@@ -87,7 +87,7 @@ func (a *application) handleState(w http.ResponseWriter, r *http.Request) {
 		Agent:                appbackend.AgentState{Capabilities: a.agent.Capabilities()},
 		Assets:               appbackend.AssetState{Available: a.assets != nil, MaxBytes: a.config.MaxAssetBytes},
 		Files:                appbackend.AssetState{Available: a.filePicker != nil, MaxBytes: a.config.MaxAssetBytes},
-		Workspace:            appbackend.WorkspaceState{DefaultPath: a.defaultWorkspace},
+		Workspace:            appbackend.WorkspaceState{DefaultPath: a.defaultWorkspace()},
 		Sessions:             sessions,
 		Operations:           a.operations.List(),
 		Turns:                projectSubmissions(state),
@@ -730,6 +730,8 @@ func apiError(err error) (int, appbackend.ErrorDetail) {
 		status, code = http.StatusRequestTimeout, "canceled"
 	case errors.Is(err, context.DeadlineExceeded):
 		status, code = http.StatusRequestTimeout, "deadline_exceeded"
+	case errors.Is(err, appbackend.ErrInvalidConfig):
+		status, code = http.StatusBadRequest, "invalid_config"
 	case errors.Is(err, appbackend.ErrInvalidInteractionResponse):
 		status, code = http.StatusBadRequest, "interaction_invalid_response"
 	case errors.Is(err, appbackend.ErrInteractionNotFound):

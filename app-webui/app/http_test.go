@@ -302,10 +302,10 @@ func testApplication(t *testing.T) *application {
 		backend: deps.Backend, agent: controller, sessions: sessions,
 		// Tests never assert on cleanup diagnostics; an explicit Discard keeps
 		// the no-provider behavior without a nil logger.
-		logger:           logging.Discard(),
-		defaultWorkspace: defaultWorkspace,
-		uploadDirectory:  filepath.Join(t.TempDir(), "uploads"),
-		workspacePicker:  &stubWorkspacePicker{canceled: true},
+		logger:          logging.Discard(),
+		workspaces:      &workspaceState{path: defaultWorkspace},
+		uploadDirectory: filepath.Join(t.TempDir(), "uploads"),
+		workspacePicker: &stubWorkspacePicker{canceled: true},
 	}
 	a.turns = newTurnRegistry(ctx, controller, deps.Backend.Events())
 	a.operations, err = newOperationController(nil)
@@ -491,7 +491,7 @@ func TestSessionHTTPAndBootstrap(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &state); err != nil {
 		t.Fatal(err)
 	}
-	if w.Header().Get("Cache-Control") != "no-store" || state.Cursor != 2 || state.Workspace.DefaultPath != a.defaultWorkspace || len(state.Sessions) != 1 || state.Sessions[0].Title != "renamed" {
+	if w.Header().Get("Cache-Control") != "no-store" || state.Cursor != 2 || state.Workspace.DefaultPath != a.defaultWorkspace() || len(state.Sessions) != 1 || state.Sessions[0].Title != "renamed" {
 		t.Fatalf("state = %#v, headers = %v", state, w.Header())
 	}
 	if !state.Agent.Capabilities.SendMessage || state.Turns == nil || state.Interactions == nil || state.InteractionStates == nil {
@@ -615,7 +615,7 @@ func TestCreateSessionUsesDefaultWorkspaceAndRejectsInvalidExplicitPath(t *testi
 		w := httptest.NewRecorder()
 		a.routes().ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/sessions", strings.NewReader(body)))
 		var item appbackend.Session
-		if w.Code != http.StatusCreated || json.Unmarshal(w.Body.Bytes(), &item) != nil || item.Workspace != a.defaultWorkspace {
+		if w.Code != http.StatusCreated || json.Unmarshal(w.Body.Bytes(), &item) != nil || item.Workspace != a.defaultWorkspace() {
 			t.Fatalf("default workspace body %s = %d %s", body, w.Code, w.Body.String())
 		}
 	}
@@ -811,7 +811,7 @@ func TestUnboundSessionUsesDefaultWorkspaceOnFirstTurn(t *testing.T) {
 		t.Fatalf("unbound turn = %d %s", turn.Code, turn.Body.String())
 	}
 	item, err := a.sessions.Get(context.Background(), metadata.ID)
-	if err != nil || item.Workspace != a.defaultWorkspace {
+	if err != nil || item.Workspace != a.defaultWorkspace() {
 		t.Fatalf("auto-bound session = %#v, %v", item, err)
 	}
 }
@@ -863,7 +863,7 @@ func TestForkBindsLegacySourceToDefaultWorkspace(t *testing.T) {
 		t.Fatal(err)
 	}
 	boundSource, err := a.sessions.Get(context.Background(), source.ID)
-	if err != nil || boundSource.Workspace != a.defaultWorkspace || fork.Workspace != a.defaultWorkspace {
+	if err != nil || boundSource.Workspace != a.defaultWorkspace() || fork.Workspace != a.defaultWorkspace() {
 		t.Fatalf("source = %#v, fork = %#v, err = %v", boundSource, fork, err)
 	}
 }
@@ -882,7 +882,7 @@ func TestWorkspacePickerReturnsSelectionAndCancellation(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil {
 		t.Fatal(err)
 	}
-	if result.Path == nil || *result.Path != selected || picker.initial != a.defaultWorkspace {
+	if result.Path == nil || *result.Path != selected || picker.initial != a.defaultWorkspace() {
 		t.Fatalf("selection = %#v, picker = %#v", result, picker)
 	}
 	picker.path, picker.canceled = "", true
@@ -925,5 +925,18 @@ func TestWorkspacePickerReportsNativeFailures(t *testing.T) {
 	a.routes().ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/workspace/select", strings.NewReader(`{}`)))
 	if w.Code != http.StatusServiceUnavailable || !strings.Contains(w.Body.String(), `"workspace_picker_unavailable"`) {
 		t.Fatalf("unavailable picker = %d %s", w.Code, w.Body.String())
+	}
+}
+
+// TestAPIErrorClassifiesConfigurationFailures keeps a rejected setting a client
+// error. Without the mapping a bad default workspace or editor command surfaced
+// as internal_error, which reads as a server bug rather than a bad value.
+func TestAPIErrorClassifiesConfigurationFailures(t *testing.T) {
+	status, detail := apiError(fmt.Errorf("default_workspace must be an absolute path: %w", appbackend.ErrInvalidConfig))
+	if status != http.StatusBadRequest || detail.Code != "invalid_config" {
+		t.Fatalf("classification = %d %q", status, detail.Code)
+	}
+	if !strings.Contains(detail.Message, "absolute path") {
+		t.Fatalf("message = %q", detail.Message)
 	}
 }
