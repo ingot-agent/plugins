@@ -71,7 +71,7 @@ type application struct {
 	serveErr             error
 	sessionMu            sync.Mutex
 	workspacePickerMu    sync.Mutex
-	defaultWorkspace     string
+	workspaces           *workspaceState
 	uploadDirectory      string
 	workspacePicker      workspacePicker
 	filePicker           filePicker
@@ -110,7 +110,13 @@ func New(ctx context.Context, deps Dependencies) (Exports, ingotabi.Cleanup, err
 	if isNil(deps.Backend.Events()) || isNil(deps.Backend.Interactions()) {
 		return Exports{}, nil, fmt.Errorf("backend events and interactions are required: %w", appbackend.ErrInvalidConfig)
 	}
-	operations, err := newOperationController(append(append([]operation.Operation(nil), deps.Operations...), newConfigOperations(deps.State, normalized)...))
+	// The fallback Workspace is filled in after the mode check, but the config
+	// Operation must be able to replace it later without a restart.
+	workspaces := &workspaceState{}
+	publishWorkspace := func(state appbackend.WorkspaceState) {
+		_ = deps.Backend.Events().Publish(appbackend.Event{Type: "workspace.updated", Data: state})
+	}
+	operations, err := newOperationController(append(append([]operation.Operation(nil), deps.Operations...), newConfigOperations(deps.State, normalized, workspaces, publishWorkspace)...))
 	if err != nil {
 		return Exports{}, nil, err
 	}
@@ -124,10 +130,11 @@ func New(ctx context.Context, deps Dependencies) (Exports, ingotabi.Cleanup, err
 	if deps.Invocation.Mode() == invocation.ModeCheck {
 		return Exports{}, nil, nil
 	}
-	defaultWorkspace, err := prepareDefaultWorkspace(deps.State.Dir())
+	defaultWorkspace, err := prepareDefaultWorkspace(deps.State.Dir(), normalized.DefaultWorkspace)
 	if err != nil {
 		return Exports{}, nil, fmt.Errorf("prepare default workspace: %w", err)
 	}
+	workspaces.set(defaultWorkspace)
 	listener, err := net.Listen("tcp", normalized.Address)
 	if err != nil {
 		return Exports{}, nil, fmt.Errorf("listen on %s: %w", normalized.Address, err)
@@ -142,15 +149,15 @@ func New(ctx context.Context, deps Dependencies) (Exports, ingotabi.Cleanup, err
 	runCtx, cancel := context.WithCancel(ctx)
 	instance := &application{
 		config: normalized, backend: deps.Backend, agent: agentController, sessions: sessionController,
-		operations:       operations,
-		logger:           logger,
-		listener:         listener,
-		serveDone:        make(chan struct{}),
-		defaultWorkspace: defaultWorkspace,
-		uploadDirectory:  filepath.Join(deps.State.Dir(), "uploads"),
-		workspacePicker:  nativeWorkspacePicker{},
-		filePicker:       nativeFilePicker{},
-		fileOpener:       configuredFileOpener{scopeDir: deps.State.Dir()},
+		operations:      operations,
+		logger:          logger,
+		listener:        listener,
+		serveDone:       make(chan struct{}),
+		workspaces:      workspaces,
+		uploadDirectory: filepath.Join(deps.State.Dir(), "uploads"),
+		workspacePicker: nativeWorkspacePicker{},
+		filePicker:      nativeFilePicker{},
+		fileOpener:      configuredFileOpener{scopeDir: deps.State.Dir()},
 	}
 	instance.turns = newTurnRegistry(runCtx, agentController, deps.Backend.Events())
 	if deps.ModelSelection.Valid {

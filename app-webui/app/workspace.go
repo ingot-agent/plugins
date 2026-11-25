@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	appbackend "github.com/ingot-agent/plugins/app-webui"
 	"github.com/ingot-agent/sdk/session"
@@ -32,7 +33,10 @@ func (nativeWorkspacePicker) Select(ctx context.Context, initialPath string) (st
 	return selectNativeWorkspace(ctx, initialPath)
 }
 
-func prepareDefaultWorkspace(stateDirectory string) (string, error) {
+func prepareDefaultWorkspace(stateDirectory, configured string) (string, error) {
+	if strings.TrimSpace(configured) != "" {
+		return createWorkspaceRoot(configured)
+	}
 	if strings.TrimSpace(stateDirectory) == "" {
 		return "", fmt.Errorf("plugin state directory is required: %w", appbackend.ErrInvalidConfig)
 	}
@@ -40,10 +44,46 @@ func prepareDefaultWorkspace(stateDirectory string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("resolve default workspace: %w", err)
 	}
+	return createWorkspaceRoot(root)
+}
+
+// createWorkspaceRoot creates a missing Workspace directory and returns its
+// canonical form, so a configured path behaves exactly like the built-in one.
+func createWorkspaceRoot(root string) (string, error) {
+	// Reject a relative path before creating anything, so a typo cannot leave a
+	// stray directory relative to the Runtime working directory.
+	if !filepath.IsAbs(strings.TrimSpace(root)) {
+		return "", fmt.Errorf("workspace must be an absolute directory path: %w", workspace.ErrInvalidBinding)
+	}
 	if err := os.MkdirAll(root, 0o700); err != nil {
 		return "", fmt.Errorf("create default workspace %q: %w", root, err)
 	}
 	return canonicalWorkspaceRoot(root)
+}
+
+// workspaceState owns the server-side fallback Workspace. Every request reads it
+// through workspaceState.get, so saving a new path applies without a restart.
+type workspaceState struct {
+	mu   sync.RWMutex
+	path string
+}
+
+func (w *workspaceState) get() string {
+	if w == nil {
+		return ""
+	}
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	return w.path
+}
+
+func (w *workspaceState) set(path string) {
+	if w == nil {
+		return
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.path = path
 }
 
 func canonicalWorkspaceRoot(root string) (string, error) {
@@ -69,9 +109,13 @@ func canonicalWorkspaceRoot(root string) (string, error) {
 	return filepath.Clean(absolute), nil
 }
 
+func (a *application) defaultWorkspace() string {
+	return a.workspaces.get()
+}
+
 func (a *application) workspaceBinding(root string) (workspace.Binding, error) {
 	if strings.TrimSpace(root) == "" {
-		root = a.defaultWorkspace
+		root = a.defaultWorkspace()
 	}
 	canonical, err := canonicalWorkspaceRoot(root)
 	if err != nil {
@@ -87,7 +131,7 @@ func (a *application) ensureWorkspace(ctx context.Context, id session.ID) (appba
 	if err != nil || item.Workspace != "" {
 		return item, err
 	}
-	item, err = a.sessions.AssignWorkspace(ctx, id, workspace.Binding{Root: a.defaultWorkspace})
+	item, err = a.sessions.AssignWorkspace(ctx, id, workspace.Binding{Root: a.defaultWorkspace()})
 	if errors.Is(err, workspace.ErrAlreadyAssigned) {
 		return a.sessions.Get(ctx, id)
 	}
@@ -106,7 +150,7 @@ func (a *application) handleSelectWorkspace(w http.ResponseWriter, r *http.Reque
 	}
 	initial := request.InitialPath
 	if strings.TrimSpace(initial) == "" {
-		initial = a.defaultWorkspace
+		initial = a.defaultWorkspace()
 	}
 	canonicalInitial, err := canonicalWorkspaceRoot(initial)
 	if err != nil {

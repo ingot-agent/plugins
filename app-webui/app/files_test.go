@@ -56,7 +56,7 @@ func TestNativeFileSelectionKeepsNonImagesAtOriginalPaths(t *testing.T) {
 	if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &result) != nil || len(result.Files) != len(paths) {
 		t.Fatalf("selection=%d %s", w.Code, w.Body.String())
 	}
-	if picker.initial != a.defaultWorkspace || assets.calls != 0 {
+	if picker.initial != a.defaultWorkspace() || assets.calls != 0 {
 		t.Fatalf("picker=%+v uploads=%d", picker, assets.calls)
 	}
 	input, err := attachmentInput("files", result.Files)

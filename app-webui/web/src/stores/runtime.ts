@@ -272,6 +272,8 @@ export const useRuntime = defineStore('runtime', () => {
         mergeSession(item)
         sessions.value = [...sessions.value.filter(session => session.id !== item.id), item]
       }
+    } else if (event.type === 'workspace.updated') {
+      defaultWorkspace.value = data.defaultPath || ''
     } else if (event.type === 'followup.created' || event.type === 'followup.deleted') {
       const id = data.sourceSessionId
       if (id && (id === activeSession.value || followups.value[id])) void loadFollowups(id)

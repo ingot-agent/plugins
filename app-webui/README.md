@@ -30,9 +30,14 @@ ingot start web
 
 ## 工作区能力
 
-- 应用正常启动时在插件 state 目录下创建 `workspace/` 作为默认工作区，并通过
-  `GET /api/state` 的 `workspace.defaultPath` 暴露其规范绝对路径。新会话没有显式选择
+- 默认工作区默认为插件 state 目录下的 `workspace/`，也可以用
+  `backend.default_workspace` 指定任意绝对目录（缺失时自动创建）。应用启动时解析并创建它，
+  通过 `GET /api/state` 的 `workspace.defaultPath` 暴露其规范绝对路径。新会话没有显式选择
   目录时绑定此默认工作区；显式选择只影响当前待创建的会话，不会成为后续会话的默认值。
+  修改 `default_workspace` 立即对新请求生效，无需重启；已绑定目录的旧会话不会迁移。
+- 修改 `default_workspace` 后，服务端向已连接的浏览器推送 `workspace.updated`
+  （`{"defaultPath":"..."}`），界面上的默认工作区文案无需刷新即可更新；`GET /api/state`
+  的 `workspace.defaultPath` 也始终返回当前有效路径。
 - Workspace Binding 在 Session 生命周期内不可修改。由旧 schema 升级而来的未绑定
   Session 在首次创建 Turn、发起带 Session scope 的 Operation 或 Fork 时自动绑定默认工作区；
   用户也可以在这些动作发生前显式选择并完成一次性绑定。
@@ -79,6 +84,7 @@ heartbeat_interval_seconds = 15
 operation_retention = 128
 max_asset_bytes = 67108864
 text_editor_command = ""
+default_workspace = "/absolute/path/to/work"
 ```
 
 | 字段 | 默认值 | 作用 |
@@ -90,10 +96,11 @@ text_editor_command = ""
 | `operation_retention` | 128 | 保留的终态 Operation invocation 数量，运行中调用另行保留 |
 | `max_asset_bytes` | 67,108,864（64 MiB） | 单个所选文件及单次 Asset 上传上限 |
 | `text_editor_command` | 空字符串 | 外部文本编辑器命令模板；留空使用系统文本应用，保存后下次打开即生效 |
+| `default_workspace` | 空字符串 | 默认工作区绝对路径；留空使用插件 state 目录下的 `workspace/`。目录不存在时自动创建，保存后立即生效 |
 
 数值字段 `0` 选择默认值；负数无效，heartbeat 还检查 duration 溢出。`address` 空字符串选择默认值。`max_asset_bytes` 不是 JSON 请求上限，普通 JSON 请求另有固定的 1 MiB 上限。
 
-Web 命令 `/app-webui config`（Group `app-webui`、Name `config`、输入 `{}`）通过结构化交互修改上述七项，并原子写入插件配置。配置交互期间文件发生变化时拒绝覆盖。返回七个规范化字段和 `restart_required`：保存后的服务器设置与当前启动配置不同时为 `true`。**监听地址、缓冲及其他服务器设置需要执行 `ingot restart web` 后生效**；文本编辑器命令在每次打开文件时读取最新保存值，单独修改该项不要求重启。结果反映已保存的目标配置，重启前 `/api/state` 仍反映当前实例的有效状态。
+Web 命令 `/app-webui config`（Group `app-webui`、Name `config`、输入 `{}`）通过结构化交互修改上述八项，并原子写入插件配置。配置交互期间文件发生变化时拒绝覆盖。返回八个规范化字段和 `restart_required`：保存后的服务器设置与当前启动配置不同时为 `true`。**监听地址、缓冲及其他服务器设置需要执行 `ingot restart web` 后生效**；文本编辑器命令在每次打开文件时读取最新保存值，默认工作区在每次请求时读取，单独修改这两项不要求重启。结果反映已保存的目标配置；监听地址等重启前 `/api/state` 仍反映当前实例的有效状态。`default_workspace` 会在写入前解析并创建目录，非法路径（相对路径、文件）直接报错且不落盘。
 
 ## HTTP 接口
 

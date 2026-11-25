@@ -332,10 +332,10 @@ func TestBrowserFixture(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(a.defaultWorkspace, "pixel.png"), pixel, 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(a.defaultWorkspace(), "pixel.png"), pixel, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	documents := filepath.Join(a.defaultWorkspace, "documents")
+	documents := filepath.Join(a.defaultWorkspace(), "documents")
 	if err := os.MkdirAll(documents, 0o700); err != nil {
 		t.Fatal(err)
 	}

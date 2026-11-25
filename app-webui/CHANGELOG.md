@@ -4,6 +4,20 @@
 
 ### Added
 
+- Configure the default workspace through `backend.default_workspace` and the
+  `/app-webui config` Operation. An unconfigured installation keeps using
+  `workspace/` inside the Plugin state scope. A configured directory is created
+  when missing and resolved to its canonical path before it is persisted, so a
+  typo fails the save instead of the next startup. The value is read per
+  request, so it applies without restarting the Runtime; conversations that
+  already bound a directory keep it.
+
+### Changed
+
+- Report a rejected configuration as `invalid_config` (HTTP 400) instead of
+  `internal_error`. A bad default workspace or editor command is a caller
+  mistake, and the generic code made it look like a server bug.
+
 - Fold a workspace with more than seven conversations in the conversation
   sidebar, with a per-workspace "Show N more" toggle that does not fold search
   results or the conversation currently open.

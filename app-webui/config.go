@@ -95,7 +95,8 @@ type Config struct {
 	Backend BackendConfig `toml:"backend"`
 }
 
-// BackendConfig controls the HTTP server, event delivery and host text editor.
+// BackendConfig controls the HTTP server, event delivery, host text editor and
+// the fallback Workspace.
 type BackendConfig struct {
 	Address                  string `toml:"address"`
 	ReplayCapacity           int    `toml:"replay_capacity"`
@@ -104,6 +105,10 @@ type BackendConfig struct {
 	OperationRetention       int    `toml:"operation_retention"`
 	MaxAssetBytes            int64  `toml:"max_asset_bytes"`
 	TextEditorCommand        string `toml:"text_editor_command,omitempty"`
+	// DefaultWorkspace is the absolute directory conversations bind to when the
+	// user did not choose one. Empty keeps the built-in workspace inside the
+	// Plugin state scope, which is what an unconfigured installation uses.
+	DefaultWorkspace string `toml:"default_workspace,omitempty"`
 }
 
 // NormalizedBackendConfig contains validated configuration with defaults.
@@ -115,6 +120,7 @@ type NormalizedBackendConfig struct {
 	OperationRetention int
 	MaxAssetBytes      int64
 	TextEditorCommand  string
+	DefaultWorkspace   string
 }
 
 // Normalize validates the backend configuration and materializes defaults.
@@ -126,9 +132,15 @@ func (c Config) Normalize() (NormalizedBackendConfig, error) {
 		OperationRetention: c.Backend.OperationRetention,
 		MaxAssetBytes:      c.Backend.MaxAssetBytes,
 		TextEditorCommand:  c.Backend.TextEditorCommand,
+		DefaultWorkspace:   c.Backend.DefaultWorkspace,
 	}
 	if _, err := editorcmd.Parse(cfg.TextEditorCommand); err != nil {
 		return NormalizedBackendConfig{}, fmt.Errorf("%w: %w", err, ErrInvalidConfig)
+	}
+	// The directory itself is resolved and created by the running server, which
+	// owns the state scope. Only the shape is a configuration concern here.
+	if cfg.DefaultWorkspace != "" && !filepath.IsAbs(cfg.DefaultWorkspace) {
+		return NormalizedBackendConfig{}, fmt.Errorf("default_workspace must be an absolute path: %w", ErrInvalidConfig)
 	}
 	if cfg.Address == "" {
 		cfg.Address = defaultAddress
