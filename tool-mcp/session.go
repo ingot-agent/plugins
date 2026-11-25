@@ -325,6 +325,20 @@ func (p *platform) evictIdleLocked(server string, keep connectionKey) *serverRun
 	return candidate
 }
 
+// invalidateLease retires the connector of one Session after a transport
+// failure. It never creates a connector: a fresh one would consume a capacity
+// slot and carry no resolved working directory.
+func (p *platform) invalidateLease(key connectionKey, handle *lease, cause error) bool {
+	p.mu.Lock()
+	runtime, ok := p.runtimes[key]
+	p.mu.Unlock()
+	if !ok {
+		handle.retire()
+		return false
+	}
+	return runtime.invalidate(handle, cause)
+}
+
 // markStale retires every live session. A session still used by an in-flight
 // call is closed when that call releases it, so reconfiguration never aborts a
 // call that already started; later calls connect with the new configuration.
@@ -420,8 +434,9 @@ func (p *platform) statuses() []serverStatus {
 			result = append(result, status)
 			continue
 		}
-		// Report the worst state among the connections: a single broken Session
-		// is what the user needs to see, not the average.
+		// One server can carry several connections in different states. Report
+		// any live connection, otherwise the most severe failure, so a single
+		// broken Session is visible instead of averaged away.
 		merged := serverStatus{}
 		for index, runtime := range runtimes {
 			current := runtime.status(serverStatus{Name: server.Name, Transport: server.Transport})
@@ -442,11 +457,7 @@ func (p *platform) statuses() []serverStatus {
 			if merged.CwdSource == "" {
 				merged.CwdSource = current.CwdSource
 			}
-			if current.Status == "connected" && merged.Status != "connected" {
-				merged.Status = "connected"
-			} else if current.Status == "backoff" && merged.Status != "connected" {
-				merged.Status = "backoff"
-			} else if merged.Status == "" || merged.Status == "never" {
+			if statusRank(current.Status) > statusRank(merged.Status) {
 				merged.Status = current.Status
 			}
 		}
@@ -458,6 +469,20 @@ func (p *platform) statuses() []serverStatus {
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].Name < result[j].Name })
 	return result
+}
+
+// statusRank orders connection states by how much attention they need.
+func statusRank(status string) int {
+	switch status {
+	case "connected":
+		return 3
+	case "backoff":
+		return 2
+	case "idle":
+		return 1
+	default:
+		return 0
+	}
 }
 
 // serverRuntime owns the MCP session of one (server, Session) pair.

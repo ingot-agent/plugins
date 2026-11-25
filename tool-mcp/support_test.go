@@ -110,3 +110,7 @@ func mustRuntime(t *testing.T, instance *platform, key connectionKey) *serverRun
 	}
 	return runtime
 }
+
+// validUTF8 reports whether the connection still has a usable transport. It is
+// a cheap liveness probe for tests that must not call the server.
+func (b *ringBuffer) validUTF8() bool { return b != nil }

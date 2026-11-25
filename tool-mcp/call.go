@@ -88,8 +88,7 @@ func (t *mcpTool) Invoke(ctx context.Context, invocation tool.Invocation) (tool.
 		// the next call reconnects instead of failing forever, and record the
 		// outage for backoff and mcp_status.
 		key := connectionKey{server: t.server, session: string(invocation.Scope.SessionID)}
-		runtime, lookupErr := t.platform.runtimeFor(key, server, "", "")
-		if lookupErr == nil && runtime.invalidate(held, err) {
+		if t.platform.invalidateLease(key, held, err) {
 			stderr := held.conn.stderr.String()
 			if stderr != "" {
 				t.platform.logger.Warn(ctx, "MCP server closed its transport",
