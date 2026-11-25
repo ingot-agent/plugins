@@ -49,11 +49,14 @@ func (t *statusTool) Invoke(ctx context.Context, _ tool.Invocation) (tool.Result
 }
 
 type statusReport struct {
-	SnapshotGeneratedAt string                 `json:"snapshot_generated_at,omitempty"`
-	SnapshotStale       bool                   `json:"snapshot_stale"`
-	RestartRequired     bool                   `json:"restart_required"`
-	ExportedToolCount   int                    `json:"exported_tool_count"`
-	Servers             []serverStatusSnapshot `json:"servers"`
+	SnapshotGeneratedAt string `json:"snapshot_generated_at,omitempty"`
+	SnapshotStale       bool   `json:"snapshot_stale"`
+	RestartRequired     bool   `json:"restart_required"`
+	// Elicitation reports whether a server can ask the user for input mid-call.
+	// It is false when the composition has no interaction facility.
+	Elicitation       bool                   `json:"elicitation"`
+	ExportedToolCount int                    `json:"exported_tool_count"`
+	Servers           []serverStatusSnapshot `json:"servers"`
 }
 
 type serverStatusSnapshot struct {
@@ -85,6 +88,7 @@ func (t *statusTool) report() statusReport {
 	}
 
 	report := statusReport{
+		Elicitation:       t.platform.elicitServices(),
 		SnapshotStale:     stale,
 		RestartRequired:   !equalStringSets(t.exported, discovered),
 		ExportedToolCount: len(t.exported),

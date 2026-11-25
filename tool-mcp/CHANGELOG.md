@@ -3,6 +3,10 @@
 ## Unreleased
 
 - Require Go 1.26, matching the repository build floor.
+- Support MCP elicitation: a server can ask the Session user for input during a
+  call. The capability is advertised only for a Session-bound connection and only
+  when the composition provides an interaction facility, so discovery can never
+  prompt. Form mode only; URL mode is declined.
 - Scope each MCP session to one Session and set its working directory at process
   creation from the Session workspace. Sessions no longer share server-side
   state, and relative paths resolve inside the caller's workspace instead of the

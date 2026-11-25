@@ -74,6 +74,40 @@ func runHelperServer() error {
 		}, nil
 	})
 
+	// "elicit" asks the client for a value and echoes the outcome. The current
+	// protocol forbids a server-initiated elicitation while it is serving a
+	// request, so the server returns input requests and is invoked again with
+	// the answers, which is exactly the path the client middleware drives.
+	server.AddTool(&mcp.Tool{
+		Name:        "elicit",
+		Description: "Ask the client for a value, then report the outcome.",
+		InputSchema: map[string]any{"type": "object"},
+	}, func(_ context.Context, request *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		response, answered := request.Params.InputResponses["confirm"]
+		if !answered {
+			return &mcp.CallToolResult{InputRequests: mcp.InputRequestMap{
+				"confirm": &mcp.ElicitParams{
+					Mode:    "form",
+					Message: "Please confirm the deployment.",
+					RequestedSchema: map[string]any{
+						"type": "object",
+						"properties": map[string]any{
+							"confirm": map[string]any{"type": "boolean", "title": "Confirm"},
+							"note":    map[string]any{"type": "string", "title": "Note", "default": "none"},
+						},
+						"required": []any{"confirm"},
+					},
+				},
+			}}, nil
+		}
+		// Echo the client's answer exactly as the protocol delivered it.
+		payload, err := json.Marshal(response)
+		if err != nil {
+			return nil, err
+		}
+		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: string(payload)}}}, nil
+	})
+
 	server.AddTool(&mcp.Tool{
 		Name:        "where",
 		Description: "Report the working directory and a per-process nonce.",
@@ -235,7 +269,7 @@ func TestDiscoveryAndInvocation(t *testing.T) {
 	exports, cleanup = gateway(t, dir)
 	defer cleanup()
 
-	want := []string{"mcp_helper_echo", "mcp_helper_fail", "mcp_helper_image", "mcp_helper_progress", "mcp_helper_slow", "mcp_helper_where", statusToolName}
+	want := []string{"mcp_helper_echo", "mcp_helper_elicit", "mcp_helper_fail", "mcp_helper_image", "mcp_helper_progress", "mcp_helper_slow", "mcp_helper_where", statusToolName}
 	if got := toolNames(exports.Tools); !equalStrings(got, want) {
 		t.Fatalf("tools = %v, want %v", got, want)
 	}

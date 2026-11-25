@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/ingot-agent/sdk/interaction"
 	"os"
 	"path/filepath"
 	"testing"
@@ -49,7 +50,7 @@ func platformWithWorkspace(t *testing.T, dir string, resolver workspace.Resolver
 	if err != nil {
 		t.Fatalf("normalizeConfig: %v", err)
 	}
-	return newPlatform(dir, ingotabiNone(), ingotabi.Some[workspace.Resolver](resolver), discardLogger(), nil, config)
+	return newPlatform(dir, ingotabiNone(), ingotabi.Some[workspace.Resolver](resolver), ingotabi.None[interaction.ExecutionBinder](), discardLogger(), nil, config)
 }
 
 // TestCwdFollowsTheSessionWorkspace is the core promise: the MCP process is
@@ -112,7 +113,7 @@ func TestSessionsGetIsolatedProcesses(t *testing.T) {
 		t.Fatalf("normalizeConfig: %v", err)
 	}
 	instance := newPlatform(dir, ingotabiNone(),
-		ingotabi.Some[workspace.Resolver](mappedResolver{roots: roots}), discardLogger(), nil, config)
+		ingotabi.Some[workspace.Resolver](mappedResolver{roots: roots}), ingotabi.None[interaction.ExecutionBinder](), discardLogger(), nil, config)
 	defer instance.closeAll()
 
 	where := &mcpTool{
@@ -183,7 +184,7 @@ func TestServerCwdOverridesWorkspace(t *testing.T) {
 		t.Fatalf("normalizeConfig: %v", err)
 	}
 	instance := newPlatform(t.TempDir(), ingotabiNone(),
-		ingotabi.Some[workspace.Resolver](staticResolver{root: t.TempDir()}), discardLogger(), nil, config)
+		ingotabi.Some[workspace.Resolver](staticResolver{root: t.TempDir()}), ingotabi.None[interaction.ExecutionBinder](), discardLogger(), nil, config)
 	defer instance.closeAll()
 
 	if _, err := instance.acquire(context.Background(), "helper", execution.Scope{SessionID: "session-a"}); err != nil {
@@ -210,7 +211,7 @@ func TestNoWorkspaceCapabilityInherits(t *testing.T) {
 	if err != nil {
 		t.Fatalf("normalizeConfig: %v", err)
 	}
-	instance := newPlatform(dir, ingotabiNone(), ingotabi.None[workspace.Resolver](), discardLogger(), nil, config)
+	instance := newPlatform(dir, ingotabiNone(), ingotabi.None[workspace.Resolver](), ingotabi.None[interaction.ExecutionBinder](), discardLogger(), nil, config)
 	defer instance.closeAll()
 
 	if _, err := instance.acquire(context.Background(), "helper", execution.Scope{SessionID: "session-a"}); err != nil {
@@ -236,7 +237,7 @@ func TestSessionCapacityFailsClosed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("normalizeConfig: %v", err)
 	}
-	instance := newPlatform(dir, ingotabiNone(), ingotabi.None[workspace.Resolver](), discardLogger(), nil, config)
+	instance := newPlatform(dir, ingotabiNone(), ingotabi.None[workspace.Resolver](), ingotabi.None[interaction.ExecutionBinder](), discardLogger(), nil, config)
 	defer instance.closeAll()
 
 	var held []*lease
@@ -272,7 +273,7 @@ func TestIdleSessionIsEvictedForANewOne(t *testing.T) {
 	if err != nil {
 		t.Fatalf("normalizeConfig: %v", err)
 	}
-	instance := newPlatform(dir, ingotabiNone(), ingotabi.None[workspace.Resolver](), discardLogger(), nil, config)
+	instance := newPlatform(dir, ingotabiNone(), ingotabi.None[workspace.Resolver](), ingotabi.None[interaction.ExecutionBinder](), discardLogger(), nil, config)
 	defer instance.closeAll()
 
 	for index := 0; index < maxSessionsPerServer; index++ {

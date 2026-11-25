@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	ingotabi "github.com/ingot-agent/ingot-abi"
+	"github.com/ingot-agent/sdk/interaction"
 	"github.com/ingot-agent/sdk/workspace"
 	"os"
 	"os/exec"
@@ -42,7 +43,7 @@ func TestFailedConnectReapsTheWholeProcessGroup(t *testing.T) {
 		t.Fatalf("normalizeConfig: %v", err)
 	}
 
-	instance := newPlatform(t.TempDir(), ingotabiNone(), ingotabi.None[workspace.Resolver](), discardLogger(), nil, config)
+	instance := newPlatform(t.TempDir(), ingotabiNone(), ingotabi.None[workspace.Resolver](), ingotabi.None[interaction.ExecutionBinder](), discardLogger(), nil, config)
 	defer instance.closeAll()
 
 	start := time.Now()
@@ -129,7 +130,7 @@ func TestCleanupTerminatesChildrenImmediately(t *testing.T) {
 	if err != nil {
 		t.Fatalf("normalizeConfig: %v", err)
 	}
-	instance := newPlatform(t.TempDir(), ingotabiNone(), ingotabi.None[workspace.Resolver](), discardLogger(), nil, config)
+	instance := newPlatform(t.TempDir(), ingotabiNone(), ingotabi.None[workspace.Resolver](), ingotabi.None[interaction.ExecutionBinder](), discardLogger(), nil, config)
 
 	// Force a live child without completing the handshake.
 	go func() { _, _ = instance.acquire(context.Background(), "server", testScopeExecution("session-a")) }()
@@ -164,7 +165,7 @@ func TestCleanupIsPromptDuringHandshake(t *testing.T) {
 	if err != nil {
 		t.Fatalf("normalizeConfig: %v", err)
 	}
-	instance := newPlatform(t.TempDir(), ingotabiNone(), ingotabi.None[workspace.Resolver](), discardLogger(), nil, config)
+	instance := newPlatform(t.TempDir(), ingotabiNone(), ingotabi.None[workspace.Resolver](), ingotabi.None[interaction.ExecutionBinder](), discardLogger(), nil, config)
 
 	handshake := make(chan struct{})
 	go func() {

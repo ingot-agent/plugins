@@ -8,6 +8,7 @@ import (
 
 	ingotabi "github.com/ingot-agent/ingot-abi"
 	"github.com/ingot-agent/sdk/execution"
+	"github.com/ingot-agent/sdk/interaction"
 	"github.com/ingot-agent/sdk/workspace"
 )
 
@@ -35,7 +36,7 @@ func TestConcurrentAcquireNeverExceedsCapacity(t *testing.T) {
 		roots[fmt.Sprintf("session-%d", index)] = t.TempDir()
 	}
 	instance := newPlatform(dir, ingotabiNone(),
-		ingotabi.Some[workspace.Resolver](mappedResolver{roots: roots}), discardLogger(), nil, config)
+		ingotabi.Some[workspace.Resolver](mappedResolver{roots: roots}), ingotabi.None[interaction.ExecutionBinder](), discardLogger(), nil, config)
 	defer instance.closeAll()
 
 	var wg sync.WaitGroup
@@ -109,7 +110,7 @@ func TestEvictedSessionDoesNotBreakOthers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("normalizeConfig: %v", err)
 	}
-	instance := newPlatform(dir, ingotabiNone(), ingotabi.None[workspace.Resolver](), discardLogger(), nil, config)
+	instance := newPlatform(dir, ingotabiNone(), ingotabi.None[workspace.Resolver](), ingotabi.None[interaction.ExecutionBinder](), discardLogger(), nil, config)
 	defer instance.closeAll()
 
 	// Fill the server with idle connectors.
@@ -174,7 +175,7 @@ func TestInFlightCallSurvivesEvictionPressure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("normalizeConfig: %v", err)
 	}
-	instance := newPlatform(dir, ingotabiNone(), ingotabi.None[workspace.Resolver](), discardLogger(), nil, config)
+	instance := newPlatform(dir, ingotabiNone(), ingotabi.None[workspace.Resolver](), ingotabi.None[interaction.ExecutionBinder](), discardLogger(), nil, config)
 	defer instance.closeAll()
 
 	held, err := instance.acquire(context.Background(), "helper", execution.Scope{SessionID: sessionIDOf("protected")})

@@ -14,6 +14,7 @@ import (
 	ingotabi "github.com/ingot-agent/ingot-abi"
 	"github.com/ingot-agent/sdk/execution"
 	"github.com/ingot-agent/sdk/httpx"
+	"github.com/ingot-agent/sdk/interaction"
 	"github.com/ingot-agent/sdk/logging"
 	"github.com/ingot-agent/sdk/observation"
 	"github.com/ingot-agent/sdk/workspace"
@@ -62,6 +63,7 @@ type platform struct {
 	stateDir    string
 	http        ingotabi.Optional[httpx.Client]
 	workspace   ingotabi.Optional[workspace.Resolver]
+	interaction ingotabi.Optional[interaction.ExecutionBinder]
 	logger      logging.Logger
 	observation observation.Consumer
 
@@ -85,6 +87,7 @@ func newPlatform(
 	stateDir string,
 	httpClient ingotabi.Optional[httpx.Client],
 	resolver ingotabi.Optional[workspace.Resolver],
+	binder ingotabi.Optional[interaction.ExecutionBinder],
 	logger logging.Logger,
 	observer observation.Consumer,
 	config Config,
@@ -93,6 +96,7 @@ func newPlatform(
 		stateDir:    stateDir,
 		http:        httpClient,
 		workspace:   resolver,
+		interaction: binder,
 		logger:      logger,
 		observation: observer,
 		runtimes:    make(map[connectionKey]*serverRuntime),
@@ -257,7 +261,7 @@ func (p *platform) acquire(ctx context.Context, name string, scope execution.Sco
 	if err != nil {
 		return nil, err
 	}
-	return runtime.acquire(ctx, p, server, p.currentGeneration(), config.MaxResultBytes, root, cwdSource)
+	return runtime.acquire(ctx, p, server, p.currentGeneration(), config.MaxResultBytes, root, cwdSource, scope)
 }
 
 // runtimeFor returns the connector for one Session. When the server is already
@@ -617,6 +621,7 @@ func (r *serverRuntime) acquire(
 	generation uint64,
 	maxEventBytes int,
 	root, cwdSource string,
+	scope execution.Scope,
 ) (*lease, error) {
 	for {
 		r.mu.Lock()
@@ -659,7 +664,7 @@ func (r *serverRuntime) acquire(
 	connectCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	connection, err := p.dial(connectCtx, server, maxEventBytes, root, cwdSource)
+	connection, err := p.dial(connectCtx, server, maxEventBytes, root, cwdSource, scope)
 	if err != nil {
 		r.recordFailure(err)
 		p.logger.Warn(connectCtx, "MCP server connection failed",

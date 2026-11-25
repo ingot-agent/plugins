@@ -229,7 +229,7 @@ func TestHTTPClientRejectsCrossHostRedirect(t *testing.T) {
 	}))
 	defer redirector.Close()
 
-	instance := newPlatform(t.TempDir(), ingotabiNone(), ingotabi.None[workspace.Resolver](), discardLogger(), nil, Config{})
+	instance := newPlatform(t.TempDir(), ingotabiNone(), ingotabi.None[workspace.Resolver](), ingotabi.None[interaction.ExecutionBinder](), discardLogger(), nil, Config{})
 	server, err := normalizeConfig(Config{Servers: []ServerConfig{{
 		Name: "remote", Transport: transportHTTP, URL: "https://mcp.example.com/mcp",
 	}}})
@@ -260,7 +260,7 @@ func TestHTTPClientFollowsSameHostRedirect(t *testing.T) {
 	server := httptest.NewServer(&mux)
 	defer server.Close()
 
-	instance := newPlatform(t.TempDir(), ingotabiNone(), ingotabi.None[workspace.Resolver](), discardLogger(), nil, Config{})
+	instance := newPlatform(t.TempDir(), ingotabiNone(), ingotabi.None[workspace.Resolver](), ingotabi.None[interaction.ExecutionBinder](), discardLogger(), nil, Config{})
 	client, err := instance.httpClient(ServerConfig{
 		Name: "remote", Transport: transportHTTP, URL: server.URL + "/moved",
 	})
@@ -290,7 +290,7 @@ func TestHTTPClientExpandsHeaderReferences(t *testing.T) {
 	}))
 	defer server.Close()
 
-	instance := newPlatform(t.TempDir(), ingotabiNone(), ingotabi.None[workspace.Resolver](), discardLogger(), nil, Config{})
+	instance := newPlatform(t.TempDir(), ingotabiNone(), ingotabi.None[workspace.Resolver](), ingotabi.None[interaction.ExecutionBinder](), discardLogger(), nil, Config{})
 	client, err := instance.httpClient(ServerConfig{
 		Name: "remote", Transport: transportHTTP, URL: server.URL,
 		Headers: map[string]string{"Authorization": "Bearer ${TOOLMCP_TEST_HEADER_TOKEN}"},
@@ -313,7 +313,7 @@ func TestHTTPClientExpandsHeaderReferences(t *testing.T) {
 }
 
 func TestHTTPClientRejectsUnsetHeaderReference(t *testing.T) {
-	instance := newPlatform(t.TempDir(), ingotabiNone(), ingotabi.None[workspace.Resolver](), discardLogger(), nil, Config{})
+	instance := newPlatform(t.TempDir(), ingotabiNone(), ingotabi.None[workspace.Resolver](), ingotabi.None[interaction.ExecutionBinder](), discardLogger(), nil, Config{})
 	if _, err := instance.httpClient(ServerConfig{
 		Name: "remote", Transport: transportHTTP, URL: "https://example.test/mcp",
 		Headers: map[string]string{"Authorization": "Bearer ${TOOLMCP_TEST_DEFINITELY_UNSET}"},
@@ -334,7 +334,7 @@ func (c *countingHTTPClient) Do(ctx context.Context, request *http.Request) (*ht
 
 func TestHTTPClientUsesInjectedCapability(t *testing.T) {
 	injected := &countingHTTPClient{}
-	instance := newPlatform(t.TempDir(), ingotabi.Some[httpx.Client](injected), ingotabi.None[workspace.Resolver](), discardLogger(), nil, Config{})
+	instance := newPlatform(t.TempDir(), ingotabi.Some[httpx.Client](injected), ingotabi.None[workspace.Resolver](), ingotabi.None[interaction.ExecutionBinder](), discardLogger(), nil, Config{})
 	transport := instance.roundTripper(ServerConfig{Name: "remote"}, discardLogger())
 	request, err := http.NewRequest(http.MethodGet, "https://example.test/mcp", nil)
 	if err != nil {
@@ -353,7 +353,7 @@ func TestHTTPClientUsesInjectedCapability(t *testing.T) {
 // the plugin's redirect-controlled transport instead.
 func TestHeadersBypassInjectedCapability(t *testing.T) {
 	injected := &countingHTTPClient{}
-	instance := newPlatform(t.TempDir(), ingotabi.Some[httpx.Client](injected), ingotabi.None[workspace.Resolver](), discardLogger(), nil, Config{})
+	instance := newPlatform(t.TempDir(), ingotabi.Some[httpx.Client](injected), ingotabi.None[workspace.Resolver](), ingotabi.None[interaction.ExecutionBinder](), discardLogger(), nil, Config{})
 	server := ServerConfig{Name: "remote", Headers: map[string]string{"X-Api-Key": "secret"}}
 	if _, ok := instance.roundTripper(server, discardLogger()).(roundTripperFunc); ok {
 		t.Fatal("a server with configured headers must not delegate to the injected client")

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/ingot-agent/sdk/content"
+	"github.com/ingot-agent/sdk/execution"
 	"github.com/ingot-agent/sdk/logging"
 	"github.com/ingot-agent/sdk/observation"
 	"github.com/ingot-agent/sdk/tool"
@@ -71,18 +72,35 @@ func (c *connection) Close() error {
 
 // dial opens a new session for server. Construction of the client is cheap;
 // the transport performs the handshake under ctx.
-func (p *platform) dial(ctx context.Context, server ServerConfig, maxEventBytes int, root, cwdSource string) (*connection, error) {
+func (p *platform) dial(
+	ctx context.Context,
+	server ServerConfig,
+	maxEventBytes int,
+	root, cwdSource string,
+	scope execution.Scope,
+) (*connection, error) {
 	expanded, err := expandServer(server)
 	if err != nil {
 		return nil, err
 	}
+	options := &mcp.ClientOptions{
+		ProgressNotificationHandler: func(ctx context.Context, request *mcp.ProgressNotificationClientRequest) {
+			p.emitProgress(ctx, server.Name, request)
+		},
+	}
+	// Elicitation is advertised only for a connection that belongs to a Session
+	// and only when the host can actually ask the user. Discovery has no Session,
+	// so it can never prompt, and a composition without an interaction facility
+	// fails closed at the protocol level instead of accepting a request nobody
+	// can answer.
+	if p.elicitServices() && strings.TrimSpace(string(scope.SessionID)) != "" {
+		options.ElicitationHandler = func(ctx context.Context, request *mcp.ElicitRequest) (*mcp.ElicitResult, error) {
+			return p.elicit(ctx, scope, server, request)
+		}
+	}
 	client := mcp.NewClient(
 		&mcp.Implementation{Name: pluginImplementationName, Version: pluginVersion},
-		&mcp.ClientOptions{
-			ProgressNotificationHandler: func(ctx context.Context, request *mcp.ProgressNotificationClientRequest) {
-				p.emitProgress(ctx, server.Name, request)
-			},
-		},
+		options,
 	)
 	switch expanded.Transport {
 	case transportStdio:

@@ -18,6 +18,7 @@ import (
 	ingotabi "github.com/ingot-agent/ingot-abi"
 	"github.com/ingot-agent/ingot-abi/state"
 	"github.com/ingot-agent/sdk/httpx"
+	"github.com/ingot-agent/sdk/interaction"
 	"github.com/ingot-agent/sdk/logging"
 	"github.com/ingot-agent/sdk/observation"
 	"github.com/ingot-agent/sdk/operation"
@@ -35,7 +36,10 @@ type Dependencies struct {
 	// A composition without it has no workspace concept and inherits the
 	// Runtime working directory; a Session that is merely unassigned fails
 	// instead of guessing.
-	Workspace   ingotabi.Optional[workspace.Resolver]
+	Workspace ingotabi.Optional[workspace.Resolver]
+	// Interaction lets a server ask the Session user for input mid-call.
+	// Without it the plugin never advertises the elicitation capability.
+	Interaction ingotabi.Optional[interaction.ExecutionBinder]
 	Logger      ingotabi.Optional[logging.Logger]
 	Observation ingotabi.Optional[observation.Consumer]
 }
@@ -86,6 +90,9 @@ func New(ctx context.Context, deps Dependencies) (Exports, ingotabi.Cleanup, err
 	if deps.Workspace.Valid && isNil(deps.Workspace.Value) {
 		return Exports{}, nil, fmt.Errorf("workspace resolver is typed nil: %w", ErrInvalidDependencies)
 	}
+	if deps.Interaction.Valid && isNil(deps.Interaction.Value) {
+		return Exports{}, nil, fmt.Errorf("interaction binder is typed nil: %w", ErrInvalidDependencies)
+	}
 
 	rawConfig, err := loadConfig(stateDir)
 	if err != nil {
@@ -96,7 +103,7 @@ func New(ctx context.Context, deps Dependencies) (Exports, ingotabi.Cleanup, err
 		return Exports{}, nil, err
 	}
 
-	instance := newPlatform(stateDir, deps.HTTP, deps.Workspace, logger, observer, config)
+	instance := newPlatform(stateDir, deps.HTTP, deps.Workspace, deps.Interaction, logger, observer, config)
 
 	snapshot, snapshotErr := loadSnapshot(stateDir)
 	switch {

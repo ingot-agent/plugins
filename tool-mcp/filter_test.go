@@ -100,7 +100,7 @@ func TestDiscoveryHonoursDisabledServer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("normalizeConfig: %v", err)
 	}
-	instance := newPlatform(t.TempDir(), ingotabiNone(), ingotabi.None[workspace.Resolver](), discardLogger(), nil, config)
+	instance := newPlatform(t.TempDir(), ingotabiNone(), ingotabi.None[workspace.Resolver](), ingotabi.None[interaction.ExecutionBinder](), discardLogger(), nil, config)
 	snapshot := instance.discover(context.Background(), config, nil)
 	if len(snapshot.Servers) != 0 {
 		t.Fatalf("a disabled server was discovered: %#v", snapshot.Servers)

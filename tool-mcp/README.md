@@ -16,6 +16,7 @@ MCP 的 resources、prompts、sampling、elicitation 与 roots。
 | `state.Scope` | 是 | 保存配置与工具快照 |
 | `httpx.Client` | 否 | 仅 `http` transport 使用；未提供时使用插件自带的 `http.Transport`。只配置 stdio server 的组合不需要 `http.default` |
 | `workspace.Resolver` | 否 | 决定每个会话 MCP 进程的工作目录。组合中缺失表示没有 workspace 概念（继承 Runtime 工作目录）；存在时会话必须已绑定工作区 |
+| `interaction.ExecutionBinder` | 否 | 让 server 能在调用过程中向用户提问（elicitation）。缺失时插件不声明该能力 |
 | `logging.Logger` | 否 | 连接、发现与降级诊断；缺失时静默 |
 | `observation.Consumer` | 否 | 把 MCP progress 通知转成 `observation.ToolProgress` |
 
@@ -251,6 +252,53 @@ server 升级后预热下一次重启；不改变正在运行的实例。
 它解决了“快照为空时模型完全不知道有 MCP 这回事”的发现问题。输出不含
 环境变量值、header 值或 stderr 原文。
 
+## Elicitation（服务端向用户提问）
+
+server 可以在工具调用过程中请求用户输入，例如"确认把服务部署到生产环境？"。插件把它
+转成一次结构化交互，显示在当前会话里。
+
+**没有开关，也没有新配置项。** 是否可用完全由组合决定：
+
+| 组合 | 行为 |
+|---|---|
+| 有 `interaction.ExecutionBinder` 且调用属于某个会话 | 正常提问 |
+| 没有交互能力 | **不声明 elicitation**，server 不会发请求 |
+| 发现阶段（`config` / `refresh`，无会话） | **不声明**，永远不会弹窗 |
+| 表单无法渲染或用户未填完必填项 | 返回 `decline`，由 server 处理 |
+| 调用被取消 | 返回 `cancel` |
+
+"没有交互能力就不声明"比"声明了再拒绝"更安全：守规矩的 server 根本不会发起请求。
+
+### 支持的表单
+
+MCP 规定表单只能是**扁平对象 + 原始字段**。插件按下表映射，超出范围的 schema 整体
+拒绝（返回 `decline` 并记日志），不做近似：
+
+| MCP schema | 呈现 |
+|---|---|
+| `string` | 文本输入 |
+| `string` + `enum` / `enumNames` | 单选框 |
+| `integer` | 整数输入 |
+| `number` | 数值输入 |
+| `boolean` | 开关 |
+| `array` + `items.enum` | 多选 |
+| `format: password` | 标记为敏感字段，宿主不应回显 |
+
+`title` 作标签，`description` 与长度/最值约束进入说明文字。字段按名称排序，同一请求的
+表单顺序稳定。
+
+### 边界
+
+- 表单会显示 server 名称（`MCP server "x" is requesting input: ...`），因为表单内容由
+  server 控制，用户需要知道是谁在问。
+- 上限为内部常量：最多 16 个字段、每字段最多 64 个选项、提示文本 2 KiB、回答总量 64 KiB。
+- **不支持 URL 模式**（`mode: "url"`）：它要求用户访问外部地址，需要独立 UI 与钓鱼
+  风险评估，当前直接返回 `decline`。
+- 多轮输入（server 返回 `inputRequests` 后重试）由 SDK 的 multi-round-trip 中间件驱动，
+  工具结果不会把"需要输入"这类中间态暴露给模型。
+
+`mcp_status` 的 `elicitation` 字段反映当前组合是否具备该能力。
+
 ## 结果映射
 
 | MCP content | Ingot content |
@@ -268,7 +316,8 @@ server 升级后预热下一次重启；不改变正在运行的实例。
 ## 限制
 
 - 工具集合变更必须重启；`mcp_status` 的 `snapshot_stale` 是唯一提示。
-- 不支持 resources、prompts、sampling、elicitation、roots；客户端不声明这些能力。
+- 不支持 resources、prompts、sampling、roots；客户端不声明这些能力。
+- elicitation 只支持表单模式，且只在有交互能力、且连接属于某个会话时声明。
 - 不支持 OAuth 交互式授权，只支持静态 header（可引用环境变量）。
 - 每个会话一个 MCP 会话，因此多会话部署会启动多个子进程；上限 8，达到上限且全部
   在忙时新会话失败。

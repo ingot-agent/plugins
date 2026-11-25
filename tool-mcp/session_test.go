@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/ingot-agent/sdk/interaction"
 	"github.com/ingot-agent/sdk/workspace"
 	"strings"
 	"testing"
@@ -22,7 +23,7 @@ func testPlatform(t *testing.T, config Config) *platform {
 	if err != nil {
 		t.Fatalf("normalizeConfig: %v", err)
 	}
-	return newPlatform(t.TempDir(), ingotabi.None[httpx.Client](), ingotabi.None[workspace.Resolver](), logging.Discard(), nil, normalized)
+	return newPlatform(t.TempDir(), ingotabi.None[httpx.Client](), ingotabi.None[workspace.Resolver](), ingotabi.None[interaction.ExecutionBinder](), logging.Discard(), nil, normalized)
 }
 
 func TestAcquireRejectsUnknownServer(t *testing.T) {
@@ -155,7 +156,7 @@ func TestIdleTimeoutEvictsTheSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("normalizeConfig: %v", err)
 	}
-	instance := newPlatform(dir, ingotabiNone(), ingotabi.None[workspace.Resolver](), discardLogger(), nil, config)
+	instance := newPlatform(dir, ingotabiNone(), ingotabi.None[workspace.Resolver](), ingotabi.None[interaction.ExecutionBinder](), discardLogger(), nil, config)
 	defer instance.closeAll()
 
 	first, err := instance.acquire(context.Background(), "helper", testScopeExecution("session-a"))
@@ -182,7 +183,7 @@ func TestStatusReportsBackoffWithoutNetwork(t *testing.T) {
 	if err != nil {
 		t.Fatalf("normalizeConfig: %v", err)
 	}
-	instance := newPlatform(t.TempDir(), ingotabiNone(), ingotabi.None[workspace.Resolver](), discardLogger(), nil, config)
+	instance := newPlatform(t.TempDir(), ingotabiNone(), ingotabi.None[workspace.Resolver](), ingotabi.None[interaction.ExecutionBinder](), discardLogger(), nil, config)
 	mustRuntime(t, instance, connectionKey{server: "demo", session: "s"}).recordFailure(errors.New("boom"))
 
 	statuses := instance.statuses()
@@ -204,7 +205,7 @@ func TestStatusesReportDisabledServers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("normalizeConfig: %v", err)
 	}
-	instance := newPlatform(t.TempDir(), ingotabiNone(), ingotabi.None[workspace.Resolver](), discardLogger(), nil, config)
+	instance := newPlatform(t.TempDir(), ingotabiNone(), ingotabi.None[workspace.Resolver](), ingotabi.None[interaction.ExecutionBinder](), discardLogger(), nil, config)
 	statuses := instance.statuses()
 	if len(statuses) != 1 || statuses[0].Status != "disabled" {
 		t.Fatalf("statuses = %#v", statuses)
@@ -220,7 +221,7 @@ func TestMarkStaleForcesReconnectOnNextUse(t *testing.T) {
 	runDiscovery(t, exports)
 	cleanup()
 
-	instance := newPlatform(dir, ingotabiNone(), ingotabi.None[workspace.Resolver](), discardLogger(), nil, helperConfig(t))
+	instance := newPlatform(dir, ingotabiNone(), ingotabi.None[workspace.Resolver](), ingotabi.None[interaction.ExecutionBinder](), discardLogger(), nil, helperConfig(t))
 	defer instance.closeAll()
 
 	first, err := instance.acquire(context.Background(), "helper", testScopeExecution("session-a"))

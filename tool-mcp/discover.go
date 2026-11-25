@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ingot-agent/sdk/execution"
 	"github.com/ingot-agent/sdk/logging"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -113,7 +114,9 @@ func (p *platform) discoverServer(ctx context.Context, server ServerConfig, conf
 		return nil, nil, sanitizeMessage(err.Error())
 	}
 	connectCtx, cancelConnect := context.WithTimeout(ctx, time.Duration(server.ConnectTimeoutSeconds)*time.Second)
-	connection, err := p.dial(connectCtx, server, config.MaxResultBytes, root, cwdSourceDiscovery)
+	// Discovery passes a zero scope: it has no Session to ask, so the connection
+	// does not advertise elicitation at all.
+	connection, err := p.dial(connectCtx, server, config.MaxResultBytes, root, cwdSourceDiscovery, execution.Scope{})
 	cancelConnect()
 	if err != nil {
 		return nil, nil, sanitizeMessage(err.Error())
