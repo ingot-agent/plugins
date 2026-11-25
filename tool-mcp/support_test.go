@@ -3,11 +3,15 @@ package toolmcp
 import (
 	"context"
 	"sync"
+	"testing"
 
 	ingotabi "github.com/ingot-agent/ingot-abi"
+	"github.com/ingot-agent/sdk/execution"
 	"github.com/ingot-agent/sdk/httpx"
 	"github.com/ingot-agent/sdk/interaction"
 	"github.com/ingot-agent/sdk/logging"
+	"github.com/ingot-agent/sdk/session"
+	"github.com/ingot-agent/sdk/workspace"
 )
 
 // testScope is a minimal state.Scope for tests.
@@ -70,3 +74,39 @@ func ingotabiNone() ingotabi.Optional[httpx.Client] {
 }
 
 func discardLogger() logging.Logger { return logging.Discard() }
+
+// sessionIDOf converts a literal into a Session ID.
+func sessionIDOf(value string) session.ID { return session.ID(value) }
+
+// testScopeExecution builds an execution scope for tests that need a Session
+// identity.
+func testScopeExecution(sessionID string) execution.Scope {
+	return execution.Scope{SessionID: session.ID(sessionID)}
+}
+
+// staticResolver binds every Session to one root.
+type staticResolver struct {
+	root string
+	err  error
+}
+
+func (r staticResolver) Resolve(context.Context, execution.Scope) (workspace.Binding, error) {
+	if r.err != nil {
+		return workspace.Binding{}, r.err
+	}
+	return workspace.Binding{Root: r.root}, nil
+}
+
+// mustRuntime fetches a connector, failing the test if capacity was reached.
+func mustRuntime(t *testing.T, instance *platform, key connectionKey) *serverRuntime {
+	t.Helper()
+	server, ok := instance.currentConfig().server(key.server)
+	if !ok {
+		t.Fatalf("server %q is not configured", key.server)
+	}
+	runtime, err := instance.runtimeFor(key, server, "", "")
+	if err != nil {
+		t.Fatalf("runtimeFor: %v", err)
+	}
+	return runtime
+}

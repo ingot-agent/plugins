@@ -75,11 +75,11 @@ func TestCrashedServerReconnects(t *testing.T) {
 func TestInvalidateRetiresDeadSession(t *testing.T) {
 	runtime := &serverRuntime{name: "demo"}
 	held := newLease(&connection{}, nil)
-	runtime.session = held
+	runtime.handle = held
 	if !runtime.invalidate(held, errors.New("connection reset")) {
 		t.Fatal("the live session should have been detached")
 	}
-	if runtime.session != nil {
+	if runtime.handle != nil {
 		t.Fatal("a dead session must not stay attached")
 	}
 	if held.acquireRef() {
@@ -366,7 +366,7 @@ func TestAcquireAfterCleanupFails(t *testing.T) {
 		Name: "demo", Command: "true",
 	}}})
 	instance.closeAll()
-	if _, err := instance.acquire(context.Background(), "demo"); err == nil {
+	if _, err := instance.acquire(context.Background(), "demo", testScopeExecution("session-a")); err == nil {
 		t.Fatal("a closed platform must refuse new sessions")
 	}
 }

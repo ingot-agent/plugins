@@ -71,7 +71,7 @@ func (c *connection) Close() error {
 
 // dial opens a new session for server. Construction of the client is cheap;
 // the transport performs the handshake under ctx.
-func (p *platform) dial(ctx context.Context, server ServerConfig, maxEventBytes int) (*connection, error) {
+func (p *platform) dial(ctx context.Context, server ServerConfig, maxEventBytes int, root, cwdSource string) (*connection, error) {
 	expanded, err := expandServer(server)
 	if err != nil {
 		return nil, err
@@ -86,7 +86,7 @@ func (p *platform) dial(ctx context.Context, server ServerConfig, maxEventBytes 
 	)
 	switch expanded.Transport {
 	case transportStdio:
-		return p.dialStdio(ctx, client, expanded)
+		return p.dialStdio(ctx, client, expanded, root)
 	case transportHTTP:
 		return p.dialHTTP(ctx, client, expanded, maxEventBytes)
 	default:
@@ -94,16 +94,17 @@ func (p *platform) dial(ctx context.Context, server ServerConfig, maxEventBytes 
 	}
 }
 
-func (p *platform) dialStdio(ctx context.Context, client *mcp.Client, server ServerConfig) (*connection, error) {
+func (p *platform) dialStdio(ctx context.Context, client *mcp.Client, server ServerConfig, root string) (*connection, error) {
 	environment, err := buildEnvironment(server)
 	if err != nil {
 		return nil, err
 	}
 	command := exec.Command(server.Command, server.Args...)
 	command.Env = environment
-	if server.Cwd != "" {
-		command.Dir = server.Cwd
-	}
+	// The working directory is fixed at process creation. Nothing ever changes
+	// the cwd of a live process: POSIX cwd is per-process, so a later change
+	// would race between Sessions sharing a Runtime.
+	command.Dir = root
 	stderr := newRingBuffer(stderrRingBytes)
 	command.Stderr = stderr
 	configureProcess(command)

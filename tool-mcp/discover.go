@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -102,8 +104,16 @@ func (p *platform) discover(ctx context.Context, config Config, previous *Snapsh
 // discoverServer connects to one server, lists its tools, and normalizes each
 // accepted tool. The connection is closed before returning.
 func (p *platform) discoverServer(ctx context.Context, server ServerConfig, config Config) ([]discoveredTool, []RejectedTool, string) {
+	// Discovery runs outside any Session, so it uses a private sentinel
+	// directory instead of a workspace. The tool list is a construction-time
+	// snapshot that cannot vary per workspace anyway, so this choice cannot
+	// hide a per-workspace difference the architecture could express.
+	root, err := p.discoveryDir()
+	if err != nil {
+		return nil, nil, sanitizeMessage(err.Error())
+	}
 	connectCtx, cancelConnect := context.WithTimeout(ctx, time.Duration(server.ConnectTimeoutSeconds)*time.Second)
-	connection, err := p.dial(connectCtx, server, config.MaxResultBytes)
+	connection, err := p.dial(connectCtx, server, config.MaxResultBytes, root, cwdSourceDiscovery)
 	cancelConnect()
 	if err != nil {
 		return nil, nil, sanitizeMessage(err.Error())
@@ -239,4 +249,18 @@ func retainPrevious(server ServerConfig, previous *Snapshot, status, message str
 		entry.Error += " (retaining the previous tool set)"
 	}
 	return entry
+}
+
+// discoveryDir returns the sentinel working directory for discovery processes,
+// creating it when needed. It lives under the plugin state scope so it is never
+// shared with a user workspace.
+func (p *platform) discoveryDir() (string, error) {
+	if strings.TrimSpace(p.stateDir) == "" {
+		return "", errors.New("state scope is required for discovery")
+	}
+	dir := filepath.Join(p.stateDir, "discovery")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", fmt.Errorf("create discovery directory: %w", err)
+	}
+	return dir, nil
 }

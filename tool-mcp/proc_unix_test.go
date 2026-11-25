@@ -5,6 +5,8 @@ package toolmcp
 import (
 	"context"
 	"errors"
+	ingotabi "github.com/ingot-agent/ingot-abi"
+	"github.com/ingot-agent/sdk/workspace"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -40,11 +42,11 @@ func TestFailedConnectReapsTheWholeProcessGroup(t *testing.T) {
 		t.Fatalf("normalizeConfig: %v", err)
 	}
 
-	instance := newPlatform(t.TempDir(), ingotabiNone(), discardLogger(), nil, config)
+	instance := newPlatform(t.TempDir(), ingotabiNone(), ingotabi.None[workspace.Resolver](), discardLogger(), nil, config)
 	defer instance.closeAll()
 
 	start := time.Now()
-	if _, err := instance.acquire(context.Background(), "wrapper"); err == nil {
+	if _, err := instance.acquire(context.Background(), "wrapper", testScopeExecution("session-a")); err == nil {
 		t.Fatal("expected the handshake to fail")
 	}
 	// The caller must learn about the failure within the configured connect
@@ -127,10 +129,10 @@ func TestCleanupTerminatesChildrenImmediately(t *testing.T) {
 	if err != nil {
 		t.Fatalf("normalizeConfig: %v", err)
 	}
-	instance := newPlatform(t.TempDir(), ingotabiNone(), discardLogger(), nil, config)
+	instance := newPlatform(t.TempDir(), ingotabiNone(), ingotabi.None[workspace.Resolver](), discardLogger(), nil, config)
 
 	// Force a live child without completing the handshake.
-	go func() { _, _ = instance.acquire(context.Background(), "server") }()
+	go func() { _, _ = instance.acquire(context.Background(), "server", testScopeExecution("session-a")) }()
 	pid := waitForPIDFile(t, pidFile)
 
 	start := time.Now()
@@ -162,12 +164,12 @@ func TestCleanupIsPromptDuringHandshake(t *testing.T) {
 	if err != nil {
 		t.Fatalf("normalizeConfig: %v", err)
 	}
-	instance := newPlatform(t.TempDir(), ingotabiNone(), discardLogger(), nil, config)
+	instance := newPlatform(t.TempDir(), ingotabiNone(), ingotabi.None[workspace.Resolver](), discardLogger(), nil, config)
 
 	handshake := make(chan struct{})
 	go func() {
 		defer close(handshake)
-		_, _ = instance.acquire(context.Background(), "silent")
+		_, _ = instance.acquire(context.Background(), "silent", testScopeExecution("session-a"))
 	}()
 	pid := waitForPIDFile(t, pidFile)
 

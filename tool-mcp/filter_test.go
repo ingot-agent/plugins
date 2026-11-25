@@ -3,6 +3,8 @@ package toolmcp
 import (
 	"context"
 	"encoding/json"
+	ingotabi "github.com/ingot-agent/ingot-abi"
+	"github.com/ingot-agent/sdk/workspace"
 	"testing"
 
 	"github.com/ingot-agent/sdk/interaction"
@@ -98,7 +100,7 @@ func TestDiscoveryHonoursDisabledServer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("normalizeConfig: %v", err)
 	}
-	instance := newPlatform(t.TempDir(), ingotabiNone(), discardLogger(), nil, config)
+	instance := newPlatform(t.TempDir(), ingotabiNone(), ingotabi.None[workspace.Resolver](), discardLogger(), nil, config)
 	snapshot := instance.discover(context.Background(), config, nil)
 	if len(snapshot.Servers) != 0 {
 		t.Fatalf("a disabled server was discovered: %#v", snapshot.Servers)

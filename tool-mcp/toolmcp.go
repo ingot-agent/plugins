@@ -22,6 +22,7 @@ import (
 	"github.com/ingot-agent/sdk/observation"
 	"github.com/ingot-agent/sdk/operation"
 	"github.com/ingot-agent/sdk/tool"
+	"github.com/ingot-agent/sdk/workspace"
 )
 
 // Dependencies supplies this Plugin's state scope and optional capabilities.
@@ -29,7 +30,12 @@ type Dependencies struct {
 	State state.Scope
 	// HTTP is used only by servers with the http transport. A composition that
 	// configures no such server does not need to provide it.
-	HTTP        ingotabi.Optional[httpx.Client]
+	HTTP ingotabi.Optional[httpx.Client]
+	// Workspace supplies the working directory of each Session's MCP process.
+	// A composition without it has no workspace concept and inherits the
+	// Runtime working directory; a Session that is merely unassigned fails
+	// instead of guessing.
+	Workspace   ingotabi.Optional[workspace.Resolver]
 	Logger      ingotabi.Optional[logging.Logger]
 	Observation ingotabi.Optional[observation.Consumer]
 }
@@ -77,6 +83,9 @@ func New(ctx context.Context, deps Dependencies) (Exports, ingotabi.Cleanup, err
 	if deps.HTTP.Valid && isNil(deps.HTTP.Value) {
 		return Exports{}, nil, fmt.Errorf("http client is typed nil: %w", ErrInvalidDependencies)
 	}
+	if deps.Workspace.Valid && isNil(deps.Workspace.Value) {
+		return Exports{}, nil, fmt.Errorf("workspace resolver is typed nil: %w", ErrInvalidDependencies)
+	}
 
 	rawConfig, err := loadConfig(stateDir)
 	if err != nil {
@@ -87,7 +96,7 @@ func New(ctx context.Context, deps Dependencies) (Exports, ingotabi.Cleanup, err
 		return Exports{}, nil, err
 	}
 
-	instance := newPlatform(stateDir, deps.HTTP, logger, observer, config)
+	instance := newPlatform(stateDir, deps.HTTP, deps.Workspace, logger, observer, config)
 
 	snapshot, snapshotErr := loadSnapshot(stateDir)
 	switch {

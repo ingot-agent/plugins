@@ -15,6 +15,7 @@ MCP 的 resources、prompts、sampling、elicitation 与 roots。
 | --- | --- | --- |
 | `state.Scope` | 是 | 保存配置与工具快照 |
 | `httpx.Client` | 否 | 仅 `http` transport 使用；未提供时使用插件自带的 `http.Transport`。只配置 stdio server 的组合不需要 `http.default` |
+| `workspace.Resolver` | 否 | 决定每个会话 MCP 进程的工作目录。组合中缺失表示没有 workspace 概念（继承 Runtime 工作目录）；存在时会话必须已绑定工作区 |
 | `logging.Logger` | 否 | 连接、发现与降级诊断；缺失时静默 |
 | `observation.Consumer` | 否 | 把 MCP progress 通知转成 `observation.ToolProgress` |
 
@@ -87,7 +88,7 @@ enabled_tools = ["search_*"]
 | `servers[].command` | 无 | stdio 可执行文件，必填 |
 | `servers[].args` | 空 | 参数列表 |
 | `servers[].env` | 空 | 追加给子进程的 `KEY=VALUE`，值可用 `${VAR}` |
-| `servers[].cwd` | 空 | 子进程工作目录，必须为绝对路径；空表示 Runtime 进程工作目录 |
+| `servers[].cwd` | 空 | 覆盖工作区，必须为绝对路径；留空表示使用会话工作区 |
 | `servers[].inherit_env` | 空 | 在安全默认白名单之外额外转发的宿主变量名 |
 | `servers[].url` | 无 | http endpoint，必须绝对；非 loopback 只允许 `https` |
 | `servers[].headers` | 空 | 每次请求附带的 header，值可用 `${VAR}` |
@@ -140,9 +141,41 @@ MCP server 的 `inputSchema` 在发现阶段归一化为 Draft 2020-12：
 拒绝并记入快照**，不会让整个 Runtime Image 启动失败；同样，快照损坏或手工改坏
 时只降级为“没有 MCP 工具”，构造仍然成功，问题通过日志与 `mcp_status` 暴露。
 
+## 会话隔离与工作目录
+
+**每个会话一个 MCP 会话。** 连接以 `(server, session)` 为键，所以：
+
+- stdio server 每个会话一个子进程；
+- http server 每个会话一次 `initialize`，服务端因此能区分用户，但不增加进程。
+
+这不是可选项，也没有开关：共享一个 MCP 会话会让 A 的浏览器标签页、cwd 或服务端状态
+被 B 看见，那是缺陷而不是配置。
+
+**工作目录在进程创建时确定，运行期从不改变。** POSIX 的 cwd 是进程级的，事后修改会让
+并发会话互相踩；因此每个连接在 `exec` 之前就把 `cwd` 设定为该会话的工作区根目录：
+
+| 情形 | 工作目录 | `mcp_status` 的 `cwd_source` |
+|---|---|---|
+| 会话已绑定工作区 | 该工作区 | `session-workspace` |
+| server 配置了 `cwd` | 该绝对路径（覆盖工作区） | `server-cwd` |
+| 组合中没有 `workspace.Resolver` | 继承 Runtime 工作目录 | `runtime-process` |
+| 发现（`config` / `refresh`） | 插件私有 `discovery/` 目录 | `discovery` |
+
+会话存在但尚未绑定工作区时**调用失败**，而不是回退。原因很实际：工作区可以在首次
+调用之后才被分配，用回退值建立的连接会把错误目录缓存下来，之后永远看不到用户真正
+的工作区，且没有任何报错。WebUI 在提交 Turn 前就会分配默认工作区，正常路径不会触发。
+
+发现阶段没有会话，因此使用 state scope 下的一次性目录。工具清单是构造期快照，本来就
+无法随工作区变化，所以这个选择不会掩盖任何架构上可表达的信息。
+
+**上限是内部常量。** 每个 server 最多 8 个并发 MCP 会话；达到上限时优先驱逐最久未用
+的空闲会话，若全部在忙则返回错误而不是共享。单会话使用者是 1 个进程，与不带隔离时
+相同；多会话部署才承担这个成本，而那正是需要隔离的场景。
+
 ## 连接与进程管理
 
-- 懒连接：首次调用才建连；同一 server 的并发建连会被合并。
+- 懒连接：首次调用才建连；同一 (server, 会话) 的并发建连会被合并。
+- Cleanup 并发关闭所有会话并等待收尾，关闭成本不随会话数线性增长。
 - 连接按引用计数管理：配置变更或空闲回收只把连接标记为退休，等最后一个在途调用
   释放后才关闭，因此重配置不会中断已开始的调用。
 - 空闲计时从最后一个调用结束算起，正在使用的连接不会被当成空闲回收。
@@ -210,7 +243,8 @@ server 升级后预热下一次重启；不改变正在运行的实例。
 `mcp_status`（输入 schema 为 `{}`）。它不访问网络，报告：
 
 - 每个 server 的 `transport`、`status`（`connected`/`backoff`/`idle`/`never`/`disabled`）、
-  连续失败次数、重试等待、最后错误、累计调用数；
+  连接数 `connections`、在途调用数 `in_flight_calls`、连续失败次数、重试等待、
+  最后错误、累计调用数，以及工作目录来源 `cwd_source`；
 - 已导出工具名、被拒绝工具及原因、快照错误；
 - 快照生成时间、是否陈旧、是否需要重启。
 
@@ -236,10 +270,11 @@ server 升级后预热下一次重启；不改变正在运行的实例。
 - 工具集合变更必须重启；`mcp_status` 的 `snapshot_stale` 是唯一提示。
 - 不支持 resources、prompts、sampling、elicitation、roots；客户端不声明这些能力。
 - 不支持 OAuth 交互式授权，只支持静态 header（可引用环境变量）。
-- 同一个 server 的连接在多个 Session 之间共享。多用户部署下，有跨调用状态的
-  server 会把状态串到别的会话；需要隔离时应为不同用户配置不同的 server 实例。
-- `cwd` 默认是 Runtime 进程的工作目录，而不是某个 Session 的 workspace；需要
-  固定目录时显式配置绝对路径。
+- 每个会话一个 MCP 会话，因此多会话部署会启动多个子进程；上限 8，达到上限且全部
+  在忙时新会话失败。
+- 会话被驱逐或空闲回收会丢失服务端状态（例如浏览器标签页）；磁盘上的文件不受影响。
+- 工具清单在发现阶段确定，与工作区无关；按工作区动态生成工具列表的 server 与真实
+  会话可能不一致。这类差异属于构造期快照的固有边界。
 - 工具数量过大会显著占用上下文并干扰工具选择。GitHub 等大型 server 建议用
   `enabled_tools` 收窄，或用 `max_tools_total` 整体限流。
 

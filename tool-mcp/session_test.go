@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/ingot-agent/sdk/workspace"
 	"strings"
 	"testing"
 	"time"
@@ -21,12 +22,12 @@ func testPlatform(t *testing.T, config Config) *platform {
 	if err != nil {
 		t.Fatalf("normalizeConfig: %v", err)
 	}
-	return newPlatform(t.TempDir(), ingotabi.None[httpx.Client](), logging.Discard(), nil, normalized)
+	return newPlatform(t.TempDir(), ingotabi.None[httpx.Client](), ingotabi.None[workspace.Resolver](), logging.Discard(), nil, normalized)
 }
 
 func TestAcquireRejectsUnknownServer(t *testing.T) {
 	instance := testPlatform(t, Config{})
-	if _, err := instance.acquire(context.Background(), "missing"); err == nil {
+	if _, err := instance.acquire(context.Background(), "missing", testScopeExecution("session-a")); err == nil {
 		t.Fatal("expected an error")
 	}
 }
@@ -35,7 +36,7 @@ func TestAcquireRejectsDisabledServer(t *testing.T) {
 	instance := testPlatform(t, Config{Servers: []ServerConfig{{
 		Name: "demo", Command: "true", Enabled: boolPointer(false),
 	}}})
-	if _, err := instance.acquire(context.Background(), "demo"); err == nil {
+	if _, err := instance.acquire(context.Background(), "demo", testScopeExecution("session-a")); err == nil {
 		t.Fatal("expected an error")
 	}
 }
@@ -44,11 +45,11 @@ func TestBackoffFailsFastWithoutConnecting(t *testing.T) {
 	instance := testPlatform(t, Config{Servers: []ServerConfig{{
 		Name: "demo", Command: "definitely-not-a-real-executable",
 	}}})
-	runtime := instance.runtimeFor("demo")
+	runtime := mustRuntime(t, instance, connectionKey{server: "demo", session: "session-a"})
 	runtime.recordFailure(errors.New("connection refused"))
 
 	start := time.Now()
-	_, err := instance.acquire(context.Background(), "demo")
+	_, err := instance.acquire(context.Background(), "demo", testScopeExecution("session-a"))
 	if err == nil {
 		t.Fatal("expected an error while backing off")
 	}
@@ -95,15 +96,15 @@ func TestMarkStaleAndCloseAreIdempotent(t *testing.T) {
 }
 
 func TestAcquireSlotHonoursConcurrencyLimit(t *testing.T) {
-	runtime := &serverRuntime{name: "demo"}
-	release, err := runtime.acquireSlot(context.Background(), 1)
+	slots := &serverSlots{}
+	release, err := slots.acquire(context.Background(), 1)
 	if err != nil {
 		t.Fatalf("acquireSlot: %v", err)
 	}
 
 	acquired := make(chan struct{})
 	go func() {
-		second, err := runtime.acquireSlot(context.Background(), 1)
+		second, err := slots.acquire(context.Background(), 1)
 		if err == nil {
 			second()
 			close(acquired)
@@ -125,8 +126,8 @@ func TestAcquireSlotHonoursConcurrencyLimit(t *testing.T) {
 }
 
 func TestAcquireSlotHonoursCancellation(t *testing.T) {
-	runtime := &serverRuntime{name: "demo"}
-	release, err := runtime.acquireSlot(context.Background(), 1)
+	slots := &serverSlots{}
+	release, err := slots.acquire(context.Background(), 1)
 	if err != nil {
 		t.Fatalf("acquireSlot: %v", err)
 	}
@@ -134,7 +135,7 @@ func TestAcquireSlotHonoursCancellation(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := runtime.acquireSlot(ctx, 1); err == nil {
+	if _, err := slots.acquire(ctx, 1); err == nil {
 		t.Fatal("expected a cancellation error")
 	}
 }
@@ -154,17 +155,17 @@ func TestIdleTimeoutEvictsTheSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("normalizeConfig: %v", err)
 	}
-	instance := newPlatform(dir, ingotabiNone(), discardLogger(), nil, config)
+	instance := newPlatform(dir, ingotabiNone(), ingotabi.None[workspace.Resolver](), discardLogger(), nil, config)
 	defer instance.closeAll()
 
-	first, err := instance.acquire(context.Background(), "helper")
+	first, err := instance.acquire(context.Background(), "helper", testScopeExecution("session-a"))
 	if err != nil {
 		t.Fatalf("first acquire: %v", err)
 	}
 	first.release()
 	time.Sleep(1100 * time.Millisecond)
 
-	second, err := instance.acquire(context.Background(), "helper")
+	second, err := instance.acquire(context.Background(), "helper", testScopeExecution("session-a"))
 	if err != nil {
 		t.Fatalf("second acquire: %v", err)
 	}
@@ -181,8 +182,8 @@ func TestStatusReportsBackoffWithoutNetwork(t *testing.T) {
 	if err != nil {
 		t.Fatalf("normalizeConfig: %v", err)
 	}
-	instance := newPlatform(t.TempDir(), ingotabiNone(), discardLogger(), nil, config)
-	instance.runtimeFor("demo").recordFailure(errors.New("boom"))
+	instance := newPlatform(t.TempDir(), ingotabiNone(), ingotabi.None[workspace.Resolver](), discardLogger(), nil, config)
+	mustRuntime(t, instance, connectionKey{server: "demo", session: "s"}).recordFailure(errors.New("boom"))
 
 	statuses := instance.statuses()
 	if len(statuses) != 1 {
@@ -203,7 +204,7 @@ func TestStatusesReportDisabledServers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("normalizeConfig: %v", err)
 	}
-	instance := newPlatform(t.TempDir(), ingotabiNone(), discardLogger(), nil, config)
+	instance := newPlatform(t.TempDir(), ingotabiNone(), ingotabi.None[workspace.Resolver](), discardLogger(), nil, config)
 	statuses := instance.statuses()
 	if len(statuses) != 1 || statuses[0].Status != "disabled" {
 		t.Fatalf("statuses = %#v", statuses)
@@ -219,15 +220,15 @@ func TestMarkStaleForcesReconnectOnNextUse(t *testing.T) {
 	runDiscovery(t, exports)
 	cleanup()
 
-	instance := newPlatform(dir, ingotabiNone(), discardLogger(), nil, helperConfig(t))
+	instance := newPlatform(dir, ingotabiNone(), ingotabi.None[workspace.Resolver](), discardLogger(), nil, helperConfig(t))
 	defer instance.closeAll()
 
-	first, err := instance.acquire(context.Background(), "helper")
+	first, err := instance.acquire(context.Background(), "helper", testScopeExecution("session-a"))
 	if err != nil {
 		t.Fatalf("first acquire: %v", err)
 	}
 	instance.markStale()
-	second, err := instance.acquire(context.Background(), "helper")
+	second, err := instance.acquire(context.Background(), "helper", testScopeExecution("session-a"))
 	if err != nil {
 		first.release()
 		t.Fatalf("second acquire: %v", err)
@@ -320,15 +321,15 @@ func platformOf(t *testing.T, exports Exports) *platform {
 // replaced by a second one, which would allow holders plus new callers to exceed
 // the configured limit.
 func TestSlotResizeDoesNotExceedTheLimit(t *testing.T) {
-	runtime := &serverRuntime{name: "demo"}
-	releaseWide, err := runtime.acquireSlot(context.Background(), 4)
+	slots := &serverSlots{}
+	releaseWide, err := slots.acquire(context.Background(), 4)
 	if err != nil {
 		t.Fatalf("acquireSlot: %v", err)
 	}
 
 	granted := make(chan struct{})
 	go func() {
-		release, err := runtime.acquireSlot(context.Background(), 1)
+		release, err := slots.acquire(context.Background(), 1)
 		if err == nil {
 			release()
 			close(granted)
@@ -347,7 +348,7 @@ func TestSlotResizeDoesNotExceedTheLimit(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("the waiting call never proceeded")
 	}
-	if runtime.slotInUse != 0 {
-		t.Fatalf("limiter state leaked: in use = %d", runtime.slotInUse)
+	if slots.inUse != 0 {
+		t.Fatalf("limiter state leaked: in use = %d", slots.inUse)
 	}
 }

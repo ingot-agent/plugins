@@ -3,6 +3,7 @@ package toolmcp
 import (
 	"context"
 	"encoding/json"
+	"github.com/ingot-agent/sdk/workspace"
 	"strings"
 	"sync"
 	"testing"
@@ -115,7 +116,7 @@ func TestProgressWithoutMessageIsIgnored(t *testing.T) {
 	if err != nil {
 		t.Fatalf("normalizeConfig: %v", err)
 	}
-	instance := newPlatform(t.TempDir(), ingotabiNone(), discardLogger(), consumer, config)
+	instance := newPlatform(t.TempDir(), ingotabiNone(), ingotabi.None[workspace.Resolver](), discardLogger(), consumer, config)
 	instance.emitProgress(context.Background(), "demo", nil)
 	if len(consumer.details) != 0 {
 		t.Fatalf("details = %#v", consumer.details)

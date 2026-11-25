@@ -34,6 +34,10 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
+// helperNonce is unique per helper process, which is how the tests tell one
+// Session's MCP process from another's.
+var helperNonce = fmt.Sprintf("%d-%d", os.Getpid(), time.Now().UnixNano())
+
 func runHelperServer() error {
 	server := mcp.NewServer(&mcp.Implementation{Name: "toolmcp-helper", Version: "1.0.0"}, nil)
 
@@ -68,6 +72,22 @@ func runHelperServer() error {
 			IsError: true,
 			Content: []mcp.Content{&mcp.TextContent{Text: "boom"}},
 		}, nil
+	})
+
+	server.AddTool(&mcp.Tool{
+		Name:        "where",
+		Description: "Report the working directory and a per-process nonce.",
+		InputSchema: map[string]any{"type": "object"},
+	}, func(context.Context, *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		dir, err := os.Getwd()
+		if err != nil {
+			return nil, err
+		}
+		payload, err := json.Marshal(map[string]string{"cwd": dir, "nonce": helperNonce})
+		if err != nil {
+			return nil, err
+		}
+		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: string(payload)}}}, nil
 	})
 
 	server.AddTool(&mcp.Tool{
@@ -215,7 +235,7 @@ func TestDiscoveryAndInvocation(t *testing.T) {
 	exports, cleanup = gateway(t, dir)
 	defer cleanup()
 
-	want := []string{"mcp_helper_echo", "mcp_helper_fail", "mcp_helper_image", "mcp_helper_progress", "mcp_helper_slow", statusToolName}
+	want := []string{"mcp_helper_echo", "mcp_helper_fail", "mcp_helper_image", "mcp_helper_progress", "mcp_helper_slow", "mcp_helper_where", statusToolName}
 	if got := toolNames(exports.Tools); !equalStrings(got, want) {
 		t.Fatalf("tools = %v, want %v", got, want)
 	}

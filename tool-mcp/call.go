@@ -51,13 +51,15 @@ func (t *mcpTool) Invoke(ctx context.Context, invocation tool.Invocation) (tool.
 	if !ok {
 		return tool.Result{}, fmt.Errorf("tool.mcp: server %q is no longer configured", t.server)
 	}
-	release, err := t.platform.runtimeFor(t.server).acquireSlot(ctx, server.MaxConcurrentCalls)
+	release, err := t.platform.slotsFor(t.server).acquire(ctx, server.MaxConcurrentCalls)
 	if err != nil {
 		return tool.Result{}, fmt.Errorf("tool.mcp: waiting for a slot on server %q: %w", t.server, err)
 	}
 	defer release()
 
-	held, err := t.platform.acquire(ctx, t.server)
+	// The connection is scoped to this call's Session: a shared MCP session
+	// would expose one Session's server-side state to another.
+	held, err := t.platform.acquire(ctx, t.server, invocation.Scope)
 	if err != nil {
 		return tool.Result{}, err
 	}
@@ -85,7 +87,9 @@ func (t *mcpTool) Invoke(ctx context.Context, invocation tool.Invocation) (tool.
 		// A transport-level failure means the session may be dead. Retire it so
 		// the next call reconnects instead of failing forever, and record the
 		// outage for backoff and mcp_status.
-		if runtime := t.platform.runtimeFor(t.server); runtime.invalidate(held, err) {
+		key := connectionKey{server: t.server, session: string(invocation.Scope.SessionID)}
+		runtime, lookupErr := t.platform.runtimeFor(key, server, "", "")
+		if lookupErr == nil && runtime.invalidate(held, err) {
 			stderr := held.conn.stderr.String()
 			if stderr != "" {
 				t.platform.logger.Warn(ctx, "MCP server closed its transport",
