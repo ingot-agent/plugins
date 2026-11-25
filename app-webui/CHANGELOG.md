@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Fold a workspace with more than seven conversations in the conversation
+  sidebar, with a per-workspace "Show N more" toggle that does not fold search
+  results or the conversation currently open.
+
 ## 0.2.0 - 2026-11-24
 
 ### Build
