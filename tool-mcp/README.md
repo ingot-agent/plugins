@@ -6,8 +6,8 @@ server，把对方的工具导出为普通 Ingot 工具，让模型通过标准 
 `tool.mcp`，组件为 `default`（包 `.`），兼容 Ingot `>=0.3.0 <0.4.0`，见
 [manifest](ingot.plugin.toml)。
 
-它**不是** MCP server：不会把 Ingot 的工具暴露给外部客户端。它也不实现
-MCP 的 resources、prompts、sampling、elicitation 与 roots。
+它**不是** MCP server：不会把 Ingot 的工具暴露给外部客户端。它也不实现 MCP 的
+resources、prompts、sampling 与 roots（`elicitation` 已支持，见下文）。
 
 ## 可选依赖
 
