@@ -17,6 +17,7 @@ module tag 时，应阅读同一 tag 的文档，不能把分支上的新功能�
 | Context compaction redesign / 上下文压缩重设计（草案） | [context.compact v2 design](context-compact-v2-design.md) |
 | Develop a plugin / 开发插件 | [Plugin development](plugin-development.md) |
 | Write and actually call the first tool / 首个插件实操 | [First plugin tutorial](tutorials/first-plugin.md) |
+| Connect an MCP server / 接入 MCP 工具 | [MCP tools tutorial](tutorials/mcp-tools.md) |
 | Activation and snapshots / 热更新边界 | [Live configuration](live-plugin-configuration.md), [Model providers](live-model-provider-configuration.md) |
 | Implement configuration forms / 配置交互规范 | [Operation + Interaction conventions](plugin-configuration-interaction-conventions.md) |
 | Checks and releases / 检查与发布 | [Contributing](../CONTRIBUTING.md), [Release process](../RELEASE.md) |

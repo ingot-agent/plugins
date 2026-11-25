@@ -9,6 +9,9 @@ server，把对方的工具导出为普通 Ingot 工具，让模型通过标准 
 它**不是** MCP server：不会把 Ingot 的工具暴露给外部客户端。它也不实现 MCP 的
 resources、prompts、sampling 与 roots（`elicitation` 已支持，见下文）。
 
+**第一次使用看这里** → [给 Agent 接上 MCP 工具](../docs/tutorials/mcp-tools.md)。
+本页是参考文档，教程给了从零到跑通的完整步骤。
+
 ## 可选依赖
 
 | 依赖 | 必需 | 说明 |
