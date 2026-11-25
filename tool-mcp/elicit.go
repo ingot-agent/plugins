@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"sort"
 	"strings"
 	"unicode/utf8"
@@ -26,6 +27,13 @@ const (
 	maxElicitOptions      = 64
 	maxElicitContentBytes = 64 << 10
 	maxElicitStringBytes  = 8 << 10
+	maxElicitURLBytes     = 2 << 10
+
+	// elicitActionField is the confirmation control of a URL elicitation.
+	elicitActionField = "action"
+	// elicitCompleteEvent is emitted when a server reports that an out-of-band
+	// interaction finished.
+	elicitCompleteEvent = "mcp_elicit_complete"
 )
 
 // Elicitation actions defined by the protocol.
@@ -64,9 +72,11 @@ func (p *platform) elicit(
 	if mode == "" {
 		mode = "form"
 	}
-	if mode != "form" {
-		// Only form elicitation is rendered. The URL mode asks the user to visit
-		// an external address, which needs its own UI and a phishing review.
+	switch mode {
+	case "url":
+		return p.elicitURL(ctx, scope, server, params)
+	case "form":
+	default:
 		p.logger.Warn(ctx, "declined an unsupported elicitation mode",
 			logging.String("server", server.Name), logging.String("mode", mode))
 		return &mcp.ElicitResult{Action: elicitDecline}, nil
@@ -123,6 +133,188 @@ func (p *platform) elicit(
 	return &mcp.ElicitResult{Action: elicitAccept, Content: content}, nil
 }
 
+// elicitURL asks the user to complete a step out of band at a server-chosen
+// address.
+//
+// The specification scopes the client's responsibility to presenting the
+// address together with its context, so this implementation does exactly that:
+// the full URL is shown as a link, never shortened and never opened
+// automatically, and the user states explicitly whether they completed the step.
+// Whatever the address turns out to be, the user can see it before acting.
+func (p *platform) elicitURL(
+	ctx context.Context,
+	scope execution.Scope,
+	server ServerConfig,
+	params *mcp.ElicitParams,
+) (*mcp.ElicitResult, error) {
+	target, err := validateElicitURL(params.URL)
+	if err != nil {
+		// A URL the host refuses to present is reported as a refusal rather than
+		// as a transport failure, so the server can fall back.
+		p.logger.Warn(ctx, "declined an unusable elicitation URL",
+			logging.String("server", server.Name), logging.String("error", sanitizeMessage(err.Error())))
+		return &mcp.ElicitResult{Action: elicitDecline}, nil
+	}
+
+	channel, err := p.elicitChannel(scope)
+	if err != nil {
+		return &mcp.ElicitResult{Action: elicitDecline}, nil
+	}
+	if err := ctx.Err(); err != nil {
+		return &mcp.ElicitResult{Action: elicitCancel}, nil
+	}
+
+	if params.ElicitationID != "" {
+		p.trackElicitation(params.ElicitationID, scope)
+	}
+
+	action := interaction.StringValue("")
+	response, err := channel.Request(ctx, interaction.Request{
+		Name:        elicitRequestName,
+		Description: elicitURLDescription(server.Name, params.Message, target),
+		Fields: []interaction.Field{{
+			Name:     elicitActionField,
+			Label:    "Continue",
+			Kind:     interaction.FieldChoice,
+			Required: true,
+			Default:  &action,
+			Options: []interaction.Option{
+				{Value: elicitAccept, Label: "I completed this step", Description: "The listed address was opened and the step finished."},
+				{Value: elicitDecline, Label: "Cancel", Description: "Do not continue with this request."},
+			},
+		}},
+	})
+	if ctx.Err() != nil {
+		p.forgetElicitation(params.ElicitationID)
+		return &mcp.ElicitResult{Action: elicitCancel}, nil
+	}
+	if err != nil {
+		p.forgetElicitation(params.ElicitationID)
+		if errors.Is(err, interaction.ErrUnavailable) {
+			return &mcp.ElicitResult{Action: elicitDecline}, nil
+		}
+		return nil, fmt.Errorf("elicit an address for server %q: %w", server.Name, err)
+	}
+
+	answer, ok := answerValue(response, elicitActionField)
+	switch {
+	case ok && answer.Kind == interaction.ValueString && answer.String == elicitAccept:
+		// Per the specification, accept means the user consented to the
+		// interaction, not that it finished. Completion arrives as a separate
+		// notification, which is surfaced to the Session when it arrives.
+		return &mcp.ElicitResult{Action: elicitAccept}, nil
+	case ok && answer.Kind == interaction.ValueString && answer.String == elicitDecline:
+		p.forgetElicitation(params.ElicitationID)
+		return &mcp.ElicitResult{Action: elicitDecline}, nil
+	default:
+		p.forgetElicitation(params.ElicitationID)
+		return &mcp.ElicitResult{Action: elicitCancel}, nil
+	}
+}
+
+// elicitURLDescription renders the address so the user can inspect it. The
+// address itself is emitted as plugin markup, while the server's message is
+// escaped.
+func elicitURLDescription(server, message string, target *url.URL) string {
+	context := sanitizeElicitMessage(message)
+	address := target.String()
+	var builder strings.Builder
+	builder.WriteString(fmt.Sprintf("MCP server %q is asking you to open this address:", server))
+	builder.WriteString("\n\n")
+	builder.WriteString("<" + address + ">")
+	if context != "" {
+		builder.WriteString("\n\n")
+		builder.WriteString("Server message: " + escapeMarkdown(context))
+	}
+	return builder.String()
+}
+
+// validateElicitURL enforces what the host can present safely: a real address,
+// no embedded credentials, and an encrypted scheme except on loopback.
+func validateElicitURL(raw string) (*url.URL, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, errors.New("url is required for url elicitation")
+	}
+	if len(raw) > maxElicitURLBytes {
+		return nil, fmt.Errorf("url exceeds %d bytes", maxElicitURLBytes)
+	}
+	// A markdown autolink cannot carry these characters, and neither can a
+	// trustworthy address.
+	for _, r := range raw {
+		if r == '<' || r == '>' || r == ' ' || r == '\t' || r == '\n' || r == '\r' {
+			return nil, errors.New("url contains characters that cannot be displayed safely")
+		}
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return nil, fmt.Errorf("url is not valid: %w", err)
+	}
+	if parsed.Host == "" {
+		return nil, errors.New("url must be absolute")
+	}
+	if parsed.User != nil {
+		// Credentials in the address are never legitimate here and train the
+		// user to accept them.
+		return nil, errors.New("url must not embed credentials")
+	}
+	switch parsed.Scheme {
+	case "https":
+	case "http":
+		if !isLoopbackHost(parsed.Hostname()) {
+			return nil, fmt.Errorf("plaintext http is only allowed for loopback hosts")
+		}
+	default:
+		return nil, fmt.Errorf("unsupported url scheme %q", parsed.Scheme)
+	}
+	return parsed, nil
+}
+
+// trackElicitation records an in-flight out-of-band interaction so a completion
+// notification can be attributed to its Session.
+func (p *platform) trackElicitation(id string, scope execution.Scope) {
+	p.mu.Lock()
+	if p.elicitations == nil {
+		p.elicitations = make(map[string]execution.Scope)
+	}
+	p.elicitations[id] = scope
+	p.mu.Unlock()
+}
+
+func (p *platform) forgetElicitation(id string) {
+	if id == "" {
+		return
+	}
+	p.mu.Lock()
+	delete(p.elicitations, id)
+	p.mu.Unlock()
+}
+
+// completeElicitation reports a finished out-of-band interaction to the Session
+// that started it. Unknown or already-completed identifiers are ignored, as the
+// specification requires.
+func (p *platform) completeElicitation(ctx context.Context, server ServerConfig, id string) {
+	if id == "" {
+		return
+	}
+	p.mu.Lock()
+	scope, ok := p.elicitations[id]
+	delete(p.elicitations, id)
+	p.mu.Unlock()
+	if !ok {
+		return
+	}
+	channel, err := p.elicitChannel(scope)
+	if err != nil {
+		return
+	}
+	_ = channel.Emit(ctx, interaction.Event{
+		Name:    elicitCompleteEvent,
+		Level:   interaction.LevelInfo,
+		Message: fmt.Sprintf("MCP server %q reports the requested step is complete.", server.Name),
+	})
+}
+
 // elicitChannel binds the interaction channel of the owning Session.
 func (p *platform) elicitChannel(scope execution.Scope) (interaction.Channel, error) {
 	if !p.elicitServices() {
@@ -142,16 +334,42 @@ func (p *platform) elicitChannel(scope execution.Scope) (interaction.Channel, er
 }
 
 // elicitDescription attributes the question to its origin. The message text is
-// server-controlled, so it is bounded and flattened before display.
+// server-controlled, so it is flattened, bounded, and stripped of markdown
+// syntax before display: the host renders descriptions as markdown, and
+// unescaped server text could forge a link or imitate host interface text.
 func elicitDescription(server, message string) string {
+	message = sanitizeElicitMessage(message)
+	if message == "" {
+		return fmt.Sprintf("MCP server %q is requesting input.", server)
+	}
+	return fmt.Sprintf("MCP server %q is requesting input: %s", server, escapeMarkdown(message))
+}
+
+// sanitizeElicitMessage flattens and bounds server-controlled text.
+func sanitizeElicitMessage(message string) string {
 	message = strings.Join(strings.Fields(message), " ")
 	if len(message) > maxElicitMessageBytes {
 		message = truncateAtRuneBoundary(message, maxElicitMessageBytes) + "…"
 	}
-	if message == "" {
-		return fmt.Sprintf("MCP server %q is requesting input.", server)
+	return message
+}
+
+// markdownSpecial lists the characters that can change how markdown renders.
+const markdownSpecial = "\\`*_{}[]()#+-.!|<>~"
+
+// escapeMarkdown neutralizes markdown syntax in untrusted text. It is applied
+// to server-controlled text only; markup this plugin emits is appended after
+// escaping.
+func escapeMarkdown(value string) string {
+	var builder strings.Builder
+	builder.Grow(len(value))
+	for _, r := range value {
+		if strings.ContainsRune(markdownSpecial, r) {
+			builder.WriteByte('\\')
+		}
+		builder.WriteRune(r)
 	}
-	return fmt.Sprintf("MCP server %q is requesting input: %s", server, message)
+	return builder.String()
 }
 
 func truncateAtRuneBoundary(value string, limit int) string {

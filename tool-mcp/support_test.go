@@ -25,6 +25,7 @@ type scriptedChannel struct {
 	mu       sync.Mutex
 	answers  map[string]interaction.Value
 	requests []interaction.Request
+	events   []interaction.Event
 	// duringRequest runs while the host is supposedly collecting the answer,
 	// which is where a concurrent configuration write happens.
 	duringRequest func()
@@ -53,9 +54,14 @@ func (c *scriptedChannel) Request(_ context.Context, request interaction.Request
 	return response, nil
 }
 
-func (*scriptedChannel) Emit(context.Context, interaction.Event) error { return nil }
-func (*scriptedChannel) Set(context.Context, interaction.State) error  { return nil }
-func (*scriptedChannel) Clear(context.Context, string) error           { return nil }
+func (c *scriptedChannel) Emit(_ context.Context, event interaction.Event) error {
+	c.mu.Lock()
+	c.events = append(c.events, event)
+	c.mu.Unlock()
+	return nil
+}
+func (*scriptedChannel) Set(context.Context, interaction.State) error { return nil }
+func (*scriptedChannel) Clear(context.Context, string) error          { return nil }
 
 func boolPointer(value bool) *bool { return &value }
 

@@ -108,6 +108,30 @@ func runHelperServer() error {
 		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: string(payload)}}}, nil
 	})
 
+	// "authorize" drives URL mode through the same input-request path.
+	server.AddTool(&mcp.Tool{
+		Name:        "authorize",
+		Description: "Ask the client to open an authorisation address.",
+		InputSchema: map[string]any{"type": "object"},
+	}, func(_ context.Context, request *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		response, answered := request.Params.InputResponses["auth"]
+		if !answered {
+			return &mcp.CallToolResult{InputRequests: mcp.InputRequestMap{
+				"auth": &mcp.ElicitParams{
+					Mode:          "url",
+					Message:       "Authorise the deployment.",
+					URL:           "https://example.test/authorize?session=abc123",
+					ElicitationID: "elic-e2e",
+				},
+			}}, nil
+		}
+		payload, err := json.Marshal(response)
+		if err != nil {
+			return nil, err
+		}
+		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: string(payload)}}}, nil
+	})
+
 	server.AddTool(&mcp.Tool{
 		Name:        "where",
 		Description: "Report the working directory and a per-process nonce.",
@@ -269,7 +293,7 @@ func TestDiscoveryAndInvocation(t *testing.T) {
 	exports, cleanup = gateway(t, dir)
 	defer cleanup()
 
-	want := []string{"mcp_helper_echo", "mcp_helper_elicit", "mcp_helper_fail", "mcp_helper_image", "mcp_helper_progress", "mcp_helper_slow", "mcp_helper_where", statusToolName}
+	want := []string{"mcp_helper_authorize", "mcp_helper_echo", "mcp_helper_elicit", "mcp_helper_fail", "mcp_helper_image", "mcp_helper_progress", "mcp_helper_slow", "mcp_helper_where", statusToolName}
 	if got := toolNames(exports.Tools); !equalStrings(got, want) {
 		t.Fatalf("tools = %v, want %v", got, want)
 	}

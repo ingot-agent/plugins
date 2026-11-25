@@ -81,6 +81,9 @@ type platform struct {
 	// children holds every live child process, including one whose handshake is
 	// still running, so Cleanup can terminate it instead of leaving it orphaned.
 	children map[*exec.Cmd]struct{}
+	// elicitations tracks in-flight out-of-band interactions by identifier so a
+	// completion notification can be attributed to its Session.
+	elicitations map[string]execution.Scope
 }
 
 func newPlatform(

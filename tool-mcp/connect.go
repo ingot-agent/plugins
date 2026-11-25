@@ -97,6 +97,15 @@ func (p *platform) dial(
 		options.ElicitationHandler = func(ctx context.Context, request *mcp.ElicitRequest) (*mcp.ElicitResult, error) {
 			return p.elicit(ctx, scope, server, request)
 		}
+		// A URL elicitation is asynchronous: accept only records consent, and the
+		// server reports the real outcome later. The event is advisory, so a
+		// failure to emit it must not affect the protocol response.
+		options.ElicitationCompleteHandler = func(ctx context.Context, request *mcp.ElicitationCompleteNotificationRequest) {
+			if request == nil || request.Params == nil {
+				return
+			}
+			p.completeElicitation(ctx, server, request.Params.ElicitationID)
+		}
 	}
 	client := mcp.NewClient(
 		&mcp.Implementation{Name: pluginImplementationName, Version: pluginVersion},

@@ -6,7 +6,10 @@
 - Support MCP elicitation: a server can ask the Session user for input during a
   call. The capability is advertised only for a Session-bound connection and only
   when the composition provides an interaction facility, so discovery can never
-  prompt. Form mode only; URL mode is declined.
+  prompt. Supports form and URL mode; URL mode shows the full address as a link,
+  never opens it automatically, requires an explicit confirmation and enforces an
+  encrypted scheme. Completion notifications reach the owning Session as an
+  event. Server-provided text is markdown-escaped before it is rendered.
 - Scope each MCP session to one Session and set its working directory at process
   creation from the Session workspace. Sessions no longer share server-side
   state, and relative paths resolve inside the caller's workspace instead of the

@@ -443,25 +443,193 @@ func TestElicitDeclinesWhenTheHostCannotAsk(t *testing.T) {
 	}
 }
 
-// TestElicitDeclinesURLMode documents that URL elicitation is refused rather
-// than half-supported: it needs its own UI and a phishing review.
-func TestElicitDeclinesURLMode(t *testing.T) {
-	channel := newScriptedChannel(nil)
+// TestElicitURLAsksWithTheFullAddress covers the core promise of URL mode: the
+// user sees the exact address before acting, never a shortened one.
+func TestElicitURLAsksWithTheFullAddress(t *testing.T) {
+	channel := newScriptedChannel(map[string]interaction.Value{
+		elicitActionField: interaction.StringValue(elicitAccept),
+	})
 	instance := elicitPlatform(t, t.TempDir(), &recordingBinder{channel: channel})
+
 	result, err := instance.elicit(context.Background(), execution.Scope{SessionID: sessionIDOf("s")},
-		ServerConfig{Name: "demo"}, &mcp.ElicitRequest{Params: &mcp.ElicitParams{
+		ServerConfig{Name: "deployer"}, &mcp.ElicitRequest{Params: &mcp.ElicitParams{
+			Mode:          "url",
+			Message:       "Authorise the deployment.",
+			URL:           "https://example.test/authorize?session=abc123",
+			ElicitationID: "elic-1",
+		}})
+	if err != nil {
+		t.Fatalf("elicit: %v", err)
+	}
+	if result.Action != elicitAccept {
+		t.Fatalf("action = %q, want accept", result.Action)
+	}
+	if len(channel.requests) != 1 {
+		t.Fatalf("requests = %d", len(channel.requests))
+	}
+	request := channel.requests[0]
+	if !strings.Contains(request.Description, "<https://example.test/authorize?session=abc123>") {
+		t.Fatalf("the full address must be shown verbatim: %q", request.Description)
+	}
+	if !strings.Contains(request.Description, `"deployer"`) {
+		t.Fatalf("the form must attribute the server: %q", request.Description)
+	}
+	if len(request.Fields) != 1 || request.Fields[0].Name != elicitActionField {
+		t.Fatalf("fields = %#v", request.Fields)
+	}
+	if request.Fields[0].Kind != interaction.FieldChoice || len(request.Fields[0].Options) != 2 {
+		t.Fatalf("confirmation field = %#v", request.Fields[0])
+	}
+
+	// Accept only records consent, so the call is tracked until the server
+	// reports completion.
+	instance.mu.Lock()
+	_, tracked := instance.elicitations["elic-1"]
+	instance.mu.Unlock()
+	if !tracked {
+		t.Fatal("an accepted URL elicitation must stay tracked")
+	}
+}
+
+func TestElicitURLCancelAndDecline(t *testing.T) {
+	cases := map[string]struct {
+		answer interaction.Value
+		want   string
+	}{
+		"declines when asked to cancel": {interaction.StringValue(elicitDecline), elicitDecline},
+		"cancels when dismissed":        {interaction.StringValue(""), elicitCancel},
+		"cancels on an unknown answer":  {interaction.StringValue("maybe"), elicitCancel},
+	}
+	for name, testCase := range cases {
+		t.Run(name, func(t *testing.T) {
+			channel := newScriptedChannel(map[string]interaction.Value{elicitActionField: testCase.answer})
+			instance := elicitPlatform(t, t.TempDir(), &recordingBinder{channel: channel})
+			result, err := instance.elicit(context.Background(), execution.Scope{SessionID: sessionIDOf("s")},
+				ServerConfig{Name: "deployer"}, &mcp.ElicitRequest{Params: &mcp.ElicitParams{
+					Mode: "url", Message: "go", URL: "https://example.test/x", ElicitationID: "elic-2",
+				}})
+			if err != nil {
+				t.Fatalf("elicit: %v", err)
+			}
+			if result.Action != testCase.want {
+				t.Fatalf("action = %q, want %q", result.Action, testCase.want)
+			}
+			instance.mu.Lock()
+			_, tracked := instance.elicitations["elic-2"]
+			instance.mu.Unlock()
+			if tracked {
+				t.Fatal("a refused URL elicitation must not stay tracked")
+			}
+		})
+	}
+}
+
+// TestElicitURLRejectsUnsafeAddresses covers the checks the host actually owns:
+// the scheme the browser will follow and whether ambient credentials ride along.
+func TestElicitURLRejectsUnsafeAddresses(t *testing.T) {
+	cases := map[string]string{
+		"javascript":       "javascript:alert(1)",
+		"data":             "data:text/html,<h1>x</h1>",
+		"file":             "file:///etc/passwd",
+		"remote plaintext": "http://example.test/authorize",
+		"credentials":      "https://user:pass@example.test/x",
+		"relative":         "/authorize",
+		"empty":            "",
+		"angle bracket":    "https://example.test/<x>",
+		"whitespace":       "https://example.test/a b",
+	}
+	for name, address := range cases {
+		t.Run(name, func(t *testing.T) {
+			channel := newScriptedChannel(nil)
+			instance := elicitPlatform(t, t.TempDir(), &recordingBinder{channel: channel})
+			result, err := instance.elicit(context.Background(), execution.Scope{SessionID: sessionIDOf("s")},
+				ServerConfig{Name: "deployer"}, &mcp.ElicitRequest{Params: &mcp.ElicitParams{
+					Mode: "url", Message: "go", URL: address, ElicitationID: "elic-3",
+				}})
+			if err != nil {
+				t.Fatalf("elicit: %v", err)
+			}
+			if result.Action != elicitDecline {
+				t.Fatalf("action = %q, want decline", result.Action)
+			}
+			if len(channel.requests) != 0 {
+				t.Fatalf("an unusable address must not reach the user: %#v", channel.requests)
+			}
+		})
+	}
+
+	// Loopback plaintext is allowed, matching the rest of the plugin.
+	channel := newScriptedChannel(map[string]interaction.Value{elicitActionField: interaction.StringValue(elicitAccept)})
+	instance := elicitPlatform(t, t.TempDir(), &recordingBinder{channel: channel})
+	if _, err := instance.elicit(context.Background(), execution.Scope{SessionID: sessionIDOf("s")},
+		ServerConfig{Name: "deployer"}, &mcp.ElicitRequest{Params: &mcp.ElicitParams{
+			Mode: "url", Message: "go", URL: "http://127.0.0.1:8080/authorize",
+		}}); err != nil {
+		t.Fatalf("elicit: %v", err)
+	}
+	if len(channel.requests) != 1 {
+		t.Fatal("a loopback address should be presentable")
+	}
+}
+
+// TestElicitURLEscapesServerMarkup keeps a server from forging a link inside the
+// markdown-rendered description.
+func TestElicitURLEscapesServerMarkup(t *testing.T) {
+	channel := newScriptedChannel(map[string]interaction.Value{
+		elicitActionField: interaction.StringValue(elicitAccept),
+	})
+	instance := elicitPlatform(t, t.TempDir(), &recordingBinder{channel: channel})
+	_, err := instance.elicit(context.Background(), execution.Scope{SessionID: sessionIDOf("s")},
+		ServerConfig{Name: "deployer"}, &mcp.ElicitRequest{Params: &mcp.ElicitParams{
 			Mode:    "url",
-			Message: "visit this",
+			Message: "[Click here](https://evil.test/steal) to authorise",
 			URL:     "https://example.test/authorize",
 		}})
 	if err != nil {
 		t.Fatalf("elicit: %v", err)
 	}
-	if result.Action != elicitDecline {
-		t.Fatalf("action = %q", result.Action)
+	description := channel.requests[0].Description
+	if strings.Contains(description, "](https://evil.test") {
+		t.Fatalf("server markup survived into the description: %q", description)
 	}
-	if len(channel.requests) != 0 {
-		t.Fatal("a URL elicitation must not reach the user")
+	if !strings.Contains(description, "\\[Click here\\]") {
+		t.Fatalf("server text should be escaped, not dropped: %q", description)
+	}
+}
+
+// TestElicitCompleteNotifiesTheSession covers the asynchronous tail: the server
+// reports the out-of-band step finished, and the owning Session learns about it.
+func TestElicitCompleteNotifiesTheSession(t *testing.T) {
+	channel := newScriptedChannel(map[string]interaction.Value{
+		elicitActionField: interaction.StringValue(elicitAccept),
+	})
+	instance := elicitPlatform(t, t.TempDir(), &recordingBinder{channel: channel})
+	if _, err := instance.elicit(context.Background(), execution.Scope{SessionID: sessionIDOf("s")},
+		ServerConfig{Name: "deployer"}, &mcp.ElicitRequest{Params: &mcp.ElicitParams{
+			Mode: "url", Message: "go", URL: "https://example.test/x", ElicitationID: "elic-4",
+		}}); err != nil {
+		t.Fatalf("elicit: %v", err)
+	}
+
+	instance.completeElicitation(context.Background(), ServerConfig{Name: "deployer"}, "elic-4")
+	channel.mu.Lock()
+	events := append([]interaction.Event(nil), channel.events...)
+	channel.mu.Unlock()
+	if len(events) != 1 || events[0].Name != elicitCompleteEvent {
+		t.Fatalf("events = %#v", events)
+	}
+	if !strings.Contains(events[0].Message, `"deployer"`) {
+		t.Fatalf("event must attribute the server: %q", events[0].Message)
+	}
+
+	// A repeated or unknown identifier is ignored.
+	instance.completeElicitation(context.Background(), ServerConfig{Name: "deployer"}, "elic-4")
+	instance.completeElicitation(context.Background(), ServerConfig{Name: "deployer"}, "unknown")
+	channel.mu.Lock()
+	after := len(channel.events)
+	channel.mu.Unlock()
+	if after != 1 {
+		t.Fatalf("unknown or repeated identifiers must be ignored, events = %d", after)
 	}
 }
 
@@ -505,5 +673,49 @@ func TestElicitReportsCancellation(t *testing.T) {
 	}
 	if result.Action != elicitCancel {
 		t.Fatalf("action = %q, want cancel", result.Action)
+	}
+}
+
+// TestElicitationURLRoundTrip drives URL mode end to end through the protocol's
+// input-request path, which is the only shape allowed while a server is serving
+// a request on the current protocol version.
+func TestElicitationURLRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	if err := saveConfig(dir, helperConfig(t)); err != nil {
+		t.Fatalf("saveConfig: %v", err)
+	}
+	exports, cleanup := gateway(t, dir)
+	runDiscovery(t, exports)
+	cleanup()
+
+	channel := newScriptedChannel(map[string]interaction.Value{
+		elicitActionField: interaction.StringValue(elicitAccept),
+	})
+	instance := elicitPlatform(t, dir, &recordingBinder{channel: channel})
+	defer instance.closeAll()
+
+	entry := &mcpTool{
+		platform: instance, server: "helper", wireName: "authorize",
+		definition: tool.Definition{Name: "mcp_helper_authorize", Description: "a", InputSchema: json.RawMessage(`{"type":"object"}`)},
+	}
+	result, err := entry.Invoke(context.Background(), tool.Invocation{
+		Scope: execution.Scope{SessionID: sessionIDOf("session-a")},
+		Call:  tool.Call{ID: "a1", Name: "mcp_helper_authorize", Arguments: json.RawMessage(`{}`)},
+	})
+	if err != nil {
+		t.Fatalf("invoke: %v", err)
+	}
+	text, ok := content.TextOnly(result.Content)
+	if !ok {
+		t.Fatalf("result = %#v", result.Content)
+	}
+	if !strings.Contains(text, `"action":"accept"`) {
+		t.Fatalf("the server should have received consent: %q", text)
+	}
+	if len(channel.requests) != 1 {
+		t.Fatalf("requests = %d", len(channel.requests))
+	}
+	if !strings.Contains(channel.requests[0].Description, "https://example.test/authorize?session=abc123") {
+		t.Fatalf("the address never reached the user: %q", channel.requests[0].Description)
 	}
 }
